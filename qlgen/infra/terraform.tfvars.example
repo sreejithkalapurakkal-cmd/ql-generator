@@ -1,0 +1,7 @@
+db_password    = "CHANGE_ME_strong_password_here"
+apollo_api_key = "your-apollo-key"
+exa_api_key    = "your-exa-key"
+hunter_api_key = "your-hunter-key"
+lusha_api_key  = "your-lusha-key"
+tavily_api_key = "your-tavily-key"
+clay_api_key   = "your-clay-key"

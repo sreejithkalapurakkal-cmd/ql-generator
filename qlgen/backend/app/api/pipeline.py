@@ -86,17 +86,25 @@ async def stream_pipeline(run_id: UUID):
 
     async def event_generator():
         last_index = 0
+        no_event_cycles = 0
         while True:
             events = pipeline_events.get(run_id_str, [])
-            while last_index < len(events):
-                event = events[last_index]
-                event_type = event.get("type", "stage_update")
-                data = json.dumps(event)
-                yield f"event: {event_type}\ndata: {data}\n\n"
-                last_index += 1
-                if event_type == "completed" or event_type == "error":
-                    return
-            await asyncio.sleep(1)
+            if last_index < len(events):
+                no_event_cycles = 0
+                while last_index < len(events):
+                    event = events[last_index]
+                    event_type = event.get("type", "stage_update")
+                    data = json.dumps(event)
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+                    last_index += 1
+                    if event_type == "completed" or event_type == "error":
+                        return
+            else:
+                no_event_cycles += 1
+                # Send keepalive comment every ~5 seconds to prevent connection timeout
+                if no_event_cycles % 25 == 0:
+                    yield ": keepalive\n\n"
+            await asyncio.sleep(0.2)
 
     return StreamingResponse(
         event_generator(),
