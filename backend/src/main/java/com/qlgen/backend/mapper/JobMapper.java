@@ -8,8 +8,13 @@ import org.springframework.stereotype.Component;
 public class JobMapper {
 
     public JobResponse toResponse(Job job) {
+        return toResponse(job, 0);
+    }
+
+    public JobResponse toResponse(Job job, int jobNumber) {
         return JobResponse.builder()
                 .id(job.getId())
+                .jobNumber(jobNumber)
                 .status(job.getStatus())
                 .maxResults(job.getMaxResults())
                 .errorMessage(job.getErrorMessage())

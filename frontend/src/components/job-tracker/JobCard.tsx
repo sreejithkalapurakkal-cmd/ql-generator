@@ -19,7 +19,7 @@ export default function JobCard({ job, progress, onClick }: Props) {
         <CardContent>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
             <Typography variant="subtitle1" fontWeight={600}>
-              Job {job.id.slice(0, 8)}...
+              Job #{job.jobNumber || job.id.slice(0, 8)}
             </Typography>
             <JobStatusBadge status={job.status} />
           </Box>

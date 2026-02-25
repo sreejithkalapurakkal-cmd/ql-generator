@@ -40,6 +40,8 @@ services:
       - LUSHA_API_KEY=${LUSHA_API_KEY}
       - EXA_API_KEY=${EXA_API_KEY}
       - CLAY_API_KEY=${CLAY_API_KEY:-}
+      - APOLLO_API_KEY=${APOLLO_API_KEY:-}
+      - PHANTOMBUSTER_API_KEY=${PHANTOMBUSTER_API_KEY:-}
       - BACKEND_CALLBACK_BASE_URL=http://backend:8080
     networks:
       - qlgen-network

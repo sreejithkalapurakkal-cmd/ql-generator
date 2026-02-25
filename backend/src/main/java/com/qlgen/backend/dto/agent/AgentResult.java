@@ -22,6 +22,7 @@ public class AgentResult {
         private String description;
         private List<String> techStack;
         private String fundingStage;
+        private String linkedinUrl;
         private BANTScore bantScore;
     }
 

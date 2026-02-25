@@ -20,6 +20,7 @@ class Lead(BaseModel):
     description: str | None = None
     tech_stack: list[str] = Field(alias="techStack", default_factory=list)
     funding_stage: str | None = Field(alias="fundingStage", default=None)
+    linkedin_url: str | None = Field(alias="linkedinUrl", default=None)
     bant_score: BANTScore = Field(alias="bantScore")
 
     model_config = {"populate_by_name": True}

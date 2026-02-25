@@ -43,6 +43,8 @@ public class Lead {
 
     private String fundingStage;
 
+    private String linkedinUrl;
+
     private Double budgetScore;
     private Double authorityScore;
     private Double needScore;

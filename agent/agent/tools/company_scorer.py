@@ -62,7 +62,7 @@ def bant_score(company_profile: dict, icp_profile: dict, bant_weights: dict) -> 
 
     logger.info(
         "bant_score completed",
-        company=company_profile.get("company_name", "unknown"),
+        company=company_profile.get("company_name") or company_profile.get("organization") or company_profile.get("domain", "unknown"),
         total=total,
     )
     return result

@@ -18,6 +18,7 @@ export interface Lead {
   description: string | null;
   techStack: string[];
   fundingStage: string | null;
+  linkedinUrl: string | null;
   bantScore: BANTScore;
   rank: number;
 }

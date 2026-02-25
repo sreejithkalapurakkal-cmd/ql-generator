@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime
 
 import structlog
@@ -43,9 +44,77 @@ class PipelineContext:
         domain = (company.get("domain") or "").lower().strip()
         if not domain or domain in self.seen_domains:
             return False
+        if _is_irrelevant_domain(domain):
+            return False
+        if not company.get("company_name"):
+            company["company_name"] = _derive_company_name(domain)
         self.seen_domains.add(domain)
         self.raw_companies.append(company)
         return True
+
+
+_BLOCKED_DOMAINS = {
+    "linkedin.com", "in.linkedin.com", "facebook.com", "twitter.com",
+    "instagram.com", "youtube.com", "reddit.com", "quora.com",
+    "wikipedia.org", "wikimedia.org",
+    "timesofindia.indiatimes.com", "economictimes.indiatimes.com",
+    "thehindubusinessline.com", "thehindu.com", "ndtv.com", "moneycontrol.com",
+    "livemint.com", "businessinsider.com", "forbes.com", "fortune.com",
+    "techcrunch.com", "venturebeat.com", "wired.com", "medium.com",
+    "tracxn.com", "crunchbase.com", "bseindia.com", "nseindia.com",
+    "craft.co", "uploads2.craft.co", "zoominfo.com", "dnb.com",
+    "glassdoor.com", "indeed.com", "naukri.com", "ambitionbox.com",
+    "aws.amazon.com", "azure.microsoft.com", "cloud.google.com",
+    "talent500.com", "codemotion.com", "dev.to", "stackoverflow.com",
+    "github.com", "gitlab.com",
+    "thecompanycheck.com", "tofler.in", "comparably.com", "owler.com",
+    "indiatimes.com", "economictimes.com", "hindustantimes.com",
+    "businesstoday.in", "financialexpress.com", "inc42.com",
+    "yourstory.com", "entrackr.com", "startupstorymedia.com",
+    "businesswire.com", "prnewswire.com", "globenewswire.com",
+    "bloomberg.com", "reuters.com", "wsj.com", "ft.com",
+    "g2.com", "capterra.com", "trustradius.com", "getapp.com",
+    "clutch.co", "goodfirms.co",
+    "glassdoor.co.in", "glassdoor.ca", "glassdoor.com",
+    "interviewbit.com", "geeksforgeeks.org", "selectedfirms.co",
+    "scribd.com", "ziprecruiter.com", "hackerx.org",
+    "builtin.com", "superprof.co.uk", "tripleten.com",
+    "alueducation.com", "hrkatha.com", "ceicdata.com",
+    "easyleadz.com", "lusha.com",
+}
+
+_BLOCKED_DOMAIN_SUFFIXES = (
+    ".gov", ".edu", ".ac.in", ".ac.uk",
+)
+
+_BLOCKED_PARENT_DOMAINS = (
+    "indiatimes.com", "economictimes.com",
+)
+
+
+def _is_irrelevant_domain(domain: str) -> bool:
+    """Return True if the domain is a news site, aggregator, social network, or other non-company."""
+    if domain in _BLOCKED_DOMAINS:
+        return True
+    for suffix in _BLOCKED_DOMAIN_SUFFIXES:
+        if domain.endswith(suffix):
+            return True
+    # Block any subdomain of a blocked parent (e.g. m.economictimes.com, anything.linkedin.com)
+    for parent in _BLOCKED_PARENT_DOMAINS:
+        if domain == parent or domain.endswith("." + parent):
+            return True
+    for blocked in _BLOCKED_DOMAINS:
+        if domain.endswith("." + blocked):
+            return True
+    return False
+
+
+def _derive_company_name(domain: str) -> str:
+    """Derive a readable company name from a domain (e.g. 'cybage.com' -> 'Cybage')."""
+    base = domain.split(".")[0]  # take first label
+    # Convert kebab/underscore to spaces, then title-case
+    name = re.sub(r"[-_]", " ", base).title()
+    return name
 
 
 SEARCH_TOOLS = [
@@ -110,16 +179,14 @@ async def search_with_fallback(query: str, max_results: int = 10) -> list[dict]:
 async def enrich_with_fallback(company: dict) -> dict:
     """Try enrichment tools in order until one succeeds."""
     domain = company.get("domain", "")
-    name = company.get("title") or company.get("company_name") or ""
+    # Prefer the derived/real company_name over the raw page title for Lusha
+    name = company.get("company_name") or ""
+
+    _domain_only_tools = {"clearbit", "pdl", "apollo", "hunter"}
 
     for tool_name, tool_fn in ENRICHMENT_TOOLS:
         try:
-            if tool_name == "apollo" and domain:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(tool_fn, domain=domain),
-                    timeout=settings.tool_timeout_seconds,
-                )
-            elif tool_name == "hunter" and domain:
+            if tool_name in _domain_only_tools and domain:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(tool_fn, domain=domain),
                     timeout=settings.tool_timeout_seconds,
@@ -133,14 +200,48 @@ async def enrich_with_fallback(company: dict) -> dict:
                 continue
 
             if result:
-                merged = {**company, **result}
+                # Merge enrichment data but never overwrite a real company_name with an empty string
+                merged = {**company}
+                for k, v in result.items():
+                    if v or k not in merged or not merged[k]:
+                        merged[k] = v
                 logger.info("enrichment_succeeded", tool=tool_name, domain=domain)
                 return merged
         except Exception as e:
             logger.warning("enrichment_tool_failed", tool=tool_name, error=str(e))
             continue
 
+    # All enrichment tools failed — try to extract location from raw search content
+    if not company.get("location"):
+        extracted_location = _extract_location_from_content(company.get("content", "") or company.get("description", "") or "")
+        if extracted_location:
+            company = {**company, "location": extracted_location}
+            logger.info("location_extracted_from_content", domain=domain, location=extracted_location)
+
     return company
+
+
+_LOCATION_HINTS: list[str] = [
+    "Kerala", "Karnataka", "Maharashtra", "Tamil Nadu", "Telangana",
+    "Andhra Pradesh", "Delhi", "Goa", "Gujarat", "Rajasthan",
+    "Bengaluru", "Bangalore", "Mumbai", "Hyderabad", "Chennai",
+    "Kochi", "Cochin", "Thiruvananthapuram", "Trivandrum", "Kozhikode",
+    "Calicut", "Thrissur", "Kollam", "Kannur", "Mysuru", "Mysore",
+    "Mangaluru", "Mangalore", "Hubli", "Belgaum", "Belagavi",
+    "Pune", "Noida", "Gurugram", "Gurgaon", "Ahmedabad", "Surat",
+    "Jaipur", "Kolkata", "India",
+]
+
+
+def _extract_location_from_content(content: str) -> str | None:
+    """Scan raw search snippet for known city/state names and return the first match."""
+    if not content:
+        return None
+    content_lower = content.lower()
+    for hint in _LOCATION_HINTS:
+        if hint.lower() in content_lower:
+            return hint
+    return None
 
 
 async def enrich_companies(companies: list[dict], max_concurrent: int = 5) -> list[dict]:

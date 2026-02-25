@@ -53,6 +53,21 @@ export default function LeadDetailDrawer({ lead, open, onClose }: Props) {
       <Typography variant="subtitle2" color="text.secondary">Funding Stage</Typography>
       <Typography variant="body2" sx={{ mb: 1.5 }}>{lead.fundingStage || 'N/A'}</Typography>
 
+      <Typography variant="subtitle2" color="text.secondary">LinkedIn</Typography>
+      {lead.linkedinUrl ? (
+        <Link
+          href={lead.linkedinUrl.startsWith('http') ? lead.linkedinUrl : `https://linkedin.com/company/${lead.linkedinUrl}`}
+          target="_blank"
+          rel="noopener"
+          variant="body2"
+          sx={{ mb: 1.5, display: 'block' }}
+        >
+          {lead.linkedinUrl}
+        </Link>
+      ) : (
+        <Typography variant="body2" sx={{ mb: 1.5 }}>N/A</Typography>
+      )}
+
       {lead.techStack.length > 0 && (
         <>
           <Typography variant="subtitle2" color="text.secondary">Tech Stack</Typography>

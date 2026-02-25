@@ -15,4 +15,6 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     List<Job> findAllByOrderByCreatedAtDesc();
 
     List<Job> findByStatusInAndUpdatedAtBefore(List<JobStatus> statuses, Instant cutoff);
+
+    long countByCreatedAtLessThanEqual(Instant createdAt);
 }

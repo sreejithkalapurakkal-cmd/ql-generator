@@ -19,6 +19,7 @@ public class LeadResponse {
     private String description;
     private List<String> techStack;
     private String fundingStage;
+    private String linkedinUrl;
     private BANTScoreResponse bantScore;
     private Integer rank;
 

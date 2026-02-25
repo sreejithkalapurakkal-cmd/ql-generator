@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timezone
 
 import structlog
@@ -110,15 +111,16 @@ async def run_agent_pipeline(request: JobRequest) -> None:
                 )
 
                 lead = Lead(
-                    companyName=company.get("company_name") or company.get("title", "Unknown"),
+                    companyName=company.get("company_name") or company.get("organization") or company.get("domain", "Unknown"),
                     domain=company.get("domain", ""),
-                    industry=company.get("industry", ""),
+                    industry=company.get("industry") or "",
                     employeeCount=company.get("employee_count"),
                     estimatedRevenue=company.get("estimated_revenue") or company.get("annual_revenue") or company.get("revenue"),
-                    location=company.get("location"),
-                    description=company.get("description") or company.get("content", ""),
+                    location=company.get("location") or company.get("city") or company.get("country"),
+                    description=_clean_description(company.get("description") or company.get("content", "")),
                     techStack=company.get("tech_stack", []),
                     fundingStage=company.get("funding_stage"),
+                    linkedinUrl=company.get("linkedin_url"),
                     bantScore=BANTScore(
                         budget=score_result["budget"],
                         authority=score_result["authority"],
@@ -141,6 +143,8 @@ async def run_agent_pipeline(request: JobRequest) -> None:
 
         # Stage 5: Rank and return
         ranked = sorted(scored_leads, key=lambda l: l.bant_score.total, reverse=True)
+        ranked = _filter_by_geography(ranked, ctx.icp_profile.geographies)
+        ranked = _filter_by_industry(ranked, ctx.icp_profile.industries)
         ranked = ranked[: ctx.max_results]
         ctx.scored_leads = ranked
 
@@ -159,35 +163,133 @@ async def run_agent_pipeline(request: JobRequest) -> None:
             logger.error("failed_to_send_failure_callback", job_id=ctx.job_id)
 
 
+def _clean_description(text: str, max_length: int = 300) -> str:
+    """Strip markdown/HTML noise from raw page content and truncate."""
+    if not text:
+        return ""
+    # Remove markdown headings, bullets, bold/italic markers
+    text = re.sub(r"#{1,6}\s*", "", text)
+    text = re.sub(r"\*{1,3}([^*]*)\*{1,3}", r"\1", text)
+    # Remove square-bracket navigation artefacts like [Skip to main content]
+    text = re.sub(r"\[[^\]]{0,60}\]", "", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_length:
+        text = text[:max_length].rsplit(" ", 1)[0] + "…"
+    return text
+
+
 def _generate_search_queries(icp: ICPProfile) -> list[str]:
     """Generate search queries from ICP profile."""
     queries = []
 
     industries = icp.industries[:3]
     geos = icp.geographies[:3]
+    geo_str = f" in {', '.join(geos)}" if geos else ""
     size_min = icp.company_size_range.get("min", 0)
     size_max = icp.company_size_range.get("max", 0)
+    size_str = f" {size_min}-{size_max} employees" if (size_min and size_max) else ""
 
     for industry in industries:
-        base_query = f"{industry} companies"
+        queries.append(f"{industry} companies{geo_str}{size_str}")
 
-        if geos:
-            base_query += f" in {', '.join(geos)}"
-
-        if size_min and size_max:
-            base_query += f" {size_min}-{size_max} employees"
-
-        queries.append(base_query)
-
-    # Add tech stack query
+    # Add tech stack query — always include geography
     if icp.tech_stack:
         tech_query = f"companies using {', '.join(icp.tech_stack[:3])}"
         if industries:
             tech_query += f" in {industries[0]}"
+        tech_query += geo_str
         queries.append(tech_query)
 
-    # Add keyword queries
+    # Add keyword queries — always include geography
     for keyword in icp.keywords[:2]:
-        queries.append(f"{keyword} companies {', '.join(industries[:2])}")
+        queries.append(f"{keyword} companies {', '.join(industries[:2])}{geo_str}")
 
     return queries[:5]
+
+
+_INDUSTRY_SYNONYMS: dict[str, list[str]] = {
+    "it": ["information technology", "software", "tech", "technology"],
+    "it industry": ["information technology", "software", "tech", "technology"],
+    "information technology": ["information technology", "software", "tech", "technology"],
+    "software": ["software", "information technology", "tech"],
+    "technology": ["technology", "information technology", "software", "tech"],
+    "healthcare": ["healthcare", "health care", "medical", "hospital", "pharma"],
+    "finance": ["finance", "financial", "banking", "fintech"],
+    "ecommerce": ["ecommerce", "e-commerce", "retail"],
+    "education": ["education", "edtech", "e-learning"],
+    "manufacturing": ["manufacturing", "industrial"],
+    "real estate": ["real estate", "property"],
+    "media": ["media", "publishing", "entertainment", "news"],
+}
+
+
+def _expand_industry(industry: str) -> list[str]:
+    """Return all synonyms for a given ICP industry string."""
+    key = industry.lower().strip()
+    synonyms = _INDUSTRY_SYNONYMS.get(key, [])
+    # Always include the original and each word as a fallback phrase (not single letters)
+    result = set(synonyms)
+    result.add(key)
+    for word in key.split():
+        if len(word) > 2:  # skip short abbreviations like 'it', 'ai', '&'
+            result.add(word)
+    return list(result)
+
+
+def _filter_by_industry(leads: list[Lead], industries: list[str]) -> list[Lead]:
+    """Drop leads whose industry doesn't match any of the ICP industries."""
+    if not industries:
+        return leads
+
+    # Build the full set of acceptable industry phrases from synonyms
+    accepted_phrases: list[str] = []
+    for ind in industries:
+        accepted_phrases.extend(_expand_industry(ind))
+
+    filtered = []
+    for lead in leads:
+        lead_industry = (lead.industry or "").lower()
+        if not lead_industry:
+            # Industry unknown — enrichment failed, keep the lead
+            filtered.append(lead)
+            continue
+        if any(phrase in lead_industry for phrase in accepted_phrases):
+            filtered.append(lead)
+        else:
+            logger.info(
+                "lead_filtered_industry",
+                company=lead.company_name,
+                industry=lead.industry,
+                required_industries=industries,
+            )
+    return filtered
+
+
+def _filter_by_geography(leads: list[Lead], geographies: list[str]) -> list[Lead]:
+    """Drop leads whose location is known AND doesn't match any ICP geography.
+    Leads with no location data (enrichment failed) are kept — they were found
+    by a geo-targeted search query so they are likely relevant.
+    """
+    if not geographies:
+        return leads
+
+    geo_tokens = {g.lower().strip() for g in geographies}
+
+    filtered = []
+    for lead in leads:
+        if not lead.location:
+            # Location unknown — give benefit of the doubt
+            filtered.append(lead)
+            continue
+        loc = lead.location.lower()
+        if any(geo in loc for geo in geo_tokens):
+            filtered.append(lead)
+        else:
+            logger.info(
+                "lead_filtered_geography",
+                company=lead.company_name,
+                location=lead.location,
+                required_geographies=geographies,
+            )
+    return filtered

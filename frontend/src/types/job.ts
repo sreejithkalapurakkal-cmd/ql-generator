@@ -2,6 +2,7 @@ export type JobStatus = 'PENDING' | 'SEARCHING' | 'ENRICHING' | 'SCORING' | 'COM
 
 export interface Job {
   id: string;
+  jobNumber: number;
   status: JobStatus;
   maxResults: number;
   errorMessage: string | null;

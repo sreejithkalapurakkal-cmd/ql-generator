@@ -15,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.UUID;
@@ -48,9 +50,15 @@ public class JobService {
             job = jobRepository.save(job);
             log.info("Job created: jobId={}", job.getId());
 
-            jobOrchestrator.executeJob(job.getId(), request);
+            final UUID jobId = job.getId();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    jobOrchestrator.executeJob(jobId, request);
+                }
+            });
 
-            return jobMapper.toResponse(job);
+            return jobMapper.toResponse(job, 0);
         } catch (Exception e) {
             throw new RuntimeException("Failed to create job", e);
         }
@@ -60,14 +68,19 @@ public class JobService {
     public JobResponse getJob(UUID jobId) {
         Job job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new JobNotFoundException(jobId));
-        return jobMapper.toResponse(job);
+        long jobNumber = jobRepository.countByCreatedAtLessThanEqual(job.getCreatedAt());
+        return jobMapper.toResponse(job, (int) jobNumber);
     }
 
     @Transactional(readOnly = true)
     public List<JobResponse> getAllJobs() {
-        return jobRepository.findAllByOrderByCreatedAtDesc().stream()
-                .map(jobMapper::toResponse)
-                .collect(Collectors.toList());
+        List<Job> jobs = jobRepository.findAllByOrderByCreatedAtDesc();
+        int total = jobs.size();
+        List<JobResponse> responses = new java.util.ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            responses.add(jobMapper.toResponse(jobs.get(i), total - i));
+        }
+        return responses;
     }
 
     @Transactional(readOnly = true)

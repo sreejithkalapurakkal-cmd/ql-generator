@@ -18,10 +18,17 @@ def apollo_enrich(domain: str) -> dict:
     Returns:
         Enriched company profile with firmographic data
     """
+    if not settings.apollo_api_key:
+        logger.warning("apollo_enrich skipped: no API key configured")
+        return {}
+
     try:
         response = httpx.post(
             "https://api.apollo.io/api/v1/organizations/enrich",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": settings.apollo_api_key,
+            },
             json={"domain": domain},
             timeout=settings.tool_timeout_seconds,
         )

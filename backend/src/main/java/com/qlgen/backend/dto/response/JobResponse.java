@@ -11,6 +11,7 @@ import java.util.UUID;
 @Builder
 public class JobResponse {
     private UUID id;
+    private int jobNumber;
     private JobStatus status;
     private int maxResults;
     private String errorMessage;

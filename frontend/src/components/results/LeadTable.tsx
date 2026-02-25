@@ -10,6 +10,7 @@ import {
   Paper,
   Typography,
   Chip,
+  Link,
 } from '@mui/material';
 import { formatCurrency, formatEmployeeCount, formatScore } from '../../lib/formatters';
 import type { Lead } from '../../types/lead';
@@ -83,6 +84,7 @@ export default function LeadTable({ leads, onRowClick }: Props) {
               </TableSortLabel>
             </TableCell>
             <TableCell>Location</TableCell>
+            <TableCell>LinkedIn</TableCell>
             <TableCell align="center">
               <TableSortLabel active={sortBy === 'totalScore'} direction={sortBy === 'totalScore' ? sortDir : 'desc'} onClick={() => handleSort('totalScore')}>
                 Score
@@ -111,6 +113,19 @@ export default function LeadTable({ leads, onRowClick }: Props) {
               <TableCell align="right">{formatEmployeeCount(lead.employeeCount)}</TableCell>
               <TableCell align="right">{formatCurrency(lead.estimatedRevenue)}</TableCell>
               <TableCell>{lead.location || '-'}</TableCell>
+              <TableCell>
+                {lead.linkedinUrl ? (
+                  <Link
+                    href={lead.linkedinUrl.startsWith('http') ? lead.linkedinUrl : `https://linkedin.com/company/${lead.linkedinUrl}`}
+                    target="_blank"
+                    rel="noopener"
+                    variant="caption"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    View
+                  </Link>
+                ) : '-'}
+              </TableCell>
               <TableCell align="center">
                 <Chip
                   label={formatScore(lead.bantScore.total)}

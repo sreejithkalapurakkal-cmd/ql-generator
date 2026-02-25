@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     lusha_api_key: str = ""
     exa_api_key: str = ""
     clay_api_key: str = ""
+    apollo_api_key: str = ""
+    phantombuster_api_key: str = ""
 
     # Backend
     backend_callback_base_url: str = "http://backend:8080"
