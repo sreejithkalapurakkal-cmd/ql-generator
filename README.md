@@ -1,2 +1,0 @@
-# ql-generator
-# ql-generator
