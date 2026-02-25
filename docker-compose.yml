@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - qlgen-network
+
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - AGENT_BASE_URL=http://agent:8000
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/qlgen
+      - SPRING_DATASOURCE_USERNAME=qlgen
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD:-qlgen_dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    networks:
+      - qlgen-network
+
+  agent:
+    build: ./agent
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
+      - LUSHA_API_KEY=${LUSHA_API_KEY}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - CLAY_API_KEY=${CLAY_API_KEY:-}
+      - BACKEND_CALLBACK_BASE_URL=http://backend:8080
+    networks:
+      - qlgen-network
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: qlgen
+      POSTGRES_USER: qlgen
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-qlgen_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qlgen -d qlgen"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qlgen-network
+
+volumes:
+  pgdata:
+
+networks:
+  qlgen-network:
+    driver: bridge
