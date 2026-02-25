@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import traceback
@@ -7,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.lead_gen_agent import create_lead_gen_agent
+from app.agent.lead_gen_agent import create_lead_gen_agent, create_pipeline_callback_handler
 from app.agent.prompt_builder import build_pipeline_prompt
 from app.db.session import async_session
 from app.models.pipeline import PipelineRun
@@ -89,32 +90,31 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
             _emit_event(events, run_id_str, {
                 "type": "stage_update",
                 "stage": "company_discovery",
-                "progress": 10,
-                "message": "Starting company discovery...",
+                "progress": 5,
+                "message": "Initializing agent...",
             })
 
-            # Create agent and execute
+            # Create agent with callback handler for real-time progress
             logger.info(f"Creating agent for pipeline run {run_id}")
-            agent = create_lead_gen_agent()
+            callback_handler = None
+            if events is not None:
+                callback_handler = create_pipeline_callback_handler(events, run_id_str)
+            agent = create_lead_gen_agent(callback_handler=callback_handler)
             prompt = build_pipeline_prompt(icp, options)
 
-            _emit_event(events, run_id_str, {
-                "type": "stage_update",
-                "stage": "company_discovery",
-                "progress": 20,
-                "message": "Agent is searching for companies matching ICP...",
-            })
-
             # Single agent call — handles all 4 stages
+            # The callback handler emits granular tool_start, agent_reasoning, and stage_update events
+            # IMPORTANT: agent() is synchronous — run in thread pool so the event loop
+            # remains free to yield SSE events in real-time
             logger.info(f"Invoking agent for pipeline run {run_id}")
-            result = agent(prompt)
+            result = await asyncio.to_thread(agent, prompt)
             logger.info(f"Agent completed for pipeline run {run_id}")
 
             _emit_event(events, run_id_str, {
                 "type": "stage_update",
-                "stage": "scoring",
-                "progress": 80,
-                "message": "Agent completed. Parsing results...",
+                "stage": "completed",
+                "progress": 90,
+                "message": "Agent completed. Parsing and saving results...",
             })
 
             # Parse the agent's JSON output
