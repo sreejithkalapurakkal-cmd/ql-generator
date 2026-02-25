@@ -1,16 +1,231 @@
+import json
+import logging
+
 from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 from app.tools.apollo_tool import apollo_company_search, apollo_people_search
 from app.tools.exa_tool import exa_search
-from app.tools.hunter_tool import hunter_domain_search, hunter_email_finder
-from app.tools.lusha_tool import lusha_person_search
 from app.tools.tavily_tool import tavily_search
 from app.tools.duckduckgo_tool import duckduckgo_search
+from app.tools.hunter_tool import hunter_domain_search, hunter_email_finder
+from app.tools.lusha_tool import lusha_person_search
 from app.tools.web_scraper_tool import scrape_webpage
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Friendly display names for each tool
+TOOL_DISPLAY_NAMES = {
+    "apollo_company_search": "Searching Apollo for companies",
+    "apollo_people_search": "Searching Apollo for contacts",
+    "exa_search": "Running semantic search via Exa.ai",
+    "tavily_search": "Searching recent news via Tavily",
+    "duckduckgo_search": "Searching DuckDuckGo",
+    "hunter_domain_search": "Finding contacts via Hunter.io",
+    "hunter_email_finder": "Finding email via Hunter.io",
+    "lusha_person_search": "Enriching contact via Lusha",
+    "scrape_webpage": "Scraping webpage",
+}
+
+# Map tools to their primary pipeline stage
+TOOL_STAGE_MAP = {
+    "scrape_webpage": None,  # context-dependent
+}
+
+STAGE_DISPLAY_NAMES = {
+    "company_discovery": "Company Discovery",
+    "contact_discovery": "Contact Discovery",
+    "enrichment": "Contact Enrichment",
+    "scoring": "BANT Scoring",
+}
+
+
+def create_pipeline_callback_handler(events: dict, run_id_str: str):
+    """Create a Strands callback handler that emits SSE events for pipeline progress.
+
+    The handler captures tool calls, agent reasoning text, and lifecycle events
+    and pushes them into the in-memory SSE event queue.
+    """
+    state = {
+        "current_stage": "company_discovery",
+        "text_buffer": "",
+        "last_reasoning": "",          # last emitted reasoning text (used as tool context)
+        "seen_tools": set(),           # set of tool names (for stage inference)
+        "emitted_tool_ids": set(),     # set of toolUseIds already emitted
+        "pending_tool": None,          # tool info waiting to be emitted (accumulating input)
+        "tool_call_count": 0,
+    }
+
+    # Stage ordering for progression detection
+    stage_order = ["company_discovery", "contact_discovery", "enrichment", "scoring"]
+
+    def _emit(event: dict):
+        if events is not None and run_id_str in events:
+            events[run_id_str].append(event)
+
+    def _try_detect_stage_from_text(text: str):
+        """Detect stage transitions from the agent's reasoning text."""
+        text_lower = text.lower()
+        detected = None
+        if any(kw in text_lower for kw in ("stage 2", "contact discovery", "find contacts", "finding contacts", "decision-makers")):
+            detected = "contact_discovery"
+        elif any(kw in text_lower for kw in ("stage 3", "contact enrichment", "enrichment", "missing email", "missing linkedin")):
+            detected = "enrichment"
+        elif any(kw in text_lower for kw in ("stage 4", "bant scor", "bant framework")):
+            detected = "scoring"
+
+        if not detected:
+            return
+
+        current_idx = stage_order.index(state["current_stage"]) if state["current_stage"] in stage_order else 0
+        new_idx = stage_order.index(detected) if detected in stage_order else current_idx
+
+        if new_idx > current_idx:
+            state["current_stage"] = detected
+            progress = 20 + (new_idx * 20)
+            _emit({
+                "type": "stage_update",
+                "stage": detected,
+                "progress": progress,
+                "message": f"Entering {STAGE_DISPLAY_NAMES.get(detected, detected)}...",
+            })
+
+    def _extract_context(tool_input) -> str:
+        """Extract the most relevant search parameter from tool input for display."""
+        # Handle case where input is still a string (accumulated JSON text)
+        if isinstance(tool_input, str):
+            tool_input = tool_input.strip()
+            if tool_input:
+                try:
+                    tool_input = json.loads(tool_input)
+                except (json.JSONDecodeError, ValueError):
+                    # Partial JSON — try to extract key-value pairs with regex
+                    import re
+                    for key in ("query", "domain", "company_domain", "name", "url"):
+                        match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', tool_input)
+                        if match:
+                            return match.group(1)[:150]
+                    return ""
+        if not isinstance(tool_input, dict):
+            return ""
+        for key in ("query", "domain", "company_domain", "name", "url", "keyword_tags"):
+            if key in tool_input and tool_input[key]:
+                val = tool_input[key]
+                if isinstance(val, list):
+                    val = ", ".join(str(v) for v in val[:3])
+                return str(val)[:150]
+        return ""
+
+    def _flush_pending_tool():
+        """Emit the pending tool_start event with accumulated input."""
+        pending = state["pending_tool"]
+        if not pending:
+            return
+        tool_name = pending["name"]
+        tool_input = pending.get("input", {})
+
+        state["tool_call_count"] += 1
+        state["seen_tools"].add(tool_name)
+
+        # Try to extract context from tool input; fall back to last reasoning text
+        context = _extract_context(tool_input)
+        if not context and state["last_reasoning"]:
+            # Use the preceding reasoning text as context (the agent usually says
+            # "Let me search for X" right before calling a tool)
+            context = state["last_reasoning"][:150]
+
+        _emit({
+            "type": "tool_start",
+            "tool_name": tool_name,
+            "display_name": TOOL_DISPLAY_NAMES.get(tool_name, tool_name),
+            "context": context,
+            "stage": state["current_stage"],
+            "tool_call_number": state["tool_call_count"],
+        })
+        state["pending_tool"] = None
+
+    def callback_handler(**kwargs):
+        try:
+            # Handle tool use events
+            # Strands streams current_tool_use multiple times as input accumulates.
+            # We buffer the latest version and emit once the tool changes or a
+            # data/lifecycle event arrives (indicating tool input streaming is done).
+            if "current_tool_use" in kwargs:
+                tool_info = kwargs["current_tool_use"]
+                tool_name = tool_info.get("name", "")
+                tool_id = tool_info.get("toolUseId", "")
+
+                if not tool_name:
+                    return
+
+                # Skip if already emitted
+                if tool_id and tool_id in state["emitted_tool_ids"]:
+                    return
+
+                # Capture any unflushed reasoning text as context for this tool
+                if state["text_buffer"].strip():
+                    text = state["text_buffer"].strip()
+                    if not text.startswith("{") and not text.startswith("```"):
+                        state["last_reasoning"] = text
+                    state["text_buffer"] = ""
+
+                # If this is a different tool_id, flush the previous pending tool
+                if state["pending_tool"] and state["pending_tool"].get("toolUseId") != tool_id:
+                    pending_id = state["pending_tool"].get("toolUseId", "")
+                    if pending_id:
+                        state["emitted_tool_ids"].add(pending_id)
+                    _flush_pending_tool()
+
+                # Buffer the latest version (with most complete input)
+                state["pending_tool"] = {
+                    "name": tool_name,
+                    "toolUseId": tool_id,
+                    "input": tool_info.get("input", {}),
+                }
+                return
+
+            # Any non-tool event should flush the pending tool first
+            if state["pending_tool"]:
+                pending_id = state["pending_tool"].get("toolUseId", "")
+                if pending_id:
+                    state["emitted_tool_ids"].add(pending_id)
+                _flush_pending_tool()
+
+            # Handle text/reasoning output from the agent
+            if "data" in kwargs:
+                chunk = kwargs["data"]
+                if chunk and isinstance(chunk, str):
+                    state["text_buffer"] += chunk
+                    # Emit reasoning in meaningful chunks (sentence boundaries or 200+ chars)
+                    buf = state["text_buffer"]
+                    if len(buf) > 200 or buf.rstrip().endswith((".", "!", "?", ":")):
+                        text = buf.strip()
+                        if text and not text.startswith("{") and not text.startswith("```"):
+                            state["last_reasoning"] = text
+                            # Detect stage transitions from reasoning text
+                            _try_detect_stage_from_text(text)
+                            _emit({
+                                "type": "agent_reasoning",
+                                "text": text,
+                                "stage": state["current_stage"],
+                            })
+                        state["text_buffer"] = ""
+
+            # Handle lifecycle events
+            if "init_event_loop" in kwargs:
+                _emit({
+                    "type": "stage_update",
+                    "stage": "company_discovery",
+                    "progress": 10,
+                    "message": "Agent initialized, starting Company Discovery...",
+                })
+
+        except Exception as e:
+            logger.warning(f"Callback handler error (non-fatal): {e}")
+
+    return callback_handler
 
 LEAD_GEN_SYSTEM_PROMPT = """You are an expert B2B lead generation specialist. Your job is to
 convert an Ideal Customer Profile (ICP) into a complete, sales-ready list of qualified
@@ -181,17 +396,22 @@ CRITICAL RULES
 """
 
 
-def create_lead_gen_agent() -> Agent:
-    """Create the single lead generation agent with all tools."""
+def create_lead_gen_agent(callback_handler=None) -> Agent:
+    """Create the single lead generation agent with all tools.
+
+    Args:
+        callback_handler: Optional Strands callback handler for streaming events.
+            If None, uses the default PrintingCallbackHandler.
+    """
     model = BedrockModel(
         model_id=settings.BEDROCK_MODEL_ID,
         region_name=settings.AWS_REGION,
     )
 
-    return Agent(
-        model=model,
-        system_prompt=LEAD_GEN_SYSTEM_PROMPT,
-        tools=[
+    kwargs = {
+        "model": model,
+        "system_prompt": LEAD_GEN_SYSTEM_PROMPT,
+        "tools": [
             apollo_company_search,
             exa_search,
             tavily_search,
@@ -202,4 +422,9 @@ def create_lead_gen_agent() -> Agent:
             lusha_person_search,
             scrape_webpage,
         ],
-    )
+    }
+
+    if callback_handler is not None:
+        kwargs["callback_handler"] = callback_handler
+
+    return Agent(**kwargs)

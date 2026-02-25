@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "anthropic.claude-sonnet-4-20250514"
 
+    # CORS
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+
     # External APIs
     APOLLO_API_KEY: str = ""
     APOLLO_BASE_URL: str = "https://api.apollo.io/v1"
@@ -26,7 +29,7 @@ class Settings(BaseSettings):
     TAVILY_BASE_URL: str = "https://api.tavily.com"
 
     class Config:
-        env_file = ".env"
+        env_file = ".env", "../.env"
         env_file_encoding = "utf-8"
         extra = "ignore"
 
