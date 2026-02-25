@@ -2,9 +2,16 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
+import os
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Override DB URL from environment variable if set (e.g. in Docker)
+db_url = os.environ.get("DATABASE_URL_SYNC")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
 
 # Import all models so Alembic can detect them
 from app.db.base import Base
