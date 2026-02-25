@@ -73,38 +73,40 @@ STAGE 4: BANT SCORING
 Goal: Score each company using the BANT framework. If you need additional evidence,
 use tavily_search, exa_search, or scrape_webpage to research the company further.
 
-SCORING RUBRIC (1-5 per dimension):
+SCORING RUBRIC (1-25 per dimension, total out of 100):
 
-BUDGET (company size & financial capacity):
-  5 = Revenue > upper ICP range, clear tech budget signals (recent funding, tech hires)
-  4 = Revenue in upper half of ICP range, some budget indicators
-  3 = Revenue within ICP range, no specific budget signals
-  2 = Revenue in lower range, budget unclear
-  1 = Revenue below ICP minimum, likely budget-constrained
+BUDGET (company size & financial capacity) — score 1 to 25:
+  21-25 = Revenue > upper ICP range, clear tech budget signals (recent funding, tech hires, dedicated IT spend)
+  16-20 = Revenue in upper half of ICP range, some budget indicators (growth investment, recent capital raise)
+  11-15 = Revenue within ICP range, no specific budget signals
+   6-10 = Revenue in lower range, budget unclear or constrained
+   1-5  = Revenue below ICP minimum, likely budget-constrained or no revenue data found
 
-AUTHORITY (contact role & decision-making power):
-  5 = C-suite directly owning tech/digital budget (CTO, CDO, CEO at small co)
-  4 = VP-level in relevant function (VP Engineering, VP Ecommerce)
-  3 = Director-level in relevant function
-  2 = Manager-level or adjacent function
-  1 = No relevant decision-maker identified
+AUTHORITY (contact role & decision-making power) — score 1 to 25:
+  21-25 = C-suite directly owning tech/digital budget (CTO, CDO, CEO at small co), confirmed via LinkedIn/bio
+  16-20 = VP-level in relevant function (VP Engineering, VP Ecommerce, VP Digital)
+  11-15 = Director-level in relevant function with influence on purchasing
+   6-10 = Manager-level or adjacent function, limited decision-making power
+   1-5  = No relevant decision-maker identified or only junior contacts found
 
-NEED (alignment with ICP transformation drivers):
-  5 = 3+ strong signals matching ICP needs (tech debt, growth pain, stated initiatives)
-  4 = 2 matching signals
-  3 = 1 matching signal or general industry alignment
-  2 = Weak alignment, speculative need
-  1 = No discernible need alignment
+NEED (alignment with ICP transformation drivers) — score 1 to 25:
+  21-25 = 3+ strong signals matching ICP needs (tech debt, growth pain, stated initiatives, public roadmap)
+  16-20 = 2 matching signals with concrete evidence (job postings, press releases, tech stack gaps)
+  11-15 = 1 matching signal or general industry alignment suggesting latent need
+   6-10 = Weak alignment, speculative need based on industry trends only
+   1-5  = No discernible need alignment from any available evidence
 
-TIMING (readiness to act):
-  5 = Active RFP/vendor evaluation, recent relevant job postings, public announcements
-  4 = Recent funding round, stated transformation timeline
-  3 = General growth trajectory suggesting near-term action
-  2 = No timing signals but profile suggests eventual need
-  1 = No timing signals, possibly just completed similar project
+TIMING (readiness to act) — score 1 to 25:
+  21-25 = Active RFP/vendor evaluation, recent relevant job postings, public transformation announcements
+  16-20 = Recent funding round, stated transformation timeline, executive mandate signals
+  11-15 = General growth trajectory suggesting near-term action within 6-12 months
+   6-10 = No timing signals but profile suggests eventual need (12-24 months)
+   1-5  = No timing signals, possibly just completed similar project or locked into contracts
+
+total_score = budget_score + authority_score + need_score + timing_score (out of 100).
 
 Every score MUST have a specific reason citing actual evidence from your research.
-No assumptions, no black boxes.
+No assumptions, no black boxes. Use the full range — don't cluster all scores at the midpoint.
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT FORMAT
@@ -143,15 +145,15 @@ Return your complete results as a single JSON object with this exact structure:
         }
       ],
       "bant_score": {
-        "budget_score": 4,
-        "budget_reason": "Revenue ~$50M, Series B raised in 2025...",
-        "authority_score": 5,
-        "authority_reason": "CTO identified with direct tech budget ownership...",
-        "need_score": 4,
-        "need_reason": "Running legacy Magento, job postings mention headless...",
-        "timing_score": 3,
+        "budget_score": 19,
+        "budget_reason": "Revenue ~$50M, Series B raised in 2025, multiple DevOps hires...",
+        "authority_score": 23,
+        "authority_reason": "CTO identified with direct tech budget ownership, confirmed via LinkedIn...",
+        "need_score": 18,
+        "need_reason": "Running legacy Magento, job postings mention headless commerce...",
+        "timing_score": 13,
         "timing_reason": "Growing 25% YoY, no public replatforming timeline yet...",
-        "total_score": 16,
+        "total_score": 73,
         "overall_summary": "Strong prospect with budget and clear need."
       }
     }
@@ -159,7 +161,7 @@ Return your complete results as a single JSON object with this exact structure:
   "summary": {
     "total_companies": 20,
     "total_contacts": 75,
-    "avg_bant_score": 14.2,
+    "avg_bant_score": 68.5,
     "hot_leads": 5,
     "warm_leads": 10,
     "cool_leads": 5

@@ -22,15 +22,15 @@ const BANTScoreDisplay: React.FC<{ score: BANTScore | null }> = ({ score }) => {
   }
   const total = score.total_score;
   const cfg =
-    total >= 16 ? { label: 'HOT',  bg: '#E6F7F1', color: '#1E9B6B' } :
-    total >= 12 ? { label: 'WARM', bg: '#FEF3E2', color: '#E0820A' } :
-    total >= 9  ? { label: 'COOL', bg: '#F4EFFE', color: '#5C2D8F' } :
+    total >= 80 ? { label: 'HOT',  bg: '#E6F7F1', color: '#1E9B6B' } :
+    total >= 60 ? { label: 'WARM', bg: '#FEF3E2', color: '#E0820A' } :
+    total >= 40 ? { label: 'COOL', bg: '#F4EFFE', color: '#5C2D8F' } :
                   { label: 'COLD', bg: '#FDECEA', color: '#D93025' };
 
   return (
-    <Tooltip title={`B:${score.budget_score} A:${score.authority_score} N:${score.need_score} T:${score.timing_score}`}>
+    <Tooltip title={`B:${score.budget_score}/25 A:${score.authority_score}/25 N:${score.need_score}/25 T:${score.timing_score}/25`}>
       <Chip
-        label={`${total}/20 ${cfg.label}`}
+        label={`${total}/100 ${cfg.label}`}
         size="small"
         sx={{ bgcolor: cfg.bg, color: cfg.color, fontWeight: 700, fontSize: 11, height: 22, cursor: 'default' }}
       />
@@ -53,7 +53,7 @@ const BANTDetailPanel: React.FC<{ score: BANTScore }> = ({ score }) => (
       ].map(({ key, score: s, reason }) => (
         <Box key={key} sx={{ bgcolor: '#fff', border: '1px solid #EBEBEB', borderRadius: '8px', p: '10px 14px' }}>
           <Typography sx={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#ADADAD', mb: 0.5 }}>
-            {key} ({s}/5)
+            {key} ({s}/25)
           </Typography>
           <Typography sx={{ fontSize: 12.5, color: '#5C5C5C', lineHeight: 1.5 }}>
             {reason || '-'}
@@ -118,8 +118,8 @@ const LeadsPage: React.FC = () => {
     companies.length > 0
       ? (companies.reduce((s, c) => s + (c.bant_score?.total_score || 0), 0) / companies.length).toFixed(1)
       : '0';
-  const hotLeads = companies.filter((c) => (c.bant_score?.total_score || 0) >= 16).length;
-  const warmLeads = companies.filter((c) => { const t = c.bant_score?.total_score || 0; return t >= 12 && t < 16; }).length;
+  const hotLeads = companies.filter((c) => (c.bant_score?.total_score || 0) >= 80).length;
+  const warmLeads = companies.filter((c) => { const t = c.bant_score?.total_score || 0; return t >= 60 && t < 80; }).length;
 
   // Flatten to rows
   const flatRows: any[] = [];
@@ -195,7 +195,7 @@ const LeadsPage: React.FC = () => {
       >
         <StatTile icon={<BusinessIcon sx={{ fontSize: 13, color: '#ADADAD' }} />} label="Companies" value={companies.length} />
         <StatTile icon={<PeopleIcon sx={{ fontSize: 13, color: '#ADADAD' }} />} label="Contacts" value={totalContacts} />
-        <StatTile icon={<BarChartIcon sx={{ fontSize: 13, color: '#ADADAD' }} />} label="Avg BANT" value={avgBant} suffix="/20" />
+        <StatTile icon={<BarChartIcon sx={{ fontSize: 13, color: '#ADADAD' }} />} label="Avg BANT" value={avgBant} suffix="/100" />
         <StatTile icon={<LocalFireDepartmentIcon sx={{ fontSize: 13, color: '#ADADAD' }} />} label="Hot / Warm" value={hotLeads} suffix={`/ ${warmLeads}`} />
       </Paper>
 
