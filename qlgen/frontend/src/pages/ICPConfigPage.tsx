@@ -7,6 +7,50 @@ import { ICPDefinition, DEFAULT_ICP } from '../types';
 
 const { TextArea } = Input;
 
+interface TagInputProps {
+  label: string;
+  field: string;
+  values: string[];
+  onChange: (vals: string[]) => void;
+  placeholder?: string;
+  tagInput: Record<string, string>;
+  setTagInput: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}
+
+const TagInput: React.FC<TagInputProps> = ({ label, field, values, onChange, placeholder, tagInput, setTagInput }) => {
+  const addTag = (value: string) => {
+    if (value.trim() && !values.includes(value.trim())) {
+      onChange([...values, value.trim()]);
+      setTagInput((prev) => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  return (
+    <Form.Item label={label}>
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space wrap>
+          {values.map((v) => (
+            <Tag key={v} closable onClose={() => onChange(values.filter((t) => t !== v))} color="blue">
+              {v}
+            </Tag>
+          ))}
+        </Space>
+        <Input
+          placeholder={placeholder || `Add ${label.toLowerCase()} and press Enter`}
+          value={tagInput[field] || ''}
+          onChange={(e) => setTagInput((prev) => ({ ...prev, [field]: e.target.value }))}
+          onPressEnter={() => addTag(tagInput[field] || '')}
+          suffix={
+            <Button size="small" type="link" onClick={() => addTag(tagInput[field] || '')}>
+              Add
+            </Button>
+          }
+        />
+      </Space>
+    </Form.Item>
+  );
+};
+
 const ICPConfigPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -27,48 +71,6 @@ const ICPConfigPage: React.FC = () => {
     }
   }, [id]);
 
-  const addTag = (field: string, value: string, setter: (val: string[]) => void, current: string[]) => {
-    if (value.trim() && !current.includes(value.trim())) {
-      setter([...current, value.trim()]);
-      setTagInput({ ...tagInput, [field]: '' });
-    }
-  };
-
-  const removeTag = (tag: string, setter: (val: string[]) => void, current: string[]) => {
-    setter(current.filter((t) => t !== tag));
-  };
-
-  const TagInput: React.FC<{
-    label: string;
-    field: string;
-    values: string[];
-    onChange: (vals: string[]) => void;
-    placeholder?: string;
-  }> = ({ label, field, values, onChange, placeholder }) => (
-    <Form.Item label={label}>
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Space wrap>
-          {values.map((v) => (
-            <Tag key={v} closable onClose={() => removeTag(v, onChange, values)} color="blue">
-              {v}
-            </Tag>
-          ))}
-        </Space>
-        <Input
-          placeholder={placeholder || `Add ${label.toLowerCase()} and press Enter`}
-          value={tagInput[field] || ''}
-          onChange={(e) => setTagInput({ ...tagInput, [field]: e.target.value })}
-          onPressEnter={() => addTag(field, tagInput[field] || '', onChange, values)}
-          suffix={
-            <Button size="small" type="link" onClick={() => addTag(field, tagInput[field] || '', onChange, values)}>
-              Add
-            </Button>
-          }
-        />
-      </Space>
-    </Form.Item>
-  );
-
   const steps = [
     {
       title: 'Offering',
@@ -86,6 +88,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.target_offering}
             onChange={(v) => setConfig({ ...config, target_offering: v })}
             placeholder="e.g., Platform engineering & replatforming"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -100,6 +104,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.regions.countries}
             onChange={(v) => setConfig({ ...config, regions: { ...config.regions, countries: v } })}
             placeholder="e.g., United States"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Priority Areas (States, Cities)"
@@ -107,6 +113,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.regions.priority_areas}
             onChange={(v) => setConfig({ ...config, regions: { ...config.regions, priority_areas: v } })}
             placeholder="e.g., California, New York"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -179,6 +187,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.technology_maturity.signals}
             onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, signals: v } })}
             placeholder="e.g., Running on Shopify Plus"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Negative Signals (Migration Needs)"
@@ -186,6 +196,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.technology_maturity.negative_signals}
             onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, negative_signals: v } })}
             placeholder="e.g., Legacy Magento 1 migration overdue"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -200,6 +212,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.infrastructure_readiness.indicators}
             onChange={(v) => setConfig({ ...config, infrastructure_readiness: { indicators: v } })}
             placeholder="e.g., Cloud-hosted storefront"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -214,6 +228,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.digital_transformation_drivers.growth_triggers}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, growth_triggers: v } })}
             placeholder="e.g., YoY revenue growth >20%"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Operational Pains"
@@ -221,6 +237,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.digital_transformation_drivers.operational_pains}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, operational_pains: v } })}
             placeholder="e.g., Site performance degrading during peak traffic"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Competitive Pressures"
@@ -228,6 +246,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.digital_transformation_drivers.competitive_pressures}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, competitive_pressures: v } })}
             placeholder="e.g., Rising CAC"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Strategic Initiatives"
@@ -235,6 +255,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.digital_transformation_drivers.strategic_initiatives}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, strategic_initiatives: v } })}
             placeholder="e.g., Launching mobile app or PWA"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -249,6 +271,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.leadership_traits.target_roles}
             onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, target_roles: v } })}
             placeholder="e.g., CTO, VP of Engineering"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
           <TagInput
             label="Behavioral Traits"
@@ -256,6 +280,8 @@ const ICPConfigPage: React.FC = () => {
             values={config.leadership_traits.behavioral_traits}
             onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, behavioral_traits: v } })}
             placeholder="e.g., Data-driven decision maker"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
