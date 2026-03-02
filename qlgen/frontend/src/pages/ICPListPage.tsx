@@ -57,7 +57,7 @@ const ICPListPage: React.FC = () => {
       key: 'actions',
       render: (_: unknown, record: ICPConfig) => (
         <Space>
-          <Button size="small" icon={<RocketOutlined />} type="primary" onClick={() => handleRunPipeline(record.id!)}>
+          <Button size="small" type="primary" onClick={() => handleRunPipeline(record.id!)}>
             Run Pipeline
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/icp/${record.id}/edit`)}>
@@ -72,16 +72,21 @@ const ICPListPage: React.FC = () => {
   ];
 
   return (
-    <Card
-      title="ICP Configurations"
-      extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-          New ICP
-        </Button>
-      }
-    >
-      <Table columns={columns} dataSource={icps} rowKey="id" loading={loading} />
-    </Card>
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <div className="section-label">Configuration</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 className="page-title">Saved ICPs</h1>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
+            New ICP
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <Table columns={columns} dataSource={icps} rowKey="id" loading={loading} />
+      </Card>
+    </div>
   );
 };
 

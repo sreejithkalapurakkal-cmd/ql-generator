@@ -1,11 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Card, Steps, Spin, Result, Button, Typography, Tag, Timeline, Badge } from 'antd';
+import { Card, Steps, Result, Button, Typography, Tag, Timeline, Badge } from 'antd';
 import {
   SearchOutlined,
   TeamOutlined,
   DatabaseOutlined,
   BarChartOutlined,
-  CheckCircleOutlined,
   LoadingOutlined,
   ToolOutlined,
   BulbOutlined,
@@ -85,6 +84,7 @@ const PipelinePage: React.FC = () => {
   const [sseStage, setSseStage] = useState('pending');
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [toolCallCount, setToolCallCount] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const entryIdRef = useRef(0);
@@ -109,6 +109,10 @@ const PipelinePage: React.FC = () => {
   useEffect(() => {
     if (!runId) return;
     startTimeRef.current = new Date();
+
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((new Date().getTime() - startTimeRef.current.getTime()) / 1000));
+    }, 1000);
 
     getPipelineStatus(runId).then((res) => setRun(res.data));
 
@@ -192,6 +196,7 @@ const PipelinePage: React.FC = () => {
 
     return () => {
       es.close();
+      clearInterval(timer);
     };
   }, [runId, addEntry]);
 
@@ -301,6 +306,163 @@ const PipelinePage: React.FC = () => {
     return '#faad14';
   };
 
+  if (!isCompleted && !isFailed) {
+    const overallProgress = (currentIndex / stages.length) * 100;
+    const companiesFound = run?.companies_found || 0;
+    const contactsFound = run?.contacts_found || 0;
+
+    return (
+      <div className="progress-overlay">
+        {/* Left Panel - Step Pipeline */}
+        <div className="prog-left">
+          <div className="prog-left-header">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div className="prog-title">Generating Leads</div>
+              <Button
+                size="small"
+                onClick={() => navigate('/dashboard')}
+                style={{ fontSize: 12 }}
+              >
+                ← Back
+              </Button>
+            </div>
+            <div className="prog-subtitle">{sseMessage}</div>
+            <div style={{
+              fontSize: 11,
+              color: 'var(--g400)',
+              marginTop: 6,
+              fontStyle: 'italic',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}>
+              ☕ This process takes time. Grab a coffee and come back.
+            </div>
+            <div className="prog-overall-bar">
+              <div className="prog-overall-fill" style={{ width: `${overallProgress}%` }} />
+            </div>
+          </div>
+
+          <div className="prog-steps-list">
+            {stages.map((stage, i) => {
+              const status = i < currentIndex ? 'done' : i === currentIndex ? 'active' : 'pending';
+              return (
+                <div key={stage.key} className={`prog-step-item ${status}`}>
+                  <div className="prog-step-num">
+                    {status === 'done' ? '✓' : status === 'active' ? <div className="spinner" /> : i + 1}
+                  </div>
+                  <div className="prog-step-info">
+                    <div className="prog-step-name">{stage.title}</div>
+                    <div className="prog-step-desc">
+                      {status === 'active' ? sseMessage : status === 'done' ? 'Completed' : 'Waiting...'}
+                    </div>
+                    {status === 'done' && (
+                      <div className="prog-step-count">✓ Complete</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="prog-stat-bar">
+            <div className="prog-stat">
+              <div className="sv">{companiesFound}</div>
+              <div className="sl">Companies</div>
+            </div>
+            <div className="prog-stat">
+              <div className="sv">{contactsFound}</div>
+              <div className="sl">Contacts</div>
+            </div>
+            <div className="prog-stat">
+              <div className="sv">{toolCallCount}</div>
+              <div className="sl">Tool Calls</div>
+            </div>
+            <div className="prog-stat">
+              <div className="sv">
+                {elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m`}
+              </div>
+              <div className="sl">Elapsed</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Panel - Live Log */}
+        <div className="prog-right">
+          <div className="prog-right-header">
+            <span className="log-title">Activity Log</span>
+          </div>
+
+          <div className="prog-log-area" ref={logContainerRef}>
+            {activityLog.map((entry) => {
+              const timeStr = entry.timestamp.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+              });
+
+              let tagClass = 'system';
+              let tagText = 'SYSTEM';
+
+              if (entry.type === 'tool_start') {
+                if (entry.toolName?.includes('company')) {
+                  tagClass = 'discover';
+                  tagText = 'DISCOVER';
+                } else if (entry.toolName?.includes('people') || entry.toolName?.includes('contact')) {
+                  tagClass = 'contact';
+                  tagText = 'CONTACT';
+                } else if (entry.toolName?.includes('score')) {
+                  tagClass = 'score';
+                  tagText = 'SCORE';
+                } else {
+                  tagClass = 'icp';
+                  tagText = 'TOOL';
+                }
+              } else if (entry.type === 'stage_update') {
+                if (entry.stage === 'completed') {
+                  tagClass = 'done';
+                  tagText = 'DONE';
+                } else {
+                  tagClass = 'icp';
+                  tagText = 'STAGE';
+                }
+              } else if (entry.type === 'agent_reasoning') {
+                tagClass = 'icp';
+                tagText = 'AGENT';
+              }
+
+              let message = '';
+              if (entry.type === 'tool_start') {
+                message = `${entry.displayName || entry.toolName}`;
+                if (entry.context) {
+                  message += ` — ${entry.context.substring(0, 80)}${entry.context.length > 80 ? '...' : ''}`;
+                }
+              } else if (entry.type === 'stage_update') {
+                message = entry.message || '';
+              } else if (entry.type === 'agent_reasoning') {
+                message = entry.text?.substring(0, 100) + (entry.text && entry.text.length > 100 ? '...' : '') || '';
+              }
+
+              return (
+                <div key={entry.id} className="log-entry">
+                  <div className="log-time">{timeStr}</div>
+                  <div className={`log-tag ${tagClass}`}>{tagText}</div>
+                  <div className="log-msg">{message}</div>
+                </div>
+              );
+            })}
+            {activityLog.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--g400)' }}>
+                Waiting for pipeline activity...
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* Stage Progress Stepper */}
@@ -310,7 +472,7 @@ const PipelinePage: React.FC = () => {
           items={stages.map((s, i) => ({
             title: s.title,
             icon: getStepStatus(i) === 'process' ? <LoadingOutlined /> : s.icon,
-            status: getStepStatus(i) as any,
+            status: getStepStatus(i) as 'wait' | 'process' | 'finish' | 'error',
           }))}
         />
 
@@ -340,15 +502,6 @@ const PipelinePage: React.FC = () => {
             extra={<Button onClick={() => navigate('/dashboard')}>Dashboard</Button>}
           />
         )}
-
-        {!isCompleted && !isFailed && (
-          <div style={{ textAlign: 'center', marginTop: 24 }}>
-            <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary">{sseMessage}</Text>
-            </div>
-          </div>
-        )}
       </Card>
 
       {/* Activity Log */}
@@ -356,13 +509,11 @@ const PipelinePage: React.FC = () => {
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span>Agent Activity Log</span>
-            {!isCompleted && !isFailed && (
-              <Badge
-                count={`${toolCallCount} tool calls`}
-                style={{ backgroundColor: '#1890ff' }}
-                showZero
-              />
-            )}
+            <Badge
+              count={`${toolCallCount} tool calls`}
+              style={{ backgroundColor: 'var(--purple-pale)', color: 'var(--purple) !important', fontWeight: 600 }}
+              showZero
+            />
           </div>
         }
         bordered={false}

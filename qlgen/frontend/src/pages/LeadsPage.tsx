@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, InputNumber, Row, Col, Statistic, Typography, Collapse } from 'antd';
-import { DownloadOutlined, BarChartOutlined, TeamOutlined } from '@ant-design/icons';
+import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { getLeadCompanies, getExportUrl } from '../api/leadsApi';
-import { Company, Contact, BANTScore } from '../types';
+import { Company, BANTScore } from '../types';
 
 const { Text } = Typography;
 
@@ -37,17 +37,43 @@ const LeadsPage: React.FC = () => {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('bant_score');
+  const [expandedRowKeys, setExpandedRowKeys] = useState<(string | number)[]>([]);
 
   useEffect(() => {
     if (!runId) return;
     setLoading(true);
     getLeadCompanies(runId, { sort_by: sortBy })
-      .then((res) => setCompanies(res.data))
+      .then((res) => {
+        setCompanies(res.data);
+        // Auto-expand first row after data loads
+        if (res.data.length > 0) {
+          const firstCompany = res.data[0];
+          if (firstCompany.contacts.length > 0) {
+            setExpandedRowKeys([`${firstCompany.id}-${firstCompany.contacts[0].id}`]);
+          } else {
+            setExpandedRowKeys([firstCompany.id]);
+          }
+        }
+      })
       .finally(() => setLoading(false));
   }, [runId, sortBy]);
 
   // Flatten companies+contacts into rows for the main table
-  const flatRows: any[] = [];
+  const flatRows: Array<{
+    key: string | number;
+    serial: number;
+    company_name: string;
+    website: string | null;
+    city: string;
+    contact_name: string;
+    designation: string | null;
+    linkedin: string | null;
+    email: string | null;
+    phone: string | null;
+    bant_score: BANTScore | null;
+    company: Company;
+    contact: any;
+  }> = [];
   let serial = 1;
   companies.forEach((company) => {
     if (company.contacts.length > 0) {
@@ -58,7 +84,7 @@ const LeadsPage: React.FC = () => {
           company_name: company.name,
           website: company.website,
           city: [company.city, company.state_region, company.country].filter(Boolean).join(', '),
-          contact_name: contact.full_name,
+          contact_name: contact.full_name || "",
           designation: contact.designation,
           linkedin: contact.linkedin_url,
           email: contact.email,
@@ -127,27 +153,31 @@ const LeadsPage: React.FC = () => {
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}>
-          <Card><Statistic title="Companies" value={companies.length} prefix={<TeamOutlined />} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card><Statistic title="Contacts" value={totalContacts} prefix={<TeamOutlined />} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card><Statistic title="Avg BANT Score" value={avgBant} prefix={<BarChartOutlined />} suffix="/20" /></Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="Hot / Warm"
-              value={hotLeads}
-              suffix={`/ ${warmLeads}`}
-              valueStyle={{ color: '#52c41a' }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <div style={{ marginBottom: 24 }}>
+        <div className="section-label">Lead Generation</div>
+        <h1 className="page-title">Run Results</h1>
+      </div>
+
+      <div className="summary-bar">
+        <div className="summary-item">
+          <div className="val">{companies.length}</div>
+          <div className="lbl">Companies</div>
+        </div>
+        <div className="summary-item">
+          <div className="val">{totalContacts}</div>
+          <div className="lbl">Contacts</div>
+        </div>
+        <div className="summary-item">
+          <div className="val">{avgBant}</div>
+          <div className="lbl">Avg BANT Score</div>
+        </div>
+        <div className="summary-item">
+          <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
+            {hotLeads} / {warmLeads}
+          </div>
+          <div className="lbl">Hot / Warm</div>
+        </div>
+      </div>
 
       <Card
         title="Qualified Leads"
@@ -157,11 +187,8 @@ const LeadsPage: React.FC = () => {
               <Select.Option value="bant_score">Sort by BANT Score</Select.Option>
               <Select.Option value="company_name">Sort by Company</Select.Option>
             </Select>
-            <Button icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
-              Export XLSX
-            </Button>
-            <Button icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'csv'))}>
-              Export CSV
+            <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
+              Export Excel
             </Button>
           </Space>
         }
@@ -173,6 +200,8 @@ const LeadsPage: React.FC = () => {
           pagination={{ pageSize: 50, showSizeChanger: true }}
           scroll={{ x: 1400 }}
           expandable={{
+            expandedRowKeys,
+            onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as (string | number)[]),
             expandedRowRender: (record) =>
               record.company?.bant_score ? (
                 <BANTDetailPanel score={record.company.bant_score} />
