@@ -23,3 +23,4 @@ class PipelineRun(Base):
 
     icp_config = relationship("ICPConfig", back_populates="pipeline_runs")
     companies = relationship("Company", back_populates="pipeline_run", cascade="all, delete-orphan")
+    logs = relationship("PipelineLog", back_populates="pipeline_run", cascade="all, delete-orphan", order_by="PipelineLog.sequence_number")

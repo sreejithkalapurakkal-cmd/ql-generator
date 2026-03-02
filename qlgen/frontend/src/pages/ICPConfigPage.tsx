@@ -1,11 +1,54 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Steps, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Divider, Slider } from 'antd';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Card, Steps, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Divider } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { createICP, getICP, updateICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
 import { ICPDefinition, DEFAULT_ICP } from '../types';
 
 const { TextArea } = Input;
+
+const TagInputField: React.FC<{
+  label: string;
+  field: string;
+  values: string[];
+  onChange: (vals: string[]) => void;
+  placeholder?: string;
+  tagInput: Record<string, string>;
+  setTagInput: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}> = ({ label, field, values, onChange, placeholder, tagInput, setTagInput }) => {
+  const addTag = () => {
+    const value = tagInput[field] || '';
+    if (value.trim() && !values.includes(value.trim())) {
+      onChange([...values, value.trim()]);
+      setTagInput((prev) => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  return (
+    <Form.Item label={label}>
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space wrap>
+          {values.map((v) => (
+            <Tag key={v} closable onClose={() => onChange(values.filter((t) => t !== v))} color="blue">
+              {v}
+            </Tag>
+          ))}
+        </Space>
+        <Input
+          placeholder={placeholder || `Add ${label.toLowerCase()} and press Enter`}
+          value={tagInput[field] || ''}
+          onChange={(e) => setTagInput((prev) => ({ ...prev, [field]: e.target.value }))}
+          onPressEnter={addTag}
+          suffix={
+            <Button size="small" type="link" onClick={addTag}>
+              Add
+            </Button>
+          }
+        />
+      </Space>
+    </Form.Item>
+  );
+};
 
 const ICPConfigPage: React.FC = () => {
   const navigate = useNavigate();
@@ -27,47 +70,27 @@ const ICPConfigPage: React.FC = () => {
     }
   }, [id]);
 
-  const addTag = (field: string, value: string, setter: (val: string[]) => void, current: string[]) => {
-    if (value.trim() && !current.includes(value.trim())) {
-      setter([...current, value.trim()]);
-      setTagInput({ ...tagInput, [field]: '' });
-    }
-  };
+  const updateIndustry = useCallback((index: number, field: 'vertical' | 'sub_vertical', value: string) => {
+    setConfig((prev) => {
+      const updated = [...prev.industry_types];
+      updated[index] = { ...updated[index], [field]: field === 'sub_vertical' ? (value || null) : value };
+      return { ...prev, industry_types: updated };
+    });
+  }, []);
 
-  const removeTag = (tag: string, setter: (val: string[]) => void, current: string[]) => {
-    setter(current.filter((t) => t !== tag));
-  };
+  const removeIndustry = useCallback((index: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      industry_types: prev.industry_types.filter((_, j) => j !== index),
+    }));
+  }, []);
 
-  const TagInput: React.FC<{
-    label: string;
-    field: string;
-    values: string[];
-    onChange: (vals: string[]) => void;
-    placeholder?: string;
-  }> = ({ label, field, values, onChange, placeholder }) => (
-    <Form.Item label={label}>
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Space wrap>
-          {values.map((v) => (
-            <Tag key={v} closable onClose={() => removeTag(v, onChange, values)} color="blue">
-              {v}
-            </Tag>
-          ))}
-        </Space>
-        <Input
-          placeholder={placeholder || `Add ${label.toLowerCase()} and press Enter`}
-          value={tagInput[field] || ''}
-          onChange={(e) => setTagInput({ ...tagInput, [field]: e.target.value })}
-          onPressEnter={() => addTag(field, tagInput[field] || '', onChange, values)}
-          suffix={
-            <Button size="small" type="link" onClick={() => addTag(field, tagInput[field] || '', onChange, values)}>
-              Add
-            </Button>
-          }
-        />
-      </Space>
-    </Form.Item>
-  );
+  const addIndustry = useCallback(() => {
+    setConfig((prev) => ({
+      ...prev,
+      industry_types: [...prev.industry_types, { vertical: '', sub_vertical: null }],
+    }));
+  }, []);
 
   const steps = [
     {
@@ -80,12 +103,14 @@ const ICPConfigPage: React.FC = () => {
           <Form.Item label="Description">
             <TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Brief description of this ICP..." />
           </Form.Item>
-          <TagInput
+          <TagInputField
             label="Target Offerings / Service Areas"
             field="offerings"
             values={config.target_offering}
             onChange={(v) => setConfig({ ...config, target_offering: v })}
             placeholder="e.g., Platform engineering & replatforming"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -94,19 +119,23 @@ const ICPConfigPage: React.FC = () => {
       title: 'Regions',
       content: (
         <Form layout="vertical">
-          <TagInput
+          <TagInputField
             label="Target Countries"
             field="countries"
             values={config.regions.countries}
             onChange={(v) => setConfig({ ...config, regions: { ...config.regions, countries: v } })}
             placeholder="e.g., United States"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Priority Areas (States, Cities)"
             field="priority_areas"
             values={config.regions.priority_areas}
             onChange={(v) => setConfig({ ...config, regions: { ...config.regions, priority_areas: v } })}
             placeholder="e.g., California, New York"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -118,23 +147,13 @@ const ICPConfigPage: React.FC = () => {
           <Form.Item label="Industry Verticals">
             <Space direction="vertical" style={{ width: '100%' }}>
               {config.industry_types.map((ind, i) => (
-                <Space key={i}>
-                  <Input value={ind.vertical} onChange={(e) => {
-                    const updated = [...config.industry_types];
-                    updated[i] = { ...updated[i], vertical: e.target.value };
-                    setConfig({ ...config, industry_types: updated });
-                  }} placeholder="Vertical" style={{ width: 250 }} />
-                  <Input value={ind.sub_vertical || ''} onChange={(e) => {
-                    const updated = [...config.industry_types];
-                    updated[i] = { ...updated[i], sub_vertical: e.target.value || null };
-                    setConfig({ ...config, industry_types: updated });
-                  }} placeholder="Sub-vertical (optional)" style={{ width: 250 }} />
-                  <Button danger size="small" onClick={() => {
-                    setConfig({ ...config, industry_types: config.industry_types.filter((_, j) => j !== i) });
-                  }}>Remove</Button>
+                <Space key={i} wrap>
+                  <Input value={ind.vertical} onChange={(e) => updateIndustry(i, 'vertical', e.target.value)} placeholder="Vertical" style={{ width: 250 }} />
+                  <Input value={ind.sub_vertical || ''} onChange={(e) => updateIndustry(i, 'sub_vertical', e.target.value)} placeholder="Sub-vertical (optional)" style={{ width: 250 }} />
+                  <Button danger size="small" onClick={() => removeIndustry(i)}>Remove</Button>
                 </Space>
               ))}
-              <Button type="dashed" onClick={() => setConfig({ ...config, industry_types: [...config.industry_types, { vertical: '', sub_vertical: null }] })}>
+              <Button type="dashed" onClick={addIndustry}>
                 + Add Industry
               </Button>
             </Space>
@@ -147,14 +166,14 @@ const ICPConfigPage: React.FC = () => {
       content: (
         <Form layout="vertical">
           <Form.Item label="Employee Count Range">
-            <Space>
+            <Space wrap>
               <InputNumber min={1} value={config.company_size.employees_min} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, employees_min: v || 1 } })} addonBefore="Min" />
               <span>to</span>
               <InputNumber min={1} value={config.company_size.employees_max} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, employees_max: v || 10000 } })} addonBefore="Max" />
             </Space>
           </Form.Item>
           <Form.Item label="Revenue Range">
-            <Space>
+            <Space wrap>
               <Select value={config.company_size.revenue_currency} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, revenue_currency: v } })} style={{ width: 80 }}>
                 <Select.Option value="USD">USD</Select.Option>
                 <Select.Option value="INR">INR</Select.Option>
@@ -173,19 +192,23 @@ const ICPConfigPage: React.FC = () => {
       title: 'Tech',
       content: (
         <Form layout="vertical">
-          <TagInput
+          <TagInputField
             label="Technology Maturity Signals (Positive)"
             field="tech_signals"
             values={config.technology_maturity.signals}
             onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, signals: v } })}
             placeholder="e.g., Running on Shopify Plus"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Negative Signals (Migration Needs)"
             field="tech_negative"
             values={config.technology_maturity.negative_signals}
             onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, negative_signals: v } })}
             placeholder="e.g., Legacy Magento 1 migration overdue"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -194,12 +217,14 @@ const ICPConfigPage: React.FC = () => {
       title: 'Infra',
       content: (
         <Form layout="vertical">
-          <TagInput
+          <TagInputField
             label="Infrastructure Readiness Indicators"
             field="infra"
             values={config.infrastructure_readiness.indicators}
             onChange={(v) => setConfig({ ...config, infrastructure_readiness: { indicators: v } })}
             placeholder="e.g., Cloud-hosted storefront"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -208,33 +233,41 @@ const ICPConfigPage: React.FC = () => {
       title: 'Drivers',
       content: (
         <Form layout="vertical">
-          <TagInput
+          <TagInputField
             label="Growth Triggers"
             field="growth"
             values={config.digital_transformation_drivers.growth_triggers}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, growth_triggers: v } })}
             placeholder="e.g., YoY revenue growth >20%"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Operational Pains"
             field="pains"
             values={config.digital_transformation_drivers.operational_pains}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, operational_pains: v } })}
             placeholder="e.g., Site performance degrading during peak traffic"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Competitive Pressures"
             field="pressures"
             values={config.digital_transformation_drivers.competitive_pressures}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, competitive_pressures: v } })}
             placeholder="e.g., Rising CAC"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Strategic Initiatives"
             field="initiatives"
             values={config.digital_transformation_drivers.strategic_initiatives}
             onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, strategic_initiatives: v } })}
             placeholder="e.g., Launching mobile app or PWA"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -243,19 +276,23 @@ const ICPConfigPage: React.FC = () => {
       title: 'Leadership',
       content: (
         <Form layout="vertical">
-          <TagInput
+          <TagInputField
             label="Target Roles"
             field="roles"
             values={config.leadership_traits.target_roles}
             onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, target_roles: v } })}
             placeholder="e.g., CTO, VP of Engineering"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
-          <TagInput
+          <TagInputField
             label="Behavioral Traits"
             field="traits"
             values={config.leadership_traits.behavioral_traits}
             onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, behavioral_traits: v } })}
             placeholder="e.g., Data-driven decision maker"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
           />
         </Form>
       ),
@@ -264,16 +301,26 @@ const ICPConfigPage: React.FC = () => {
       title: 'Review',
       content: (
         <div>
-          <Descriptions title="ICP Summary" bordered column={1} size="small">
-            <Descriptions.Item label="Name">{name || '(unnamed)'}</Descriptions.Item>
-            <Descriptions.Item label="Description">{description || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Target Offerings">{config.target_offering.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Regions">{config.regions.countries.join(', ')} | {config.regions.priority_areas.join(', ')}</Descriptions.Item>
-            <Descriptions.Item label="Industries">{config.industry_types.map((i) => i.vertical).join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Company Size">{config.company_size.employees_min}-{config.company_size.employees_max} employees, {config.company_size.revenue_currency} {config.company_size.revenue_min.toLocaleString()}-{config.company_size.revenue_max.toLocaleString()}</Descriptions.Item>
-            <Descriptions.Item label="Tech Signals">{config.technology_maturity.signals.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Infrastructure">{config.infrastructure_readiness.indicators.join(', ') || '-'}</Descriptions.Item>
+          <Descriptions title="ICP Summary" bordered column={2} size="small">
+            <Descriptions.Item label="Name" span={2}>{name || '(unnamed)'}</Descriptions.Item>
+            <Descriptions.Item label="Description" span={2}>{description || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Target Offerings" span={2}>{config.target_offering.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Countries">{config.regions.countries.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Priority Areas">{config.regions.priority_areas.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Industries" span={2}>
+              {config.industry_types.map((i) => `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`).join(', ') || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Employees">{config.company_size.employees_min.toLocaleString()}–{config.company_size.employees_max.toLocaleString()}</Descriptions.Item>
+            <Descriptions.Item label="Revenue">{config.company_size.revenue_currency} {config.company_size.revenue_min.toLocaleString()}–{config.company_size.revenue_max.toLocaleString()}</Descriptions.Item>
+            <Descriptions.Item label="Tech Signals (Positive)">{config.technology_maturity.signals.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Tech Signals (Negative)">{config.technology_maturity.negative_signals.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Infrastructure" span={2}>{config.infrastructure_readiness.indicators.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Growth Triggers">{config.digital_transformation_drivers.growth_triggers.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Operational Pains">{config.digital_transformation_drivers.operational_pains.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Competitive Pressures">{config.digital_transformation_drivers.competitive_pressures.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Strategic Initiatives">{config.digital_transformation_drivers.strategic_initiatives.join(', ') || '-'}</Descriptions.Item>
             <Descriptions.Item label="Target Roles">{config.leadership_traits.target_roles.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Behavioral Traits">{config.leadership_traits.behavioral_traits.join(', ') || '-'}</Descriptions.Item>
           </Descriptions>
         </div>
       ),

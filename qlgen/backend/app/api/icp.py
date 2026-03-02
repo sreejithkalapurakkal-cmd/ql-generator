@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from io import BytesIO
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
@@ -7,8 +10,32 @@ from typing import List
 from app.db.session import get_db
 from app.models.icp import ICPConfig
 from app.schemas.icp import ICPConfigCreate, ICPConfigUpdate, ICPConfigResponse
+from app.services.icp_import_service import generate_icp_template, parse_icp_excel
 
 router = APIRouter(prefix="/icp", tags=["ICP Configuration"])
+
+
+@router.get("/template/download")
+async def download_icp_template():
+    buffer = generate_icp_template()
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=icp_template.xlsx"},
+    )
+
+
+@router.post("/import/parse")
+async def parse_icp_upload(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+    contents = await file.read()
+    buffer = BytesIO(contents)
+    try:
+        results = parse_icp_excel(buffer)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(e)}")
+    return results
 
 
 @router.post("", response_model=ICPConfigResponse)

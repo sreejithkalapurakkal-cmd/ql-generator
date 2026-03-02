@@ -158,6 +158,17 @@ body {
   z-index: 1;
 }
 
+.metric-tile-clickable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.metric-tile-clickable:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--purple-l);
+  transform: translateY(-2px);
+}
+
 .run-card {
   background: #fff;
   border: 1px solid var(--g200);
@@ -735,4 +746,126 @@ body {
 
 .fw-700 {
   font-weight: 700;
+}
+
+/* ── Mobile Responsive ─────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* Sidebar collapses to top bar */
+  .ant-layout-sider {
+    position: relative !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    flex: none !important;
+    height: auto !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--g200) !important;
+  }
+
+  .ant-layout-sider-children {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 8px 12px;
+    gap: 8px;
+    overflow-x: auto;
+  }
+
+  .ant-layout {
+    flex-direction: column !important;
+  }
+
+  .ant-layout .ant-layout {
+    margin-left: 0 !important;
+  }
+
+  .ant-layout-content {
+    padding: 16px 12px !important;
+  }
+
+  /* Metric tiles: 2 per row on mobile */
+  .metric-tile {
+    padding: 16px 14px;
+  }
+
+  .metric-tile .value {
+    font-size: 22px;
+  }
+
+  .metric-tile .label {
+    font-size: 10px;
+  }
+
+  .metric-tile .metric-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+    right: 12px;
+  }
+
+  /* Run cards: full width */
+  .run-card {
+    padding: 14px;
+  }
+
+  /* Page titles */
+  .page-title {
+    font-size: 18px;
+  }
+
+  /* Progress overlay: single column on mobile */
+  .progress-overlay {
+    grid-template-columns: 1fr;
+  }
+
+  .prog-left {
+    border-right: none;
+    border-bottom: 1px solid var(--g200);
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  /* Summary bar: wrap items */
+  .summary-bar {
+    flex-wrap: wrap;
+  }
+
+  .summary-item {
+    min-width: calc(50% - 1px);
+    padding: 12px 16px;
+  }
+
+  /* Log entries: single column */
+  .log-entry {
+    grid-template-columns: 60px 1fr;
+    gap: 4px 8px;
+  }
+
+  .log-tag {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+
+  /* Modal width */
+  .ant-modal {
+    max-width: calc(100vw - 32px) !important;
+    margin: 16px auto !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .metric-tile .metric-icon {
+    display: none;
+  }
+
+  .summary-item {
+    min-width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--g200);
+  }
+
+  .summary-item:last-child {
+    border-bottom: none;
+  }
 }

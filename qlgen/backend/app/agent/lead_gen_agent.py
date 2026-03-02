@@ -42,11 +42,12 @@ STAGE_DISPLAY_NAMES = {
 }
 
 
-def create_pipeline_callback_handler(events: dict, run_id_str: str):
+def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collector: list = None):
     """Create a Strands callback handler that emits SSE events for pipeline progress.
 
     The handler captures tool calls, agent reasoning text, and lifecycle events
-    and pushes them into the in-memory SSE event queue.
+    and pushes them into the in-memory SSE event queue. If event_collector is
+    provided, events are also appended there for later DB persistence.
     """
     state = {
         "current_stage": "company_discovery",
@@ -64,6 +65,8 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str):
     def _emit(event: dict):
         if events is not None and run_id_str in events:
             events[run_id_str].append(event)
+        if event_collector is not None:
+            event_collector.append(event)
 
     def _try_detect_stage_from_text(text: str):
         """Detect stage transitions from the agent's reasoning text."""
@@ -193,14 +196,51 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str):
                     state["emitted_tool_ids"].add(pending_id)
                 _flush_pending_tool()
 
+            # Handle tool result events
+            if "tool_result" in kwargs:
+                result = kwargs["tool_result"]
+                tool_name = result.get("name", "unknown")
+                content = result.get("content", "")
+                is_error = bool(result.get("error") or result.get("status") == "error")
+                # Truncate long results for log readability
+                if isinstance(content, str) and len(content) > 500:
+                    content_preview = content[:500] + "... [truncated]"
+                elif isinstance(content, (list, dict)):
+                    try:
+                        content_preview = json.dumps(content, default=str)[:500]
+                        if len(json.dumps(content, default=str)) > 500:
+                            content_preview += "..."
+                    except Exception:
+                        content_preview = str(content)[:500]
+                else:
+                    content_preview = str(content)[:500] if content else ""
+
+                if is_error:
+                    _emit({
+                        "type": "tool_error",
+                        "tool_name": tool_name,
+                        "error_message": content_preview[:300],
+                        "stage": state["current_stage"],
+                        "tool_call_number": state["tool_call_count"],
+                    })
+                else:
+                    _emit({
+                        "type": "tool_result",
+                        "tool_name": tool_name,
+                        "result_preview": content_preview,
+                        "stage": state["current_stage"],
+                        "tool_call_number": state["tool_call_count"],
+                        "success": True,
+                    })
+
             # Handle text/reasoning output from the agent
             if "data" in kwargs:
                 chunk = kwargs["data"]
                 if chunk and isinstance(chunk, str):
                     state["text_buffer"] += chunk
-                    # Emit reasoning in meaningful chunks (sentence boundaries or 200+ chars)
+                    # Emit reasoning in smaller chunks for finer granularity
                     buf = state["text_buffer"]
-                    if len(buf) > 200 or buf.rstrip().endswith((".", "!", "?", ":")):
+                    if len(buf) > 80 or buf.rstrip().endswith((".", "!", "?", ":")):
                         text = buf.strip()
                         if text and not text.startswith("{") and not text.startswith("```"):
                             state["last_reasoning"] = text
@@ -213,8 +253,18 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str):
                             })
                         state["text_buffer"] = ""
 
-            # Handle lifecycle events
+            # Handle lifecycle events — also flush any remaining text buffer
             if "init_event_loop" in kwargs:
+                # Flush remaining buffered reasoning text
+                if state["text_buffer"].strip():
+                    text = state["text_buffer"].strip()
+                    if not text.startswith("{") and not text.startswith("```"):
+                        _emit({
+                            "type": "agent_reasoning",
+                            "text": text,
+                            "stage": state["current_stage"],
+                        })
+                    state["text_buffer"] = ""
                 _emit({
                     "type": "stage_update",
                     "stage": "company_discovery",
@@ -285,8 +335,38 @@ Mark each contact's enrichment status:
 ═══════════════════════════════════════════════════════════════
 STAGE 4: BANT SCORING
 ═══════════════════════════════════════════════════════════════
-Goal: Score each company using the BANT framework. If you need additional evidence,
-use tavily_search, exa_search, or scrape_webpage to research the company further.
+Goal: Score each company using the BANT framework. This is the most important stage.
+Invest significant research effort here — data accuracy is the highest priority.
+
+IMPORTANT: For each BANT dimension, you MUST include "*_sources" — a list of
+{"url": "...", "title": "...", "tool": "..."} objects citing where you found the
+evidence. Every dimension requires 2-3 source URLs. Sources come from your tool
+results — include the URLs from search results, company pages you scraped, etc.
+
+PRE-SCORING RESEARCH (mandatory for each company):
+Before scoring ANY company, you MUST conduct dedicated research:
+
+a) BUDGET EVIDENCE: Search for the company's recent funding rounds, financial reports,
+   revenue estimates, and tech spending signals. Use tavily_search to find news about
+   fundraising, acquisitions, or financial performance. Scrape the company's website for
+   investor/press/about pages.
+
+b) AUTHORITY VERIFICATION: Verify the identified contact's role and decision-making
+   power. Search their LinkedIn profile context via exa_search or duckduckgo_search.
+   Look for evidence of them speaking at conferences, publishing articles, or being
+   quoted in industry publications.
+
+c) NEED VALIDATION: Search for specific pain points or transformation signals. Look for
+   job postings (tavily_search "[company] careers [technology]"), tech stack analysis,
+   industry reports mentioning the company, or news about operational challenges.
+
+d) TIMING SIGNALS: Search for recent events suggesting readiness: new executive hires,
+   RFP announcements, vendor evaluations, contract expirations, fiscal year planning.
+   Use tavily_search and exa_search for news within the last 6 months.
+
+Each research step should use AT LEAST 2 different tools to cross-validate findings.
+Use dynamic tool selection — if tavily_search doesn't find budget evidence, try
+exa_search with a different query, then scrape_webpage on the company's press page.
 
 SCORING RUBRIC (1-5 per dimension):
 
@@ -320,6 +400,14 @@ TIMING (readiness to act):
 
 Every score MUST have a specific reason citing actual evidence from your research.
 No assumptions, no black boxes.
+
+EVIDENCE REQUIREMENTS:
+- Each BANT dimension MUST cite 2-3 specific sources with URLs.
+- Sources must be from your actual tool results — never fabricate URLs.
+- For each source, explain what specific evidence it provides in the reason text.
+- Prefer recent sources (< 12 months old) over older ones.
+- If you cannot find strong evidence for a dimension, score it lower (1-2) rather than
+  guessing. Honest low scores are more valuable than inflated unverifiable scores.
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT FORMAT
@@ -360,12 +448,25 @@ Return your complete results as a single JSON object with this exact structure:
       "bant_score": {
         "budget_score": 4,
         "budget_reason": "Revenue ~$50M, Series B raised in 2025...",
+        "budget_sources": [
+          {"url": "https://techcrunch.com/2025/acme-series-b", "title": "Acme raises $30M Series B", "tool": "tavily"},
+          {"url": "https://acme.com/about", "title": "Company about page", "tool": "scrape_webpage"}
+        ],
         "authority_score": 5,
         "authority_reason": "CTO identified with direct tech budget ownership...",
+        "authority_sources": [
+          {"url": "https://linkedin.com/in/janedoe", "title": "Jane Doe - CTO at Acme", "tool": "apollo"}
+        ],
         "need_score": 4,
         "need_reason": "Running legacy Magento, job postings mention headless...",
+        "need_sources": [
+          {"url": "https://builtwith.com/acme.com", "title": "Acme tech profile", "tool": "exa"}
+        ],
         "timing_score": 3,
         "timing_reason": "Growing 25% YoY, no public replatforming timeline yet...",
+        "timing_sources": [
+          {"url": "https://acme.com/careers", "title": "Job postings page", "tool": "scrape_webpage"}
+        ],
         "total_score": 16,
         "overall_summary": "Strong prospect with budget and clear need."
       }
@@ -390,9 +491,15 @@ CRITICAL RULES
 2. If a tool fails or returns no results, try alternative tools before giving up.
 3. Quality over quantity — 15 well-researched companies beat 25 thin ones.
 4. Partial data is acceptable — mark missing fields as null, not made-up values.
-5. Every BANT score needs evidence-backed reasoning, not generic statements.
+5. Every BANT score MUST have evidence-backed reasoning with 2-3 source URLs per
+   dimension. Conduct dedicated research per company before scoring — do not rely
+   solely on data gathered during company/contact discovery. If evidence is weak,
+   score conservatively and explain what is missing.
 6. Deduplicate companies by domain throughout the process.
 7. Process ALL stages before returning — do not skip enrichment or scoring.
+8. BANT scoring is the most important output. Spend proportionally more time on
+   research for scoring than on company/contact discovery. A well-researched BANT
+   score with specific evidence is far more valuable than finding additional companies.
 """
 
 

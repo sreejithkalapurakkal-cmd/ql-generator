@@ -17,7 +17,7 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getPipelineStatus } from '../api/pipelineApi';
+import { getPipelineStatus, getPipelineLogs } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
 import { API_BASE } from '../api/client';
 
@@ -61,7 +61,7 @@ const stageColors: Record<string, string> = {
 
 interface ActivityEntry {
   id: number;
-  type: 'tool_start' | 'agent_reasoning' | 'stage_update';
+  type: 'tool_start' | 'agent_reasoning' | 'stage_update' | 'tool_result' | 'tool_error';
   timestamp: Date;
   // tool_start fields
   toolName?: string;
@@ -74,6 +74,11 @@ interface ActivityEntry {
   stage?: string;
   progress?: number;
   message?: string;
+  // tool_result fields
+  resultPreview?: string;
+  success?: boolean;
+  // tool_error fields
+  errorMessage?: string;
 }
 
 const PipelinePage: React.FC = () => {
@@ -105,6 +110,35 @@ const PipelinePage: React.FC = () => {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [activityLog]);
+
+  // Load persisted logs for completed/failed runs
+  useEffect(() => {
+    if (!runId || !run) return;
+    if ((run.status === 'completed' || run.status === 'failed') && activityLog.length === 0) {
+      getPipelineLogs(runId).then((res) => {
+        const entries: ActivityEntry[] = res.data.map((log, i) => ({
+          id: i + 1,
+          type: (log.event_data.type as ActivityEntry['type']) || 'stage_update',
+          timestamp: new Date(log.created_at),
+          toolName: log.event_data.tool_name as string | undefined,
+          displayName: log.event_data.display_name as string | undefined,
+          context: log.event_data.context as string | undefined,
+          toolCallNumber: log.event_data.tool_call_number as number | undefined,
+          text: log.event_data.text as string | undefined,
+          stage: log.event_data.stage as string | undefined,
+          progress: log.event_data.progress as number | undefined,
+          message: log.event_data.message as string | undefined,
+          resultPreview: log.event_data.result_preview as string | undefined,
+          success: log.event_data.success as boolean | undefined,
+          errorMessage: log.event_data.error_message as string | undefined,
+        }));
+        setActivityLog(entries);
+        const toolEntries = entries.filter(e => e.type === 'tool_start');
+        setToolCallCount(toolEntries.length);
+        entryIdRef.current = entries.length;
+      });
+    }
+  }, [runId, run?.status]);
 
   useEffect(() => {
     if (!runId) return;
@@ -149,6 +183,28 @@ const PipelinePage: React.FC = () => {
       addEntry({
         type: 'agent_reasoning',
         text: data.text,
+        stage: data.stage,
+      });
+    });
+
+    es.addEventListener('tool_result', (event) => {
+      const data = JSON.parse(event.data);
+      addEntry({
+        type: 'tool_result',
+        toolName: data.tool_name,
+        resultPreview: data.result_preview,
+        success: data.success,
+        stage: data.stage,
+        toolCallNumber: data.tool_call_number,
+      });
+    });
+
+    es.addEventListener('tool_error', (event) => {
+      const data = JSON.parse(event.data);
+      addEntry({
+        type: 'tool_error',
+        toolName: data.tool_name,
+        errorMessage: data.error_message,
         stage: data.stage,
       });
     });
@@ -295,6 +351,54 @@ const PipelinePage: React.FC = () => {
           </div>
         );
 
+      case 'tool_result':
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Tag color="default" style={{ fontSize: 11 }}>
+                RESULT
+              </Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {entry.toolName}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
+              </Text>
+            </div>
+            {entry.resultPreview && (
+              <Paragraph
+                type="secondary"
+                style={{
+                  margin: '4px 0 0 0',
+                  fontSize: 12,
+                  background: '#f9f9f9',
+                  padding: '6px 10px',
+                  borderRadius: 4,
+                  fontFamily: 'monospace',
+                }}
+                ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}
+              >
+                {entry.resultPreview}
+              </Paragraph>
+            )}
+          </div>
+        );
+
+      case 'tool_error':
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Tag color="error" style={{ fontSize: 11 }}>
+              ERROR
+            </Tag>
+            <Text type="danger" style={{ fontSize: 12 }}>
+              {entry.toolName}: {entry.errorMessage}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
+            </Text>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -303,6 +407,8 @@ const PipelinePage: React.FC = () => {
   const getTimelineDotColor = (entry: ActivityEntry) => {
     if (entry.type === 'stage_update') return stageColors[entry.stage || ''] || '#1890ff';
     if (entry.type === 'tool_start') return toolColors[entry.toolName || ''] || '#1890ff';
+    if (entry.type === 'tool_result') return '#d9d9d9';
+    if (entry.type === 'tool_error') return '#ff4d4f';
     return '#faad14';
   };
 
@@ -317,7 +423,10 @@ const PipelinePage: React.FC = () => {
         <div className="prog-left">
           <div className="prog-left-header">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="prog-title">Generating Leads</div>
+              <div className="prog-title">
+                Generating Leads
+                {run?.icp_name && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--g500)' }}> — {run.icp_name}</span>}
+              </div>
               <Button
                 size="small"
                 onClick={() => navigate('/dashboard')}
@@ -328,15 +437,27 @@ const PipelinePage: React.FC = () => {
             </div>
             <div className="prog-subtitle">{sseMessage}</div>
             <div style={{
-              fontSize: 11,
-              color: 'var(--g400)',
-              marginTop: 6,
-              fontStyle: 'italic',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4
+              fontSize: 12,
+              color: 'var(--g600)',
+              marginTop: 10,
+              background: '#f0f9ff',
+              border: '1px solid #bae0ff',
+              borderRadius: 8,
+              padding: '10px 14px',
+              lineHeight: 1.6,
             }}>
-              ☕ This process takes time. Grab a coffee and come back.
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>
+                Estimated duration: ~{Math.ceil((run?.estimated_duration_seconds || 300) / 60)} min
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--g500)' }}>
+                You can safely leave this page — results are saved automatically.{' '}
+                <span
+                  style={{ color: 'var(--purple)', cursor: 'pointer', fontWeight: 500 }}
+                  onClick={() => navigate('/dashboard')}
+                >
+                  Go to Dashboard
+                </span>
+              </div>
             </div>
             <div className="prog-overall-bar">
               <div className="prog-overall-fill" style={{ width: `${overallProgress}%` }} />
@@ -430,6 +551,12 @@ const PipelinePage: React.FC = () => {
               } else if (entry.type === 'agent_reasoning') {
                 tagClass = 'icp';
                 tagText = 'AGENT';
+              } else if (entry.type === 'tool_result') {
+                tagClass = 'system';
+                tagText = 'RESULT';
+              } else if (entry.type === 'tool_error') {
+                tagClass = 'score';
+                tagText = 'ERROR';
               }
 
               let message = '';
@@ -442,6 +569,10 @@ const PipelinePage: React.FC = () => {
                 message = entry.message || '';
               } else if (entry.type === 'agent_reasoning') {
                 message = entry.text?.substring(0, 100) + (entry.text && entry.text.length > 100 ? '...' : '') || '';
+              } else if (entry.type === 'tool_result') {
+                message = `${entry.toolName}: ${entry.resultPreview?.substring(0, 80) || 'OK'}${(entry.resultPreview?.length || 0) > 80 ? '...' : ''}`;
+              } else if (entry.type === 'tool_error') {
+                message = `${entry.toolName}: ${entry.errorMessage || 'Unknown error'}`;
               }
 
               return (

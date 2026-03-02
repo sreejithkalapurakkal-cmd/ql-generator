@@ -1,18 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Layout } from 'antd';
 import {
-  UserOutlined,
   LeftOutlined,
   RightOutlined,
+  MenuOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const { Sider, Content } = Layout;
 
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+  return isMobile;
+};
+
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const menuItems = [
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
@@ -21,6 +34,76 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   ];
 
   const selectedKey = menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
+
+  // Close mobile menu on route change
+  useEffect(() => { setMobileMenuOpen(false); }, [location.pathname]);
+
+  if (isMobile) {
+    return (
+      <Layout style={{ minHeight: '100vh' }}>
+        {/* Mobile top bar */}
+        <div style={{
+          background: '#fff',
+          borderBottom: '1px solid var(--g200)',
+          padding: '10px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 30, height: 30,
+              background: 'linear-gradient(135deg, var(--purple), var(--purple-l))',
+              borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 700, color: '#fff',
+              boxShadow: '0 2px 8px rgba(92,45,143,.3)',
+            }}>ql</div>
+            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)' }}>qlGen</span>
+          </div>
+          <div onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={{ cursor: 'pointer', fontSize: 18, color: 'var(--g600)' }}>
+            {mobileMenuOpen ? <CloseOutlined /> : <MenuOutlined />}
+          </div>
+        </div>
+
+        {/* Mobile dropdown menu */}
+        {mobileMenuOpen && (
+          <div style={{
+            background: '#fff',
+            borderBottom: '1px solid var(--g200)',
+            padding: '4px 8px 8px',
+            position: 'sticky',
+            top: 50,
+            zIndex: 99,
+            boxShadow: 'var(--shadow-md)',
+          }}>
+            {menuItems.map((item) => (
+              <div
+                key={item.key}
+                onClick={() => navigate(item.key)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 14px', margin: '2px 0', borderRadius: 8,
+                  color: selectedKey === item.key ? 'var(--purple)' : 'var(--g600)',
+                  background: selectedKey === item.key ? 'var(--purple-pale)' : 'transparent',
+                  cursor: 'pointer', fontSize: 14, fontWeight: 500,
+                }}
+              >
+                <span style={{ width: 20, textAlign: 'center', fontSize: 15 }}>{item.icon}</span>
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <Content style={{ padding: '16px 12px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+          {children}
+        </Content>
+      </Layout>
+    );
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -117,41 +200,6 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </div>
 
         <div style={{ flex: 1 }} />
-
-        {/* <div
-          style={{
-            padding: '14px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            borderTop: '1px solid var(--g200)',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-          }}
-        >
-          <div
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--orange), #f7934b)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#fff',
-              flexShrink: 0,
-            }}
-          >
-            <UserOutlined />
-          </div>
-          {!collapsed && (
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--g700)' }}>User</div>
-              <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 1 }}>Sales Lead</div>
-            </div>
-          )}
-        </div> */}
 
         <div
           onClick={() => setCollapsed(!collapsed)}
