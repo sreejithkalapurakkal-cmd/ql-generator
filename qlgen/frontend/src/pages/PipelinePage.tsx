@@ -20,6 +20,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom';
 import { getPipelineStatus } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
+import { API_BASE } from '../api/client';
 
 const { Text, Paragraph } = Typography;
 
@@ -111,7 +112,7 @@ const PipelinePage: React.FC = () => {
 
     getPipelineStatus(runId).then((res) => setRun(res.data));
 
-    const es = new EventSource(`/api/v1/pipeline/${runId}/stream`);
+    const es = new EventSource(`${API_BASE}/pipeline/${runId}/stream`);
     eventSourceRef.current = es;
 
     es.addEventListener('stage_update', (event) => {
