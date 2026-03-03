@@ -29,7 +29,7 @@ const WelcomePage: React.FC = () => {
         </div>
         <p className="welcome-hero-sub">
           qlGen discovers, enriches, and BANT-scores high-fit companies and contacts based on your Ideal Customer Profile —
-          replacing hours of manual prospecting with a single, intelligent pipeline run.
+          replacing hours of manual prospecting with a single, intelligent search.
         </p>
       </div>
 
@@ -40,7 +40,7 @@ const WelcomePage: React.FC = () => {
           <div className="wstep-num">01</div>
           <div className="wstep-title-container">
             <div className="wstep-icon">🎯</div>
-            <div className="wstep-title">Define Your ICP</div>
+            <div className="wstep-title">Define Search Criteria</div>
           </div>
         </div>
         <div className="wstep-arrow">→</div>
@@ -111,7 +111,7 @@ const WelcomePage: React.FC = () => {
             Ready to find your next best customers?
           </div>
           <div style={{ fontSize: 13.5, color: 'var(--g500)', marginTop: 4 }}>
-            Create an ICP and let qlGen do the research.
+            Define your search criteria and let qlGen do the research.
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>

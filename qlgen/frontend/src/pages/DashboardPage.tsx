@@ -10,7 +10,7 @@ type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
 
 const TILE_LABELS: Record<TileKey, string> = {
   total_leads: 'Total Leads',
-  pipeline_runs: 'Pipeline Runs',
+  pipeline_runs: 'Searches',
   companies: 'Companies Found',
   contacts: 'Contacts Found',
 };
@@ -59,16 +59,81 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  const statsColumns = [
-    { title: 'ICP Name', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
-    { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
-    { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 110 },
-    { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
-    {
-      title: 'Total Leads', key: 'total_leads', width: 110,
-      render: (_: unknown, record: ICPStat) => record.total_companies + record.total_contacts,
-    },
-  ];
+  const MODAL_TITLES: Record<TileKey, string> = {
+    total_leads: 'Total Leads — By Search Criteria',
+    pipeline_runs: 'Searches — Overview',
+    companies: 'Companies Found — By Search Criteria',
+    contacts: 'Contacts Found — By Search Criteria',
+  };
+
+  const getModalColumns = (tile: TileKey) => {
+    if (tile === 'pipeline_runs') {
+      return [
+        {
+          title: 'Search Criteria', key: 'icp_name', width: 180,
+          render: (_: unknown, r: PipelineRun) => <span style={{ fontWeight: 600 }}>{r.icp_name || 'Unknown'}</span>,
+        },
+        {
+          title: 'Status', dataIndex: 'status', key: 'status', width: 100,
+          render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s.toUpperCase()}</Tag>,
+        },
+        { title: 'Companies', dataIndex: 'companies_found', key: 'companies_found', width: 100 },
+        { title: 'Contacts', dataIndex: 'contacts_found', key: 'contacts_found', width: 100 },
+        {
+          title: 'Started', dataIndex: 'started_at', key: 'started_at',
+          render: (d: string | null) => d ? new Date(d).toLocaleString() : '—',
+        },
+        {
+          title: '', key: 'action', width: 80,
+          render: (_: unknown, r: PipelineRun) => r.status === 'completed' ? (
+            <a onClick={() => { setStatsModalOpen(false); navigate(`/leads/${r.id}`); }}
+              style={{ color: 'var(--purple)', cursor: 'pointer', fontSize: 12 }}>View →</a>
+          ) : null,
+        },
+      ];
+    }
+    if (tile === 'companies') {
+      return [
+        { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        {
+          title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 120,
+          render: (v: number) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{v}</span>,
+        },
+        { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
+        { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+        {
+          title: 'Avg / Run', key: 'avg', width: 100,
+          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_companies / record.run_count).toFixed(1) : '—',
+        },
+      ];
+    }
+    if (tile === 'contacts') {
+      return [
+        { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        {
+          title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 120,
+          render: (v: number) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{v}</span>,
+        },
+        { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 100 },
+        { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+        {
+          title: 'Avg / Run', key: 'avg', width: 100,
+          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_contacts / record.run_count).toFixed(1) : '—',
+        },
+      ];
+    }
+    // total_leads (default)
+    return [
+      { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+      {
+        title: 'Total Leads', key: 'total_leads', width: 120,
+        render: (_: unknown, record: ICPStat) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{record.total_companies + record.total_contacts}</span>,
+      },
+      { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 110 },
+      { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
+      { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+    ];
+  };
 
   const expandedRowRender = (stat: ICPStat) => {
     const runColumns = [
@@ -138,93 +203,162 @@ const DashboardPage: React.FC = () => {
 
       {runsList.length > 0 ? (
         <Row gutter={[16, 16]}>
-          {runsList.slice(0, 6).map((run) => (
-            <Col xs={24} sm={12} md={8} key={run.id}>
-              <div
-                className="run-card"
-                style={run.status === 'failed' ? { cursor: 'default' } : {}}
-                onClick={() => {
-                  if (run.status === 'completed') navigate(`/leads/${run.id}`);
-                  else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
-                }}
-                onMouseEnter={(e) => {
-                  if (run.status === 'failed') {
-                    e.currentTarget.style.transform = 'none';
-                    e.currentTarget.style.boxShadow = 'var(--shadow)';
-                  }
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 8 }}>
-                  <div className="fw-600" style={{ fontSize: 15, color: 'var(--g900)', letterSpacing: '-0.2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
-                    {run.icp_name || `Run #${run.id.substring(0, 8)}`}
+          {runsList.slice(0, 6).map((run) => {
+            const totalLeads = run.companies_found + run.contacts_found;
+            const duration = run.started_at && run.completed_at
+              ? (() => {
+                  const ms = new Date(run.completed_at).getTime() - new Date(run.started_at).getTime();
+                  const mins = Math.floor(ms / 60000);
+                  const secs = Math.floor((ms % 60000) / 1000);
+                  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                })()
+              : null;
+
+            return (
+              <Col xs={24} sm={12} md={8} key={run.id}>
+                <div
+                  className="run-card"
+                  style={run.status === 'failed' ? { cursor: 'default' } : {}}
+                  onClick={() => {
+                    if (run.status === 'completed') navigate(`/leads/${run.id}`);
+                    else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
+                  }}
+                  onMouseEnter={(e) => {
+                    if (run.status === 'failed') {
+                      e.currentTarget.style.transform = 'none';
+                      e.currentTarget.style.boxShadow = 'var(--shadow)';
+                    }
+                  }}
+                >
+                  {/* Header: Name + Status */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 14 }}>
+                    <div>
+                      <div className="fw-600" style={{ fontSize: 15, color: 'var(--g900)', letterSpacing: '-0.2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+                        {run.icp_name || `Search #${run.id.substring(0, 8)}`}
+                      </div>
+                      <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                        {run.started_at ? new Date(run.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Not started'}
+                        {duration && <span style={{ marginLeft: 8, color: 'var(--g300)' }}>|</span>}
+                        {duration && <span style={{ marginLeft: 8 }}>{duration}</span>}
+                      </div>
+                    </div>
+                    <Tag color={statusColor[run.status] || 'default'}>{run.status.toUpperCase()}</Tag>
                   </div>
-                  <Tag color={statusColor[run.status] || 'default'}>{run.status.toUpperCase()}</Tag>
-                </div>
-                <div className="text-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-                  {run.started_at ? new Date(run.started_at).toLocaleDateString() : 'Not started'}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div className="text-muted" style={{ fontSize: 12 }}>
-                    {run.companies_found} companies, {run.contacts_found} contacts
+
+                  {/* Stats Row */}
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                    <div style={{
+                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
+                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
+                    }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple)', letterSpacing: '-0.5px' }}>
+                        {run.companies_found}
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
+                        Companies
+                      </div>
+                    </div>
+                    <div style={{
+                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
+                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
+                    }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple)', letterSpacing: '-0.5px' }}>
+                        {run.contacts_found}
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
+                        Contacts
+                      </div>
+                    </div>
+                    <div style={{
+                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
+                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
+                    }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--g800)', letterSpacing: '-0.5px' }}>
+                        {totalLeads}
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
+                        Total Leads
+                      </div>
+                    </div>
                   </div>
-                  {run.status === 'completed' && (
-                    <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 500 }}>View →</span>
-                  )}
-                  {run.status === 'running' && (
-                    <span style={{ fontSize: 12, color: 'var(--orange)', fontWeight: 500 }}>Progress →</span>
-                  )}
+
+                  {/* Footer: Action */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    {run.status === 'completed' && (
+                      <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 600 }}>View Results →</span>
+                    )}
+                    {run.status === 'running' && (
+                      <span style={{ fontSize: 12, color: 'var(--orange)', fontWeight: 600 }}>View Progress →</span>
+                    )}
+                    {run.status === 'failed' && (
+                      <span style={{ fontSize: 12, color: 'var(--g400)', fontWeight: 500 }}>Failed</span>
+                    )}
+                    {run.status === 'pending' && (
+                      <span style={{ fontSize: 12, color: 'var(--g400)', fontWeight: 500 }}>Pending...</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </Col>
-          ))}
+              </Col>
+            );
+          })}
         </Row>
       ) : (
         <Card style={{ textAlign: 'center', padding: '20px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
           <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--g900)' }}>
-            Get Started with Your First Run
+            Get Started with Your First Search
           </h3>
           <p style={{ color: 'var(--g500)', marginBottom: 24, maxWidth: 460, margin: '0 auto 24px', fontSize: 13, lineHeight: 1.6 }}>
-            Create an Ideal Customer Profile to define your target market, then our AI agent will
+            Define your search criteria to set your target market, then our AI agent will
             autonomously find and qualify leads matching your criteria.
           </p>
           <Space size="middle" direction="vertical" style={{ width: '100%' }}>
             <Space size="middle">
               <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-                Create Your First ICP
+                Create Your First Search
               </Button>
             </Space>
-            <div style={{ fontSize: 13, color: 'var(--g400)', marginTop: 4 }}>
-              or{' '}
-              <span
-                style={{ color: 'var(--purple)', cursor: 'pointer', fontWeight: 500 }}
-                onClick={() => navigate('/icp?import=true')}
-              >
-                import ICPs from an Excel spreadsheet
-              </span>
-            </div>
           </Space>
         </Card>
       )}
 
       {/* Stats Breakdown Modal */}
       <Modal
-        title={`${TILE_LABELS[statsModalTile]} — Breakdown by ICP`}
+        title={MODAL_TITLES[statsModalTile]}
         open={statsModalOpen}
         onCancel={() => setStatsModalOpen(false)}
         footer={null}
         width={800}
       >
-        <Table
-          columns={statsColumns}
-          dataSource={icpStats}
-          rowKey="icp_id"
-          loading={statsLoading}
-          expandable={{ expandedRowRender }}
-          pagination={false}
-          size="middle"
-          locale={{ emptyText: 'No pipeline runs found' }}
-        />
+        {statsModalTile === 'pipeline_runs' ? (
+          <>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+              <Tag color="success">{completedRuns.length} Completed</Tag>
+              <Tag color="processing">{runsList.filter(r => r.status === 'running').length} Running</Tag>
+              <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
+              <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
+            </div>
+            <Table
+              columns={getModalColumns('pipeline_runs')}
+              dataSource={runsList}
+              rowKey="id"
+              pagination={false}
+              size="middle"
+              locale={{ emptyText: 'No searches found' }}
+            />
+          </>
+        ) : (
+          <Table
+            columns={getModalColumns(statsModalTile)}
+            dataSource={icpStats}
+            rowKey="icp_id"
+            loading={statsLoading}
+            expandable={{ expandedRowRender }}
+            pagination={false}
+            size="middle"
+            locale={{ emptyText: 'No searches found' }}
+          />
+        )}
       </Modal>
     </div>
   );

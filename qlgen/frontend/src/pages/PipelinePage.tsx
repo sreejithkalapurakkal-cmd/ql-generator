@@ -85,7 +85,7 @@ const PipelinePage: React.FC = () => {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
   const [run, setRun] = useState<PipelineRun | null>(null);
-  const [sseMessage, setSseMessage] = useState('Starting pipeline...');
+  const [sseMessage, setSseMessage] = useState('Starting search...');
   const [sseStage, setSseStage] = useState('pending');
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [toolCallCount, setToolCallCount] = useState(0);
@@ -114,7 +114,7 @@ const PipelinePage: React.FC = () => {
   // Load persisted logs for completed/failed runs
   useEffect(() => {
     if (!runId || !run) return;
-    if ((run.status === 'completed' || run.status === 'failed') && activityLog.length === 0) {
+    if (run.status === 'completed' || run.status === 'failed') {
       getPipelineLogs(runId).then((res) => {
         const entries: ActivityEntry[] = res.data.map((log, i) => ({
           id: i + 1,
@@ -217,7 +217,7 @@ const PipelinePage: React.FC = () => {
         type: 'stage_update',
         stage: 'completed',
         progress: 100,
-        message: `Pipeline complete — found ${data.companies_found} companies and ${data.contacts_found} contacts`,
+        message: `Search complete — found ${data.companies_found} companies and ${data.contacts_found} contacts`,
       });
       getPipelineStatus(runId).then((res) => setRun(res.data));
       es.close();
@@ -585,7 +585,7 @@ const PipelinePage: React.FC = () => {
             })}
             {activityLog.length === 0 && (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--g400)' }}>
-                Waiting for pipeline activity...
+                Waiting for activity...
               </div>
             )}
           </div>
@@ -597,7 +597,7 @@ const PipelinePage: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* Stage Progress Stepper */}
-      <Card title="Pipeline Progress" bordered={false}>
+      <Card title="Search Progress" bordered={false}>
         <Steps
           current={isCompleted ? 4 : currentIndex}
           items={stages.map((s, i) => ({
@@ -610,7 +610,7 @@ const PipelinePage: React.FC = () => {
         {isCompleted && (
           <Result
             status="success"
-            title="Pipeline Complete"
+            title="Search Complete"
             subTitle={`Found ${run?.companies_found || 0} companies and ${run?.contacts_found || 0} contacts`}
             style={{ padding: '24px 0 0 0' }}
             extra={[
@@ -627,8 +627,8 @@ const PipelinePage: React.FC = () => {
         {isFailed && (
           <Result
             status="error"
-            title="Pipeline Failed"
-            subTitle={run?.error_log?.substring(0, 200) || 'An error occurred during pipeline execution'}
+            title="Search Failed"
+            subTitle={run?.error_log?.substring(0, 200) || 'An error occurred during search execution'}
             style={{ padding: '24px 0 0 0' }}
             extra={<Button onClick={() => navigate('/dashboard')}>Dashboard</Button>}
           />
@@ -639,7 +639,7 @@ const PipelinePage: React.FC = () => {
       <Card
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span>Agent Activity Log</span>
+            <span>Activity Log</span>
             <Badge
               count={`${toolCallCount} tool calls`}
               style={{ backgroundColor: 'var(--purple-pale)', color: 'var(--purple) !important', fontWeight: 600 }}
@@ -660,7 +660,7 @@ const PipelinePage: React.FC = () => {
           {activityLog.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
               <LoadingOutlined style={{ fontSize: 24, marginBottom: 12 }} />
-              <div>Waiting for agent activity...</div>
+              <div>Waiting for activity...</div>
             </div>
           ) : (
             <Timeline
