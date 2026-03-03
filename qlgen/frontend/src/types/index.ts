@@ -46,7 +46,7 @@ export interface PipelineRun {
   icp_config_id: string;
   icp_name?: string | null;
   icp_description?: string | null;
-  icp_config?: Record<string, unknown> | null;
+  icp_config?: ICPDefinition | null;
   status: string;
   current_stage: string | null;
   companies_found: number;

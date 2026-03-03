@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+<<<<<<< HEAD
 import { Card, Steps, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Divider, Upload, Modal, Spin, Alert } from 'antd';
 import { UploadOutlined, FileExcelOutlined, DownloadOutlined } from '@ant-design/icons';
+=======
+import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions } from 'antd';
+>>>>>>> c5396d41 (feat: update ui styling)
 import { useNavigate, useParams } from 'react-router-dom';
 import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
@@ -402,6 +406,7 @@ const ICPConfigPage: React.FC = () => {
   };
 
   return (
+<<<<<<< HEAD
     <Card title={id ? 'Edit Search Criteria' : 'New Search Criteria'}>
       <Steps current={current} items={steps.map((s) => ({ title: s.title }))} style={{ marginBottom: 32 }} size="small" />
       <div style={{ minHeight: 300, padding: '16px 0' }}>{steps[current].content}</div>
@@ -462,6 +467,56 @@ const ICPConfigPage: React.FC = () => {
         </Upload.Dragger>
       </Modal>
     </Card>
+=======
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div className="section-label">ICP Configuration</div>
+        <h1 className="page-title">{id ? 'Edit ICP Configuration' : 'New ICP Configuration'}</h1>
+      </div>
+
+      <div className="builder-layout">
+        {/* Left Side Stepper */}
+        <div className="builder-stepper">
+          {steps.map((step, index) => (
+            <div
+              key={index}
+              className={`builder-step ${index === current ? 'active' : index < current ? 'complete' : ''
+                }`}
+              onClick={() => setCurrent(index)}
+            >
+              <div className="builder-step-num">
+                {index < current ? '✓' : index + 1}
+              </div>
+              <div className="builder-step-label">{step.title}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Right Side Form */}
+        <div className="builder-form">
+          <Card>
+            <div style={{ minHeight: 300 }}>{steps[current].content}</div>
+            <div className="builder-nav">
+              <div>
+                {current > 0 && <Button onClick={() => setCurrent((c) => c - 1)}>Previous</Button>}
+              </div>
+              <Space>
+                {current < steps.length - 1 && (
+                  <Button type="primary" onClick={() => setCurrent((c) => c + 1)}>Next</Button>
+                )}
+                {current === steps.length - 1 && (
+                  <>
+                    <Button onClick={() => handleSave(false)} loading={saving}>Save Only</Button>
+                    <Button type="primary" onClick={() => handleSave(true)} loading={saving}>Save & Run Pipeline</Button>
+                  </>
+                )}
+              </Space>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+>>>>>>> c5396d41 (feat: update ui styling)
   );
 };
 

@@ -162,7 +162,7 @@ const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div>
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Overview</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -182,17 +182,17 @@ const DashboardPage: React.FC = () => {
           </div>
         </Col>
         <Col xs={12} sm={12} md={8}>
-          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('companies')}>
-            <div className="metric-icon">🏢</div>
+          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
+            <div className="metric-icon">👥</div>
             <div className="label">Qualified Leads</div>
-            <div className="value">{totalCompanies}</div>
+            <div className="value">{totalContacts}</div>
           </div>
         </Col>
         <Col xs={12} sm={12} md={8}>
-          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
-            <div className="metric-icon">👥</div>
-            <div className="label">Contacts Found</div>
-            <div className="value">{totalContacts}</div>
+          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('companies')}>
+            <div className="metric-icon">🏢</div>
+            <div className="label">Companies Found</div>
+            <div className="value">{totalCompanies}</div>
           </div>
         </Col>
       </Row>
@@ -204,6 +204,7 @@ const DashboardPage: React.FC = () => {
 
       {runsList.length > 0 ? (
         <Row gutter={[16, 16]}>
+<<<<<<< HEAD
           {runsList.slice(0, 6).map((run) => {
             const totalLeads = run.companies_found + run.contacts_found;
             const duration = run.started_at && run.completed_at
@@ -298,6 +299,99 @@ const DashboardPage: React.FC = () => {
                       <span style={{ fontSize: 12, color: 'var(--g400)', fontWeight: 500 }}>Pending...</span>
                     )}
                   </div>
+=======
+          {runsList.slice(0, 6).map((run) => (
+            <Col xs={24} sm={12} md={8} key={run.id}>
+              <div
+                className="run-card"
+                style={run.status === 'failed' ? { cursor: 'default' } : {}}
+                onClick={() => {
+                  if (run.status === 'completed') navigate(`/leads/${run.id}`);
+                  else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
+                }}
+              >
+                {/* Header: name + status badge */}
+                <div className="rc-header">
+                  <div className="rc-title">{run.icp_name || `Run #${run.id.substring(0, 8)}`}</div>
+                  <Tag color={statusColor[run.status] || 'default'} style={{ fontSize: 11, height: 22 }}>
+                    {run.status.toUpperCase()}
+                  </Tag>
+                </div>
+
+                {/* Date + offering snippet */}
+                <div className="rc-meta">
+                  <span className="rc-date">
+                    🗓 {run.started_at ? new Date(run.started_at).toLocaleDateString() : 'Not started'}
+                  </span>
+                  {run.icp_description && (
+                    <span className="rc-offering" title={run.icp_description}>
+                      {run.icp_description}
+                    </span>
+                  )}
+                </div>
+
+                {/* Emphasized stats row */}
+                <div className="rc-stats">
+                  <div className="rc-stat">
+                    <div className="rc-stat-val">{run.companies_found}</div>
+                    <div className="rc-stat-lbl">Companies</div>
+                  </div>
+                  <div className="rc-stat-div"></div>
+                  <div className="rc-stat">
+                    <div className="rc-stat-val">{run.contacts_found}</div>
+                    <div className="rc-stat-lbl">Contacts</div>
+                  </div>
+                </div>
+
+                {/* ICP details */}
+                {run.icp_config && (
+                  <div className="rc-icp-block">
+                    {run.icp_config.regions?.countries && run.icp_config.regions.countries.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">📍 Regions</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.regions.countries.slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {run.icp_config.industry_types && run.icp_config.industry_types.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">🏭 Industries</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.industry_types.map(i => i.vertical).slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {run.icp_config.personas && run.icp_config.personas.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">👤 Roles</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.personas.map(p => p.job_title).slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Footer actions */}
+                <div className="rc-footer">
+                  <Button
+                    size="small"
+                    className="rc-edit-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/icp/${run.icp_config_id}/edit`);
+                    }}
+                  >
+                    ✏ Edit Search
+                  </Button>
+                  {run.status === 'completed' && (
+                    <span className="rc-view-link">View Results →</span>
+                  )}
+                  {run.status === 'running' && (
+                    <span className="rc-view-link" style={{ color: 'var(--orange)' }}>View Progress →</span>
+                  )}
+>>>>>>> c5396d41 (feat: update ui styling)
                 </div>
               </Col>
             );

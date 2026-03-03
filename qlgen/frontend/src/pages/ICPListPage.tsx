@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Button, Space, Popconfirm, message, Tag, Modal, Upload, Alert, Collapse, Descriptions, Spin } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
+import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin } from 'antd';
+import { PlusOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
@@ -11,6 +11,7 @@ const ICPListPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [icps, setIcps] = useState<ICPConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
@@ -36,6 +37,18 @@ const ICPListPage: React.FC = () => {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  // Close dropdown menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setOpenMenuId(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
+  const toggleMenu = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setOpenMenuId(openMenuId === id ? null : id);
+  };
 
   const handleDelete = async (id: string) => {
     await deleteICP(id);
@@ -124,53 +137,13 @@ const ICPListPage: React.FC = () => {
     setParsedICPs([]);
   };
 
-  const columns = [
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Description', dataIndex: 'description', key: 'description', ellipsis: true },
-    {
-      title: 'Industries',
-      key: 'industries',
-      render: (_: unknown, record: ICPConfig) => {
-        const cfg = record.config;
-        return cfg?.industry_types?.slice(0, 3).map((i) => (
-          <Tag key={i.vertical}>{i.vertical}</Tag>
-        ));
-      },
-    },
-    {
-      title: 'Created',
-      dataIndex: 'created_at',
-      render: (d: string) => new Date(d).toLocaleDateString(),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_: unknown, record: ICPConfig) => (
-        <Space>
-          <Button size="small" type="primary" onClick={() => handleRunPipeline(record.id!)}>
-            Run Pipeline
-          </Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/icp/${record.id}/edit`)}>
-            Edit
-          </Button>
-          <Popconfirm title="Delete this ICP?" onConfirm={() => handleDelete(record.id!)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
   return (
-    <div>
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Configuration</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="page-title">Saved Searches</h1>
           <Space>
-            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
-              Import from Excel
-            </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
               New Search
             </Button>
@@ -197,9 +170,75 @@ const ICPListPage: React.FC = () => {
           </div>
         </Card>
       ) : (
-        <Card>
-          <Table columns={columns} dataSource={icps} rowKey="id" loading={loading} />
-        </Card>
+        <div className="card-grid">
+          {icps.map((icp) => (
+            <Card key={icp.id} hoverable>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <div>
+                  <div className="icp-card-name">{icp.name}</div>
+                  <div className="icp-card-date">
+                    {icp.created_at ? new Date(icp.created_at).toLocaleDateString() : 'N/A'}
+                  </div>
+                </div>
+                <div className="menu-wrap">
+                  <button
+                    className="menu-toggle"
+                    onClick={(e) => toggleMenu(e, icp.id!)}
+                  >
+                    ⋯
+                  </button>
+                  <div className={`dropdown-menu ${openMenuId === icp.id ? 'open' : ''}`}>
+                    <div
+                      className="menu-item"
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        handleRunPipeline(icp.id!);
+                      }}
+                    >
+                      Run Pipeline
+                    </div>
+                    <div
+                      className="menu-item"
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        navigate(`/icp/${icp.id}/edit`);
+                      }}
+                    >
+                      Edit
+                    </div>
+                    <div className="menu-divider"></div>
+                    <Popconfirm
+                      title="Delete this ICP?"
+                      onConfirm={() => {
+                        setOpenMenuId(null);
+                        handleDelete(icp.id!);
+                      }}
+                      onCancel={() => setOpenMenuId(null)}
+                    >
+                      <div className="menu-item danger">Delete</div>
+                    </Popconfirm>
+                  </div>
+                </div>
+              </div>
+              {icp.description && (
+                <div className="icp-card-offering">{icp.description}</div>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: "10px" }}>
+                {icp.config?.regions?.countries?.slice(0, 2).map((country, idx) => (
+                  <span key={idx} className="tag">{country}</span>
+                ))}
+                {icp.config?.industry_types?.slice(0, 2).map((ind, idx) => (
+                  <span key={idx} className="tag">{ind.vertical}</span>
+                ))}
+                {icp.config?.company_size && (
+                  <span className="tag">
+                    {icp.config.company_size.employees_min}-{icp.config.company_size.employees_max} emp
+                  </span>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
       )}
 
       {/* Import from Excel Modal */}
