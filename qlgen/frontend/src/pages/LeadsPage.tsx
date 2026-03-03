@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography, Collapse } from 'antd';
-import { DownloadOutlined, ProfileOutlined, ToolOutlined, BarChartOutlined } from '@ant-design/icons';
+import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography } from 'antd';
+import { DownloadOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getLeadCompanies, getExportUrl } from '../api/leadsApi';
 import { getPipelineStatus, getPipelineLogs } from '../api/pipelineApi';
@@ -401,6 +401,7 @@ const LeadsPage: React.FC = () => {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null);
   const [agentLogs, setAgentLogs] = useState<PipelineLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'companies' | 'criteria' | 'summary'>('companies');
 
   useEffect(() => {
     if (runId) {
@@ -535,7 +536,7 @@ const LeadsPage: React.FC = () => {
   ];
 
   return (
-    <div>
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Lead Generation</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -546,50 +547,7 @@ const LeadsPage: React.FC = () => {
         </div>
       </div>
 
-      {pipelineRun?.icp_config && (
-        <Collapse
-          style={{ marginBottom: 16 }}
-          items={[{
-            key: 'icp-config',
-            label: (
-              <span style={{ fontWeight: 600, fontSize: 14 }}>
-                <ProfileOutlined style={{ marginRight: 8 }} />
-                Search Criteria
-              </span>
-            ),
-            children: <ICPConfigPanel config={pipelineRun.icp_config} />,
-          }]}
-        />
-      )}
-
-      {runId && (
-        <Collapse
-          style={{ marginBottom: 16 }}
-          items={[{
-            key: 'run-summary',
-            label: (
-              <span style={{ fontWeight: 600, fontSize: 14 }}>
-                <BarChartOutlined style={{ marginRight: 8 }} />
-                Search Summary
-              </span>
-            ),
-            children: logsLoading
-              ? <div style={{ textAlign: 'center', padding: 20, color: 'var(--g400)' }}>Loading summary...</div>
-              : <RunSummaryPanel logs={agentLogs} companies={companies} />,
-          }]}
-        />
-      )}
-
-      {runId && (
-        <div style={{ textAlign: 'right', marginBottom: 16 }}>
-          <Button type="link" size="small" icon={<ToolOutlined />}
-            onClick={() => navigate(`/pipeline/${runId}`)}>
-            View detailed agent logs →
-          </Button>
-        </div>
-      )}
-
-      <div className="summary-bar">
+      <div className="summary-bar" style={{ marginBottom: 24 }}>
         <div className="summary-item">
           <div className="val">{companies.length}</div>
           <div className="lbl">Companies</div>
@@ -610,43 +568,100 @@ const LeadsPage: React.FC = () => {
         </div>
       </div>
 
-      <Card
-        title="Qualified Leads"
-        extra={
-          <Space>
-            <Select value={sortBy} onChange={setSortBy} style={{ width: 160 }}>
-              <Select.Option value="bant_score">Sort by BANT Score</Select.Option>
-              <Select.Option value="company_name">Sort by Company</Select.Option>
-            </Select>
-            <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
-              Export Excel
-            </Button>
-          </Space>
-        }
-      >
-        <Table
-          columns={columns}
-          dataSource={flatRows}
-          loading={loading}
-          pagination={{ pageSize: 50, showSizeChanger: true }}
-          scroll={{ x: 1400 }}
-          expandable={{
-            expandedRowKeys,
-            onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as (string | number)[]),
-            expandedRowRender: (record) => (
-              <div>
-                {record.company && <CompanyInsightsPanel company={record.company} />}
-                {record.company?.bant_score ? (
-                  <BANTDetailPanel score={record.company.bant_score} />
-                ) : (
-                  <Text type="secondary">No BANT scoring data available</Text>
-                )}
-              </div>
-            ),
-          }}
-          size="small"
-        />
-      </Card>
+      {/* Tabs Navigation */}
+      <div className="tabs">
+        <div
+          className={`tab ${activeTab === 'companies' ? 'active' : ''}`}
+          onClick={() => setActiveTab('companies')}
+        >
+          Companies
+        </div>
+        <div
+          className={`tab ${activeTab === 'criteria' ? 'active' : ''}`}
+          onClick={() => setActiveTab('criteria')}
+        >
+          Search Criteria
+        </div>
+        <div
+          className={`tab ${activeTab === 'summary' ? 'active' : ''}`}
+          onClick={() => setActiveTab('summary')}
+        >
+          Search Summary
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'companies' && (
+        <Card
+          title="Qualified Leads"
+          extra={
+            <Space>
+              <Select value={sortBy} onChange={setSortBy} style={{ width: 160 }}>
+                <Select.Option value="bant_score">Sort by BANT Score</Select.Option>
+                <Select.Option value="company_name">Sort by Company</Select.Option>
+              </Select>
+              <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
+                Export Excel
+              </Button>
+            </Space>
+          }
+        >
+          <Table
+            columns={columns}
+            dataSource={flatRows}
+            loading={loading}
+            pagination={{ pageSize: 50, showSizeChanger: true }}
+            scroll={{ x: 1400 }}
+            expandable={{
+              expandedRowKeys,
+              onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as (string | number)[]),
+              expandedRowRender: (record) => (
+                <div>
+                  {record.company && <CompanyInsightsPanel company={record.company} />}
+                  {record.company?.bant_score ? (
+                    <BANTDetailPanel score={record.company.bant_score} />
+                  ) : (
+                    <Text type="secondary">No BANT scoring data available</Text>
+                  )}
+                </div>
+              ),
+            }}
+            size="small"
+          />
+        </Card>
+      )}
+
+      {activeTab === 'criteria' && (
+        <Card title="Search Criteria">
+          {pipelineRun?.icp_config ? (
+            <ICPConfigPanel config={pipelineRun.icp_config} />
+          ) : (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
+              No search criteria available
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeTab === 'summary' && (
+        <Card
+          title="Search Summary"
+          extra={
+            runId && (
+              <Button type="link" size="small" icon={<ToolOutlined />}
+                onClick={() => navigate(`/pipeline/${runId}`)}>
+                View detailed agent logs →
+              </Button>
+            )
+          }
+        >
+          {logsLoading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>Loading summary...</div>
+          ) : (
+            <RunSummaryPanel logs={agentLogs} companies={companies} />
+          )}
+        </Card>
+      )}
     </div>
   );
 };

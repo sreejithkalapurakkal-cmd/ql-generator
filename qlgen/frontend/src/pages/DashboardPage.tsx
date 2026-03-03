@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Button, Tag, Space, Modal, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
@@ -8,13 +7,6 @@ import { listPipelineRuns, getPipelineStatsByICP, ICPStat } from '../api/pipelin
 import { PipelineRun } from '../types';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
-
-const TILE_LABELS: Record<TileKey, string> = {
-  total_leads: 'Total Leads',
-  pipeline_runs: 'Searches',
-  companies: 'Companies Found',
-  contacts: 'Contacts Found',
-};
 
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -204,102 +196,6 @@ const DashboardPage: React.FC = () => {
 
       {runsList.length > 0 ? (
         <Row gutter={[16, 16]}>
-<<<<<<< HEAD
-          {runsList.slice(0, 6).map((run) => {
-            const totalLeads = run.companies_found + run.contacts_found;
-            const duration = run.started_at && run.completed_at
-              ? (() => {
-                  const ms = new Date(run.completed_at).getTime() - new Date(run.started_at).getTime();
-                  const mins = Math.floor(ms / 60000);
-                  const secs = Math.floor((ms % 60000) / 1000);
-                  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-                })()
-              : null;
-
-            return (
-              <Col xs={24} sm={12} md={8} key={run.id}>
-                <div
-                  className="run-card"
-                  style={run.status === 'failed' ? { cursor: 'default' } : {}}
-                  onClick={() => {
-                    if (run.status === 'completed') navigate(`/leads/${run.id}`);
-                    else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
-                  }}
-                  onMouseEnter={(e) => {
-                    if (run.status === 'failed') {
-                      e.currentTarget.style.transform = 'none';
-                      e.currentTarget.style.boxShadow = 'var(--shadow)';
-                    }
-                  }}
-                >
-                  {/* Header: Name + Status */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 14 }}>
-                    <div>
-                      <div className="fw-600" style={{ fontSize: 15, color: 'var(--g900)', letterSpacing: '-0.2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
-                        {run.icp_name || `Search #${run.id.substring(0, 8)}`}
-                      </div>
-                      <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                        {run.started_at ? new Date(run.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Not started'}
-                        {duration && <span style={{ marginLeft: 8, color: 'var(--g300)' }}>|</span>}
-                        {duration && <span style={{ marginLeft: 8 }}>{duration}</span>}
-                      </div>
-                    </div>
-                    <Tag color={statusColor[run.status] || 'default'}>{run.status.toUpperCase()}</Tag>
-                  </div>
-
-                  {/* Stats Row */}
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-                    <div style={{
-                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
-                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
-                    }}>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple)', letterSpacing: '-0.5px' }}>
-                        {run.companies_found}
-                      </div>
-                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
-                        Companies
-                      </div>
-                    </div>
-                    <div style={{
-                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
-                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
-                    }}>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple)', letterSpacing: '-0.5px' }}>
-                        {run.contacts_found}
-                      </div>
-                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
-                        Contacts
-                      </div>
-                    </div>
-                    <div style={{
-                      flex: 1, background: 'var(--g50, #fafafa)', borderRadius: 8, padding: '10px 12px',
-                      textAlign: 'center', border: '1px solid var(--g100, #f0f0f0)',
-                    }}>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--g800)', letterSpacing: '-0.5px' }}>
-                        {totalLeads}
-                      </div>
-                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1 }}>
-                        Total Leads
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer: Action */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                    {run.status === 'completed' && (
-                      <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 600 }}>View Results →</span>
-                    )}
-                    {run.status === 'running' && (
-                      <span style={{ fontSize: 12, color: 'var(--orange)', fontWeight: 600 }}>View Progress →</span>
-                    )}
-                    {run.status === 'failed' && (
-                      <span style={{ fontSize: 12, color: 'var(--g400)', fontWeight: 500 }}>Failed</span>
-                    )}
-                    {run.status === 'pending' && (
-                      <span style={{ fontSize: 12, color: 'var(--g400)', fontWeight: 500 }}>Pending...</span>
-                    )}
-                  </div>
-=======
           {runsList.slice(0, 6).map((run) => (
             <Col xs={24} sm={12} md={8} key={run.id}>
               <div
@@ -391,11 +287,10 @@ const DashboardPage: React.FC = () => {
                   {run.status === 'running' && (
                     <span className="rc-view-link" style={{ color: 'var(--orange)' }}>View Progress →</span>
                   )}
->>>>>>> c5396d41 (feat: update ui styling)
                 </div>
-              </Col>
-            );
-          })}
+              </div>
+            </Col>
+          ))}
         </Row>
       ) : (
         <Card style={{ textAlign: 'center', padding: '20px 0' }}>
@@ -433,8 +328,8 @@ const DashboardPage: React.FC = () => {
               <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
               <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
             </div>
-            <Table<PipelineRun>
-              columns={getModalColumns('pipeline_runs') as ColumnsType<PipelineRun>}
+            <Table
+              columns={getModalColumns('pipeline_runs')}
               dataSource={runsList}
               rowKey="id"
               pagination={false}
@@ -443,8 +338,8 @@ const DashboardPage: React.FC = () => {
             />
           </>
         ) : (
-          <Table<ICPStat>
-            columns={getModalColumns(statsModalTile) as ColumnsType<ICPStat>}
+          <Table
+            columns={getModalColumns(statsModalTile)}
             dataSource={icpStats}
             rowKey="icp_id"
             loading={statsLoading}

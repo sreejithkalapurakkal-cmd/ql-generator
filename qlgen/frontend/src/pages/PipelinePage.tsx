@@ -595,84 +595,93 @@ const PipelinePage: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Stage Progress Stepper */}
-      <Card title="Search Progress" bordered={false}>
-        <Steps
-          current={isCompleted ? 4 : currentIndex}
-          items={stages.map((s, i) => ({
-            title: s.title,
-            icon: getStepStatus(i) === 'process' ? <LoadingOutlined /> : s.icon,
-            status: getStepStatus(i) as 'wait' | 'process' | 'finish' | 'error',
-          }))}
-        />
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div className="section-label">Search Progress</div>
+        <h1 className="page-title">
+          {isCompleted ? 'Search Complete' : isFailed ? 'Search Failed' : 'Search in Progress'}
+        </h1>
+      </div>
 
-        {isCompleted && (
-          <Result
-            status="success"
-            title="Search Complete"
-            subTitle={`Found ${run?.companies_found || 0} companies and ${run?.contacts_found || 0} contacts`}
-            style={{ padding: '24px 0 0 0' }}
-            extra={[
-              <Button type="primary" key="leads" onClick={() => navigate(`/leads/${runId}`)}>
-                View Leads
-              </Button>,
-              <Button key="dashboard" onClick={() => navigate('/dashboard')}>
-                Dashboard
-              </Button>,
-            ]}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+        {/* Stage Progress Stepper */}
+        <Card title="Progress Details" bordered={false}>
+          <Steps
+            current={isCompleted ? 4 : currentIndex}
+            items={stages.map((s, i) => ({
+              title: s.title,
+              icon: getStepStatus(i) === 'process' ? <LoadingOutlined /> : s.icon,
+              status: getStepStatus(i) as 'wait' | 'process' | 'finish' | 'error',
+            }))}
           />
-        )}
 
-        {isFailed && (
-          <Result
-            status="error"
-            title="Search Failed"
-            subTitle={run?.error_log?.substring(0, 200) || 'An error occurred during search execution'}
-            style={{ padding: '24px 0 0 0' }}
-            extra={<Button onClick={() => navigate('/dashboard')}>Dashboard</Button>}
-          />
-        )}
-      </Card>
-
-      {/* Activity Log */}
-      <Card
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span>Activity Log</span>
-            <Badge
-              count={`${toolCallCount} tool calls`}
-              style={{ backgroundColor: 'var(--purple-pale)', color: 'var(--purple) !important', fontWeight: 600 }}
-              showZero
-            />
-          </div>
-        }
-        bordered={false}
-      >
-        <div
-          ref={logContainerRef}
-          style={{
-            maxHeight: 500,
-            overflowY: 'auto',
-            paddingRight: 8,
-          }}
-        >
-          {activityLog.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
-              <LoadingOutlined style={{ fontSize: 24, marginBottom: 12 }} />
-              <div>Waiting for activity...</div>
-            </div>
-          ) : (
-            <Timeline
-              items={activityLog.map((entry) => ({
-                key: entry.id,
-                color: getTimelineDotColor(entry),
-                children: renderActivityEntry(entry),
-              }))}
+          {isCompleted && (
+            <Result
+              status="success"
+              title="Search Complete"
+              subTitle={`Found ${run?.companies_found || 0} companies and ${run?.contacts_found || 0} contacts`}
+              style={{ padding: '24px 0 0 0' }}
+              extra={[
+                <Button type="primary" key="leads" onClick={() => navigate(`/leads/${runId}`)}>
+                  View Leads
+                </Button>,
+                <Button key="dashboard" onClick={() => navigate('/dashboard')}>
+                  Dashboard
+                </Button>,
+              ]}
             />
           )}
-        </div>
-      </Card>
+
+          {isFailed && (
+            <Result
+              status="error"
+              title="Search Failed"
+              subTitle={run?.error_log?.substring(0, 200) || 'An error occurred during search execution'}
+              style={{ padding: '24px 0 0 0' }}
+              extra={<Button onClick={() => navigate('/dashboard')}>Dashboard</Button>}
+            />
+          )}
+        </Card>
+
+        {/* Activity Log */}
+        <Card
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span>Activity Log</span>
+              <Badge
+                count={`${toolCallCount} tool calls`}
+                style={{ backgroundColor: 'var(--purple-pale)', color: 'var(--purple) !important', fontWeight: 600 }}
+                showZero
+              />
+            </div>
+          }
+          bordered={false}
+        >
+          <div
+            ref={logContainerRef}
+            style={{
+              maxHeight: 500,
+              overflowY: 'auto',
+              paddingRight: 8,
+            }}
+          >
+            {activityLog.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+                <LoadingOutlined style={{ fontSize: 24, marginBottom: 12 }} />
+                <div>Waiting for activity...</div>
+              </div>
+            ) : (
+              <Timeline
+                items={activityLog.map((entry) => ({
+                  key: entry.id,
+                  color: getTimelineDotColor(entry),
+                  children: renderActivityEntry(entry),
+                }))}
+              />
+            )}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 };
