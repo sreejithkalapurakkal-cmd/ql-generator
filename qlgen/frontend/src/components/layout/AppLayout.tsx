@@ -12,7 +12,11 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { key: '/icp', icon: '◈', label: 'Saved Searches' },
   ];
 
-  const selectedKey = menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
+  // Don't highlight "Saved Searches" when on ICP form pages (new or edit)
+  const isICPFormPage = location.pathname === '/icp/new' || location.pathname.match(/^\/icp\/[^/]+\/edit$/);
+  const selectedKey = isICPFormPage
+    ? null
+    : menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', overflowX: 'hidden' }}>

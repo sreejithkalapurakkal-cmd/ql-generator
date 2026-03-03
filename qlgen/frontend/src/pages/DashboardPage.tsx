@@ -53,10 +53,10 @@ const DashboardPage: React.FC = () => {
   };
 
   const MODAL_TITLES: Record<TileKey, string> = {
-    total_leads: 'Total Leads — By Search Criteria',
-    pipeline_runs: 'Searches — Overview',
-    companies: 'Companies Found — By Search Criteria',
-    contacts: 'Contacts Found — By Search Criteria',
+    total_leads: 'Total Leads - By Search Criteria',
+    pipeline_runs: 'Searches - Overview',
+    companies: 'Companies Found - By Search Criteria',
+    contacts: 'Contacts Found - By Search Criteria',
   };
 
   const getModalColumns = (tile: TileKey) => {
@@ -70,8 +70,8 @@ const DashboardPage: React.FC = () => {
           title: 'Status', dataIndex: 'status', key: 'status', width: 100,
           render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s.toUpperCase()}</Tag>,
         },
+        { title: 'Leads', dataIndex: 'contacts_found', key: 'contacts_found', width: 100 },
         { title: 'Companies', dataIndex: 'companies_found', key: 'companies_found', width: 100 },
-        { title: 'Contacts', dataIndex: 'contacts_found', key: 'contacts_found', width: 100 },
         {
           title: 'Started', dataIndex: 'started_at', key: 'started_at',
           render: (d: string | null) => d ? new Date(d).toLocaleString() : '—',
@@ -104,11 +104,11 @@ const DashboardPage: React.FC = () => {
       return [
         { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
         {
-          title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 120,
+          title: 'Leads', dataIndex: 'total_contacts', key: 'total_contacts', width: 120,
           render: (v: number) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{v}</span>,
         },
         { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 100 },
-        { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+        { title: 'Searches', dataIndex: 'run_count', key: 'run_count', width: 80 },
         {
           title: 'Avg / Run', key: 'avg', width: 100,
           render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_contacts / record.run_count).toFixed(1) : '—',

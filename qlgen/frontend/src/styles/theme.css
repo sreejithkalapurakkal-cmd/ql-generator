@@ -2033,6 +2033,171 @@ body {
   gap: 16px;
 }
 
+/* ===== FANOUT GRAPHIC (Welcome Page) ===== */
+.fanout-container {
+  position: relative;
+  width: 100%;
+  height: 500px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.central-hub {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  background: linear-gradient(135deg, var(--purple), #9333ea);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 800;
+  font-size: 1.5rem;
+  z-index: 10;
+  box-shadow: 0 20px 40px rgba(92, 45, 143, 0.4);
+  border: 4px solid white;
+}
+
+.central-hub::before {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  background: rgba(92, 45, 143, 0.2);
+  animation: pulse-hub 2s infinite;
+  z-index: -1;
+}
+
+@keyframes pulse-hub {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+.fanout-node {
+  position: absolute;
+  height: 50px;
+  padding: 0 16px;
+  background: white;
+  border-radius: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--g200);
+  z-index: 20;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0;
+  animation: popIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--g700);
+  white-space: nowrap;
+}
+
+.fanout-node:hover {
+  transform: scale(1.08) !important;
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+  z-index: 30;
+  border-color: var(--g300);
+}
+
+.fanout-node img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.fanout-node-1 {
+  transform: translate(-190px, 130px);
+  animation-delay: 0.1s;
+}
+
+.fanout-node-2 {
+  transform: translate(-240px, 0px);
+  animation-delay: 0.2s;
+}
+
+.fanout-node-3 {
+  transform: translate(-160px, -150px);
+  animation-delay: 0.3s;
+}
+
+.fanout-node-4 {
+  transform: translate(0px, -210px);
+  animation-delay: 0.4s;
+}
+
+.fanout-node-5 {
+  transform: translate(160px, -150px);
+  animation-delay: 0.5s;
+}
+
+.fanout-node-6 {
+  transform: translate(240px, 0px);
+  animation-delay: 0.6s;
+}
+
+.fanout-node-7 {
+  transform: translate(190px, 130px);
+  animation-delay: 0.7s;
+}
+
+.connecting-lines {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    margin-top: 50px;
+  }
+
+  100% {
+    opacity: 1;
+    margin-top: 0;
+  }
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--purple), #ec4899, #f59e0b);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  background-size: 200% 200%;
+  animation: gradient-shift 5s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
 /* ===== TAGS ===== */
 .tag {
   display: inline-flex;
