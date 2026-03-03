@@ -28,6 +28,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const menuItems = [
+    { key: '/welcome', icon: '✦', label: 'Welcome' },
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
     { key: '/icp', icon: '◈', label: 'Saved ICPs' },
     { key: '/icp/new', icon: '+', label: 'New Run' },

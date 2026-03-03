@@ -1,19 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Button, Tag, Empty, Space, Modal, Table } from 'antd';
-import { PlusOutlined, CloseOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
 import { listPipelineRuns, getPipelineStatsByICP, ICPStat } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
-
-const WELCOME_DISMISSED_KEY = 'qlgen_welcome_dismissed';
-
-const HOW_IT_WORKS = [
-  { step: '1', title: 'Define ICP', desc: 'Configure your ideal customer profile across 8 dimensions — industry, size, tech stack, and more.' },
-  { step: '2', title: 'Run Pipeline', desc: 'Our AI agent searches 9 data sources autonomously to discover and qualify leads.' },
-  { step: '3', title: 'Review Leads', desc: 'Get BANT-scored companies with verified decision-maker contacts.' },
-  { step: '4', title: 'Export & Act', desc: 'Download qualified leads as Excel or CSV and start outreach.' },
-];
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
 
@@ -27,9 +18,6 @@ const TILE_LABELS: Record<TileKey, string> = {
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<PipelineRun[]>([]);
-  const [welcomeDismissed, setWelcomeDismissed] = useState(
-    () => localStorage.getItem(WELCOME_DISMISSED_KEY) === 'true'
-  );
 
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
@@ -55,11 +43,6 @@ const DashboardPage: React.FC = () => {
     running: 'processing',
     completed: 'success',
     failed: 'error',
-  };
-
-  const dismissWelcome = () => {
-    localStorage.setItem(WELCOME_DISMISSED_KEY, 'true');
-    setWelcomeDismissed(true);
   };
 
   const openStatsModal = async (tile: TileKey) => {
@@ -123,50 +106,6 @@ const DashboardPage: React.FC = () => {
           </Button>
         </div>
       </div>
-
-      {/* Welcome Banner */}
-      {!welcomeDismissed && (
-        <div style={{
-          background: 'linear-gradient(135deg, var(--purple-pale) 0%, #fff 100%)',
-          border: '1px solid var(--g200)',
-          borderRadius: 'var(--radius)',
-          padding: '24px 28px',
-          marginBottom: 24,
-          position: 'relative',
-        }}>
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            onClick={dismissWelcome}
-            style={{ position: 'absolute', top: 12, right: 12, color: 'var(--g400)' }}
-          />
-          <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--g900)', margin: '0 0 4px' }}>
-            Welcome to qlGen
-          </h2>
-          <p style={{ fontSize: 13, color: 'var(--g600)', margin: '0 0 20px', lineHeight: 1.6, maxWidth: 620 }}>
-            AI-powered qualified lead generation. Define your Ideal Customer Profile, and our AI agent
-            autonomously discovers companies, finds decision-maker contacts, enriches their data, and
-            scores each lead using the BANT framework.
-          </p>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            {HOW_IT_WORKS.map((item) => (
-              <div key={item.step} style={{ flex: '1 1 140px', minWidth: 140 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: '50%',
-                  background: 'var(--purple)', color: '#fff',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 700, marginBottom: 8,
-                }}>
-                  {item.step}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--g800)' }}>{item.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 2, lineHeight: 1.5 }}>{item.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={12} md={6}>
