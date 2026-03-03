@@ -102,11 +102,6 @@ const WelcomePage: React.FC = () => {
           <div className="wsource-name">Lusha</div>
           <div className="wsource-desc">Direct dials and mobile numbers for decision-makers</div>
         </div>
-        <div className="welcome-source-card">
-          <img src="images/clay.png" alt="Clay" className="welcome-source-icon" />
-          <div className="wsource-name">Clay</div>
-          <div className="wsource-desc">Workflow automation and multi-source enrichment layer</div>
-        </div>
       </div>
 
       {/* CTA Bar */}

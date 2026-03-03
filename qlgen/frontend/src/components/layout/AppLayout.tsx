@@ -30,8 +30,8 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const menuItems = [
     { key: '/welcome', icon: '✦', label: 'Welcome' },
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
-    { key: '/icp', icon: '◈', label: 'Saved ICPs' },
-    { key: '/icp/new', icon: '+', label: 'New Run' },
+    { key: '/icp', icon: '◈', label: 'Saved Searches' },
+    { key: '/icp/new', icon: '+', label: 'New Search' },
   ];
 
   const selectedKey = menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';

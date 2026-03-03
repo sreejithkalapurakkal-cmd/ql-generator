@@ -102,34 +102,27 @@ const DashboardPage: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="page-title">Dashboard</h1>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-            New Run
+            New Search
           </Button>
         </div>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={12} md={6}>
-          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('total_leads')}>
-            <div className="metric-icon">🎯</div>
-            <div className="label">Total Leads</div>
-            <div className="value">{totalCompanies + totalContacts}</div>
-          </div>
-        </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={12} md={8}>
           <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('pipeline_runs')}>
             <div className="metric-icon">📈</div>
-            <div className="label">Pipeline Runs</div>
+            <div className="label">Total Searches</div>
             <div className="value">{runsList.length}</div>
           </div>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={12} md={8}>
           <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('companies')}>
             <div className="metric-icon">🏢</div>
-            <div className="label">Companies Found</div>
+            <div className="label">Qualified Leads</div>
             <div className="value">{totalCompanies}</div>
           </div>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={12} md={8}>
           <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
             <div className="metric-icon">👥</div>
             <div className="label">Contacts Found</div>
@@ -140,7 +133,7 @@ const DashboardPage: React.FC = () => {
 
       <div style={{ marginBottom: 16 }}>
         <div className="section-label">Recent Activity</div>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Runs</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Searches</h2>
       </div>
 
       {runsList.length > 0 ? (

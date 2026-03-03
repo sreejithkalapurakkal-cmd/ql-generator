@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Table, Button, Space, Popconfirm, message, Tag, Modal, Upload, Alert, Collapse, Descriptions, Spin } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, RocketOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
@@ -131,8 +131,8 @@ const ICPListPage: React.FC = () => {
       title: 'Industries',
       key: 'industries',
       render: (_: unknown, record: ICPConfig) => {
-        const cfg = record.config as any;
-        return cfg?.industry_types?.slice(0, 3).map((i: any) => (
+        const cfg = record.config;
+        return cfg?.industry_types?.slice(0, 3).map((i) => (
           <Tag key={i.vertical}>{i.vertical}</Tag>
         ));
       },
@@ -166,13 +166,13 @@ const ICPListPage: React.FC = () => {
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Configuration</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 className="page-title">Saved ICPs</h1>
+          <h1 className="page-title">Saved Searches</h1>
           <Space>
             <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
               Import from Excel
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-              New ICP
+              New Search
             </Button>
           </Space>
         </div>
@@ -189,7 +189,7 @@ const ICPListPage: React.FC = () => {
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
             <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-              Create New ICP
+              Create New Search
             </Button>
             <Button size="large" icon={<FileExcelOutlined style={{ color: 'var(--green)' }} />} onClick={() => setImportOpen(true)}>
               Import from Excel
