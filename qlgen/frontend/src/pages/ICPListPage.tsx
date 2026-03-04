@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin } from 'antd';
-import { PlusOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin, Input } from 'antd';
+import { PlusOutlined, DownloadOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
@@ -12,6 +12,41 @@ const ICPListPage: React.FC = () => {
   const [icps, setIcps] = useState<ICPConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [selectedICP, setSelectedICP] = useState<ICPConfig | null>(null);
+
+  // Search + infinite scroll state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [displayCount, setDisplayCount] = useState(12);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const filteredICPs = useMemo(() => {
+    if (!searchQuery.trim()) return icps;
+    const q = searchQuery.toLowerCase();
+    return icps.filter(
+      (icp) =>
+        icp.name?.toLowerCase().includes(q) ||
+        icp.description?.toLowerCase().includes(q)
+    );
+  }, [icps, searchQuery]);
+
+  // Reset display count when search changes
+  useEffect(() => { setDisplayCount(12); }, [searchQuery]);
+
+  // IntersectionObserver for infinite scroll
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setDisplayCount((prev) => prev + 12);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [filteredICPs.length]);
 
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
@@ -142,8 +177,16 @@ const ICPListPage: React.FC = () => {
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Configuration</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 className="page-title">Saved Searches</h1>
+          <h1 className="page-title">Saved ICPs</h1>
           <Space>
+            <Input
+              prefix={<SearchOutlined style={{ color: 'var(--g400)' }} />}
+              placeholder="Search by name or description..."
+              allowClear
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ maxWidth: 320, width: 320 }}
+            />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
               New Search
             </Button>
@@ -169,77 +212,254 @@ const ICPListPage: React.FC = () => {
             </Button>
           </div>
         </Card>
+      ) : searchQuery && filteredICPs.length === 0 ? (
+        <Card style={{ textAlign: 'center', padding: '40px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>🔍</div>
+          <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--g900)' }}>
+            No Matches Found
+          </h3>
+          <p style={{ color: 'var(--g500)', fontSize: 13 }}>
+            No ICPs match "{searchQuery}". Try a different search term.
+          </p>
+        </Card>
       ) : (
+        <>
         <div className="card-grid">
-          {icps.map((icp) => (
-            <Card key={icp.id} hoverable>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div className="icp-card-name">{icp.name}</div>
-                  <div className="icp-card-date">
+          {filteredICPs.slice(0, displayCount).map((icp) => {
+            const cfg = icp.config as any;
+            const regions = cfg?.regions?.countries;
+            const industries = cfg?.industry_types || cfg?.industry;
+            const roles = cfg?.leadership_traits?.target_roles;
+            const size = cfg?.company_size || cfg?.size;
+
+            return (
+              <div
+                key={icp.id}
+                className="run-card"
+                onClick={() => setSelectedICP(icp)}
+              >
+                {/* Header: name + ... menu */}
+                <div className="rc-header">
+                  <div className="rc-title">{icp.name}</div>
+                  <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="menu-toggle"
+                      onClick={(e) => toggleMenu(e, icp.id!)}
+                    >
+                      ⋯
+                    </button>
+                    <div className={`dropdown-menu ${openMenuId === icp.id ? 'open' : ''}`}>
+                      <div
+                        className="menu-item"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          handleRunPipeline(icp.id!);
+                        }}
+                      >
+                        Run Pipeline
+                      </div>
+                      <div
+                        className="menu-item"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          navigate(`/icp/${icp.id}/edit`);
+                        }}
+                      >
+                        Edit
+                      </div>
+                      <div className="menu-divider"></div>
+                      <Popconfirm
+                        title="Delete this ICP?"
+                        onConfirm={() => {
+                          setOpenMenuId(null);
+                          handleDelete(icp.id!);
+                        }}
+                        onCancel={() => setOpenMenuId(null)}
+                      >
+                        <div className="menu-item danger">Delete</div>
+                      </Popconfirm>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Date + description */}
+                <div className="rc-meta">
+                  <span className="rc-date">
                     {icp.created_at ? new Date(icp.created_at).toLocaleDateString() : 'N/A'}
-                  </div>
-                </div>
-                <div className="menu-wrap">
-                  <button
-                    className="menu-toggle"
-                    onClick={(e) => toggleMenu(e, icp.id!)}
-                  >
-                    ⋯
-                  </button>
-                  <div className={`dropdown-menu ${openMenuId === icp.id ? 'open' : ''}`}>
-                    <div
-                      className="menu-item"
-                      onClick={() => {
-                        setOpenMenuId(null);
-                        handleRunPipeline(icp.id!);
-                      }}
-                    >
-                      Run Pipeline
-                    </div>
-                    <div
-                      className="menu-item"
-                      onClick={() => {
-                        setOpenMenuId(null);
-                        navigate(`/icp/${icp.id}/edit`);
-                      }}
-                    >
-                      Edit
-                    </div>
-                    <div className="menu-divider"></div>
-                    <Popconfirm
-                      title="Delete this ICP?"
-                      onConfirm={() => {
-                        setOpenMenuId(null);
-                        handleDelete(icp.id!);
-                      }}
-                      onCancel={() => setOpenMenuId(null)}
-                    >
-                      <div className="menu-item danger">Delete</div>
-                    </Popconfirm>
-                  </div>
-                </div>
-              </div>
-              {icp.description && (
-                <div className="icp-card-offering">{icp.description}</div>
-              )}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: "10px" }}>
-                {icp.config?.regions?.countries?.slice(0, 2).map((country, idx) => (
-                  <span key={idx} className="tag">{country}</span>
-                ))}
-                {icp.config?.industry_types?.slice(0, 2).map((ind, idx) => (
-                  <span key={idx} className="tag">{ind.vertical}</span>
-                ))}
-                {icp.config?.company_size && (
-                  <span className="tag">
-                    {icp.config.company_size.employees_min}-{icp.config.company_size.employees_max} emp
                   </span>
-                )}
+                  {icp.description && (
+                    <span className="rc-offering" title={icp.description}>
+                      {icp.description}
+                    </span>
+                  )}
+                </div>
+
+                {/* ICP detail rows */}
+                <div className="rc-icp-block">
+                  {regions && regions.length > 0 && (
+                    <div className="rc-icp-row">
+                      <span className="rc-icp-key">Regions</span>
+                      <span className="rc-icp-val">
+                        {regions.slice(0, 3).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                  {industries && industries.length > 0 && (
+                    <div className="rc-icp-row">
+                      <span className="rc-icp-key">Industries</span>
+                      <span className="rc-icp-val">
+                        {industries.map((i: any) => i.vertical).slice(0, 3).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                  {roles && roles.length > 0 && (
+                    <div className="rc-icp-row">
+                      <span className="rc-icp-key">Target Roles</span>
+                      <span className="rc-icp-val">
+                        {roles.slice(0, 3).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                  {size && (
+                    <div className="rc-icp-row">
+                      <span className="rc-icp-key">Company Size</span>
+                      <span className="rc-icp-val">
+                        {size.employees_min?.toLocaleString()}–{size.employees_max?.toLocaleString()} employees
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="rc-footer" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    size="small"
+                    className="rc-edit-btn"
+                    onClick={() => navigate(`/icp/${icp.id}/edit`)}
+                  >
+                    Edit
+                  </Button>
+                  <span
+                    className="rc-view-link"
+                    onClick={() => setSelectedICP(icp)}
+                  >
+                    View Details →
+                  </span>
+                </div>
               </div>
-            </Card>
-          ))}
+            );
+          })}
         </div>
+        <div ref={sentinelRef} style={{ height: 1 }} />
+        {displayCount < filteredICPs.length ? (
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 13 }}>
+            Loading more...
+          </div>
+        ) : filteredICPs.length > 12 ? (
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 12 }}>
+            Showing all {filteredICPs.length} items
+          </div>
+        ) : null}
+        </>
       )}
+
+      {/* ICP Overview Modal */}
+      <Modal
+        title={selectedICP?.name || 'ICP Details'}
+        open={!!selectedICP}
+        onCancel={() => setSelectedICP(null)}
+        width="90vw"
+        style={{ maxWidth: 1100, top: 32 }}
+        footer={
+          <Space>
+            <Button onClick={() => setSelectedICP(null)}>Close</Button>
+            <Button onClick={() => {
+              setSelectedICP(null);
+              navigate(`/icp/${selectedICP?.id}/edit`);
+            }}>
+              Edit
+            </Button>
+            <Button type="primary" onClick={() => {
+              const icpId = selectedICP?.id;
+              setSelectedICP(null);
+              if (icpId) handleRunPipeline(icpId);
+            }}>
+              Run Pipeline
+            </Button>
+          </Space>
+        }
+      >
+        {selectedICP && (() => {
+          const cfg = selectedICP.config as any;
+          const offerings = cfg?.target_offering || cfg?.offering;
+          const regions = cfg?.regions;
+          const industries = cfg?.industry_types || cfg?.industry;
+          const size = cfg?.company_size || cfg?.size;
+          const tech = cfg?.technology_maturity;
+          const infra = cfg?.infrastructure_readiness;
+          const drivers = cfg?.digital_transformation_drivers;
+          const leadership = cfg?.leadership_traits;
+
+          return (
+            <div>
+              {selectedICP.description && (
+                <p style={{ color: 'var(--g500)', fontSize: 13, marginBottom: 16 }}>
+                  {selectedICP.description}
+                </p>
+              )}
+              <Descriptions column={2} size="small" bordered labelStyle={{ width: 180, fontWeight: 600 }}>
+                <Descriptions.Item label="Offerings" span={2}>
+                  {(Array.isArray(offerings) ? offerings.join(', ') : offerings) || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Countries">
+                  {regions?.countries?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Priority Areas">
+                  {regions?.priority_areas?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Industries" span={2}>
+                  {industries?.map((i: any) =>
+                    `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`
+                  ).join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Employees">
+                  {size?.employees_min?.toLocaleString()}–{size?.employees_max?.toLocaleString()}
+                </Descriptions.Item>
+                <Descriptions.Item label="Revenue">
+                  {size?.revenue_currency} {size?.revenue_min?.toLocaleString()}–{size?.revenue_max?.toLocaleString()}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tech Signals (Positive)">
+                  {tech?.signals?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tech Signals (Negative)">
+                  {tech?.negative_signals?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Infrastructure" span={2}>
+                  {infra?.indicators?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Growth Triggers">
+                  {drivers?.growth_triggers?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Operational Pains">
+                  {drivers?.operational_pains?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Competitive Pressures">
+                  {drivers?.competitive_pressures?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Strategic Initiatives">
+                  {drivers?.strategic_initiatives?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Target Roles">
+                  {leadership?.target_roles?.join(', ') || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Behavioral Traits">
+                  {leadership?.behavioral_traits?.join(', ') || '—'}
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+          );
+        })()}
+      </Modal>
 
       {/* Import from Excel Modal */}
       <Modal

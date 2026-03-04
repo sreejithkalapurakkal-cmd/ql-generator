@@ -15,6 +15,9 @@ export const listPipelineRuns = () =>
 export const getPipelineLogs = (runId: string) =>
   client.get<PipelineLogEntry[]>(`/pipeline/${runId}/logs`);
 
+export const deletePipelineRun = (runId: string) =>
+  client.delete(`/pipeline/${runId}`);
+
 export interface ICPStat {
   icp_id: string;
   icp_name: string;

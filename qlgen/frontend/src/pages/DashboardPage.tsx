@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Button, Tag, Space, Modal, Table } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input } from 'antd';
+import { PlusOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
-import { listPipelineRuns, getPipelineStatsByICP, ICPStat } from '../api/pipelineApi';
+import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
@@ -12,24 +12,79 @@ const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<PipelineRun[]>([]);
 
+  // Search + filter + infinite scroll state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [displayCount, setDisplayCount] = useState(12);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
   const [statsModalTile, setStatsModalTile] = useState<TileKey>('total_leads');
   const [icpStats, setIcpStats] = useState<ICPStat[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
 
-  useEffect(() => {
+  const refreshRuns = () => {
     Promise.all([listICPs(), listPipelineRuns()])
       .then(([, runRes]) => {
         setRuns(Array.isArray(runRes.data) ? runRes.data : []);
       })
       .catch(() => setRuns([]));
+  };
+
+  useEffect(() => {
+    refreshRuns();
   }, []);
+
+  const handleDeleteRun = async (runId: string) => {
+    try {
+      await deletePipelineRun(runId);
+      message.success('Search result deleted');
+      refreshRuns();
+    } catch {
+      message.error('Failed to delete search result');
+    }
+  };
 
   const runsList = Array.isArray(runs) ? runs : [];
   const completedRuns = runsList.filter((r) => r.status === 'completed');
   const totalCompanies = completedRuns.reduce((s, r) => s + r.companies_found, 0);
   const totalContacts = completedRuns.reduce((s, r) => s + r.contacts_found, 0);
+
+  const filteredRuns = useMemo(() => {
+    let result = runsList;
+    if (statusFilter !== 'all') {
+      result = result.filter((r) => r.status === statusFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (r) =>
+          r.icp_name?.toLowerCase().includes(q) ||
+          r.icp_description?.toLowerCase().includes(q)
+      );
+    }
+    return result;
+  }, [runsList, statusFilter, searchQuery]);
+
+  // Reset display count when filters change
+  useEffect(() => { setDisplayCount(12); }, [searchQuery, statusFilter]);
+
+  // IntersectionObserver for infinite scroll
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setDisplayCount((prev) => prev + 12);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [filteredRuns.length]);
 
   const statusColor: Record<string, string> = {
     pending: 'default',
@@ -94,10 +149,6 @@ const DashboardPage: React.FC = () => {
         },
         { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
         { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
-        {
-          title: 'Avg / Run', key: 'avg', width: 100,
-          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_companies / record.run_count).toFixed(1) : '—',
-        },
       ];
     }
     if (tile === 'contacts') {
@@ -109,10 +160,6 @@ const DashboardPage: React.FC = () => {
         },
         { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 100 },
         { title: 'Searches', dataIndex: 'run_count', key: 'run_count', width: 80 },
-        {
-          title: 'Avg / Run', key: 'avg', width: 100,
-          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_contacts / record.run_count).toFixed(1) : '—',
-        },
       ];
     }
     // total_leads (default)
@@ -191,12 +238,56 @@ const DashboardPage: React.FC = () => {
 
       <div style={{ marginBottom: 16 }}>
         <div className="section-label">Recent Activity</div>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Searches</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Searches</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <Input
+              prefix={<SearchOutlined style={{ color: 'var(--g400)' }} />}
+              placeholder="Search by name or description..."
+              allowClear
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ maxWidth: 320, width: 280 }}
+            />
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(['all', 'completed', 'running', 'failed'] as const).map((status) => (
+                <div
+                  key={status}
+                  onClick={() => setStatusFilter(status)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: statusFilter === status ? 'var(--purple-pale, #f0e6ff)' : 'var(--g100, #f5f5f5)',
+                    color: statusFilter === status ? 'var(--purple)' : 'var(--g500)',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
 
       {runsList.length > 0 ? (
+        filteredRuns.length === 0 ? (
+          <Card style={{ textAlign: 'center', padding: '40px 0' }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>🔍</div>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--g900)' }}>
+              No Matches Found
+            </h3>
+            <p style={{ color: 'var(--g500)', fontSize: 13 }}>
+              No searches match your current filters. Try a different search term or status filter.
+            </p>
+          </Card>
+        ) : (
+        <>
         <Row gutter={[16, 16]}>
-          {runsList.slice(0, 6).map((run) => (
+          {filteredRuns.slice(0, displayCount).map((run) => (
             <Col xs={24} sm={12} md={8} key={run.id}>
               <div
                 className="run-card"
@@ -258,11 +349,11 @@ const DashboardPage: React.FC = () => {
                         </span>
                       </div>
                     )}
-                    {run.icp_config.personas && run.icp_config.personas.length > 0 && (
+                    {(run.icp_config as any).personas && (run.icp_config as any).personas.length > 0 && (
                       <div className="rc-icp-row">
                         <span className="rc-icp-key">👤 Roles</span>
                         <span className="rc-icp-val">
-                          {run.icp_config.personas.map(p => p.job_title).slice(0, 3).join(', ')}
+                          {(run.icp_config as any).personas.map((p: any) => p.job_title).slice(0, 3).join(', ')}
                         </span>
                       </div>
                     )}
@@ -271,16 +362,39 @@ const DashboardPage: React.FC = () => {
 
                 {/* Footer actions */}
                 <div className="rc-footer">
-                  <Button
-                    size="small"
-                    className="rc-edit-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/icp/${run.icp_config_id}/edit`);
-                    }}
-                  >
-                    ✏ Edit Search
-                  </Button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Button
+                      size="small"
+                      className="rc-edit-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/icp/${run.icp_config_id}/edit`);
+                      }}
+                    >
+                      ✏ Edit Search
+                    </Button>
+                    {(run.status === 'completed' || run.status === 'failed') && (
+                      <Popconfirm
+                        title="Delete this search result?"
+                        description="This will permanently remove all companies, contacts, and scores from this run."
+                        onConfirm={(e) => {
+                          e?.stopPropagation();
+                          handleDeleteRun(run.id);
+                        }}
+                        onCancel={(e) => e?.stopPropagation()}
+                        okText="Delete"
+                        cancelText="Cancel"
+                        okButtonProps={{ danger: true }}
+                      >
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </Popconfirm>
+                    )}
+                  </div>
                   {run.status === 'completed' && (
                     <span className="rc-view-link">View Results →</span>
                   )}
@@ -292,6 +406,18 @@ const DashboardPage: React.FC = () => {
             </Col>
           ))}
         </Row>
+        <div ref={sentinelRef} style={{ height: 1 }} />
+        {displayCount < filteredRuns.length ? (
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 13 }}>
+            Loading more...
+          </div>
+        ) : filteredRuns.length > 12 ? (
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 12 }}>
+            Showing all {filteredRuns.length} items
+          </div>
+        ) : null}
+        </>
+        )
       ) : (
         <Card style={{ textAlign: 'center', padding: '20px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
@@ -329,7 +455,7 @@ const DashboardPage: React.FC = () => {
               <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
             </div>
             <Table
-              columns={getModalColumns('pipeline_runs')}
+              columns={getModalColumns('pipeline_runs') as any}
               dataSource={runsList}
               rowKey="id"
               pagination={false}
@@ -339,7 +465,7 @@ const DashboardPage: React.FC = () => {
           </>
         ) : (
           <Table
-            columns={getModalColumns(statsModalTile)}
+            columns={getModalColumns(statsModalTile) as any}
             dataSource={icpStats}
             rowKey="icp_id"
             loading={statsLoading}

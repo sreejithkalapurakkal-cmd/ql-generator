@@ -18,15 +18,15 @@ settings = get_settings()
 
 # Friendly display names for each tool
 TOOL_DISPLAY_NAMES = {
-    "apollo_company_search": "Searching Apollo for companies",
-    "apollo_people_search": "Searching Apollo for contacts",
-    "exa_search": "Running semantic search via Exa.ai",
-    "tavily_search": "Searching recent news via Tavily",
-    "duckduckgo_search": "Searching DuckDuckGo",
-    "hunter_domain_search": "Finding contacts via Hunter.io",
-    "hunter_email_finder": "Finding email via Hunter.io",
-    "lusha_person_search": "Enriching contact via Lusha",
-    "scrape_webpage": "Scraping webpage",
+    "apollo_company_search": "Searching company database",
+    "apollo_people_search": "Finding decision-makers",
+    "exa_search": "Searching business intelligence sources",
+    "tavily_search": "Checking recent news & press releases",
+    "duckduckgo_search": "Searching the web",
+    "hunter_domain_search": "Discovering contacts at company",
+    "hunter_email_finder": "Verifying email address",
+    "lusha_person_search": "Looking up phone number",
+    "scrape_webpage": "Reading company website",
 }
 
 # Map tools to their primary pipeline stage
@@ -309,6 +309,61 @@ c) JOB POSTING ANALYSIS: Search "[company name] careers [technology]" to infer:
    - Transformation signals (new technology roles)
 
 ═══════════════════════════════════════════════════════════════
+API RESILIENCE & MAXIMUM DATA EXTRACTION
+═══════════════════════════════════════════════════════════════
+
+CRITICAL: Paid data sources (Apollo, Hunter, Lusha, Exa, Tavily) have API rate
+limits. When any tool returns "RATE_LIMITED" in its error or returns empty results,
+you MUST immediately switch to free alternatives. NEVER give up after a single
+tool failure. NEVER retry a tool that returned RATE_LIMITED — it will fail again.
+
+RATE LIMIT TRACKING: Keep a mental note of which tools are rate-limited. Once a
+tool is rate-limited, do NOT call it again for the rest of the run. Proceed
+exclusively with free tools for that category of data.
+
+FALLBACK CHAIN (use in order when a primary tool fails):
+1. duckduckgo_search — FREE, unlimited. Use Google dorking techniques for precision.
+2. scrape_webpage — FREE, unlimited. Scrape company websites directly for data.
+3. Combine multiple duckduckgo_search queries with different operators for coverage.
+4. Use at least 3 different duckduckgo_search queries before concluding data is
+   unavailable. Vary the search operators each time.
+
+WHEN A PAID TOOL FAILS OR RETURNS EMPTY RESULTS:
+• Company Discovery: If apollo_company_search fails, use multiple duckduckgo_search
+  queries with operators: "[industry] companies [location] site:linkedin.com/company",
+  "[industry] [location] fastest growing companies", then scrape_webpage on each
+  result to extract company details (employee count, tech stack from careers page).
+• Contact Discovery: If apollo_people_search fails, use duckduckgo_search
+  "site:linkedin.com/in [company] [role title]" for EACH target role. Also
+  scrape_webpage on [company]/about, [company]/team, [company]/leadership pages.
+  Use hunter_domain_search as backup if Hunter quota allows.
+• Email Finding: If hunter_email_finder fails, search duckduckgo_search
+  "[first name] [last name] [company] email" and scrape_webpage on the company
+  contact page. Also try common email patterns: first@domain, first.last@domain.
+• Phone Numbers: If lusha_person_search fails, search duckduckgo_search
+  "[full name] [company] phone" or scrape_webpage on company contact page.
+• BANT Research: If tavily_search/exa_search fail, use duckduckgo_search
+  extensively — search "[company] revenue", "[company] funding", "[company] press
+  release", "[company] careers [technology]" etc. Scrape company /about, /press,
+  /investors, /blog pages directly.
+
+LINKEDIN SCRAPING (highest priority for contacts):
+For EVERY contact, you MUST attempt LinkedIn URL discovery:
+1. duckduckgo_search "site:linkedin.com/in [first] [last] [company]"
+2. duckduckgo_search "[first] [last] [company] linkedin"
+3. exa_search "[full name] [company] linkedin profile" (if exa available)
+4. scrape_webpage on LinkedIn search result URLs to verify matches
+
+MAXIMIZE DATA EVEN IF SLOWER:
+• Run at least 2-3 different search queries per company for BANT evidence
+• For each company, scrape at minimum: /about page, /careers page, /press or /blog
+• Cross-reference findings from multiple free sources to build confidence
+• If you find partial data from one source, use another source to fill gaps
+• Always prefer MORE tool calls with FREE tools over fewer calls with paid tools
+• A thorough search using only free tools produces BETTER results than a shallow
+  search that was cut short by rate limits
+
+═══════════════════════════════════════════════════════════════
 STAGE 1: COMPANY DISCOVERY
 ═══════════════════════════════════════════════════════════════
 Goal: Find companies matching the ICP criteria.
@@ -369,27 +424,107 @@ attempts using different tools before giving up on finding the LinkedIn URL.
 ═══════════════════════════════════════════════════════════════
 STAGE 3: CONTACT ENRICHMENT
 ═══════════════════════════════════════════════════════════════
-Goal: Fill in missing contact data fields (email, phone, LinkedIn).
+Goal: Fill in missing contact data fields (LinkedIn URL, email, phone).
 
 Only enrich fields that are missing — do not re-query data you already have.
-• hunter_email_finder — For missing emails when you have first_name + last_name + domain.
-• lusha_person_search — For missing phone numbers when you have name + company.
-• exa_search or duckduckgo_search — For missing LinkedIn URLs (search by name + company).
 
 ENRICHMENT PRIORITIES (in order of importance):
-1. LinkedIn URL — HIGHEST priority. Search "site:linkedin.com/in [name] [company]" via
-   duckduckgo_search if not already found. This is the most valuable field for sales teams.
-2. Email address — Use hunter_email_finder with first_name + last_name + domain.
-3. Phone number — Use lusha_person_search with name + company.
+1. LinkedIn URL — HIGHEST priority. Most valuable field for sales teams.
+2. Email address — Direct communication channel.
+3. Phone number — Direct outreach.
 
-Mark each contact's enrichment status:
-- "enriched" = LinkedIn URL + email populated (both required for "enriched" status)
+─────────────────────────────────────────────────────────────
+FINDING LINKEDIN PROFILES (mandatory for every contact):
+─────────────────────────────────────────────────────────────
+For EACH contact missing a LinkedIn URL, work through these methods in order.
+Stop as soon as you find a confirmed match.
+
+Method 1 — DuckDuckGo LinkedIn dork (highest success rate):
+  duckduckgo_search "site:linkedin.com/in [first_name] [last_name] [company_name]"
+  → Look for a result whose title contains the person's name AND company.
+  → The "href" field is their LinkedIn profile URL.
+
+Method 2 — Broader name + company LinkedIn search:
+  duckduckgo_search "[first_name] [last_name] [company_name] linkedin"
+  → Useful when the site: operator returns no results.
+
+Method 3 — Scrape company team/about page:
+  scrape_webpage on [company_website]/about, /team, /leadership, /our-team
+  → Team pages often link to employees' LinkedIn profiles in the page links.
+  → Check the "links" array in the result for linkedin.com/in URLs.
+
+Method 4 — Exa semantic search (if available):
+  exa_search "[full_name] [company_name] linkedin profile"
+  → Neural search can find profile mentions in articles and directories.
+
+A contact without a LinkedIn URL should be treated as INCOMPLETE. Make at least
+2 attempts using different methods before giving up.
+
+─────────────────────────────────────────────────────────────
+FINDING EMAIL ADDRESSES:
+─────────────────────────────────────────────────────────────
+Try paid tool first, then fall back to free methods immediately if it fails.
+
+Method 1 — Hunter (if not rate-limited):
+  hunter_email_finder with first_name + last_name + domain.
+
+Method 2 — DuckDuckGo email dork:
+  duckduckgo_search "[first_name] [last_name] [company_name] email"
+  duckduckgo_search "[first_name] [last_name] @[company_domain]"
+  → Email addresses often appear in conference speaker bios, press releases,
+    GitHub profiles, and personal blogs.
+
+Method 3 — Scrape company contact/team pages:
+  scrape_webpage on [company_website]/contact, /team, /about
+  → Look for email patterns (name@domain) in the page content.
+
+Method 4 — Email pattern inference:
+  If you found other emails at the same company (e.g., from hunter_domain_search
+  results in Stage 2), infer the pattern. Common patterns:
+    first@domain.com, first.last@domain.com, flast@domain.com, firstl@domain.com
+  Report inferred emails with confidence: 0.5 and note "inferred from pattern".
+
+Method 5 — DuckDuckGo pattern discovery:
+  duckduckgo_search "\"@[company_domain]\" [department or role]"
+  → This finds pages that mention email addresses at that domain, revealing the
+    company's email naming convention.
+
+─────────────────────────────────────────────────────────────
+FINDING PHONE NUMBERS:
+─────────────────────────────────────────────────────────────
+Try paid tool first, then fall back to free methods immediately if it fails.
+
+Method 1 — Lusha (if not rate-limited):
+  lusha_person_search with first_name + last_name + company_name + company_domain.
+
+Method 2 — DuckDuckGo phone dork:
+  duckduckgo_search "[full_name] [company_name] phone"
+  duckduckgo_search "[full_name] [company_name] contact number"
+  → Phone numbers appear in speaker bios, press contacts, and business directories.
+
+Method 3 — Scrape company contact page:
+  scrape_webpage on [company_website]/contact, /contact-us
+  → Company contact pages often list direct lines or main office numbers.
+
+Method 4 — Business directory search:
+  duckduckgo_search "[company_name] phone directory site:zoominfo.com"
+  duckduckgo_search "[full_name] [company_name] site:rocketreach.co"
+  → Business directories sometimes expose partial contact details publicly.
+
+─────────────────────────────────────────────────────────────
+RATE LIMIT HANDLING:
+─────────────────────────────────────────────────────────────
+When ANY paid tool returns "RATE_LIMITED" in its error:
+1. STOP calling that tool entirely for the rest of the pipeline run.
+2. Switch to the free methods listed above (duckduckgo_search + scrape_webpage).
+3. Do NOT reduce the number of contacts you enrich — use free tools for ALL of them.
+4. Free tools (duckduckgo_search, scrape_webpage) have NO rate limits. Use them
+   as many times as needed.
+
+ENRICHMENT STATUS:
+- "enriched" = LinkedIn URL + email both populated
 - "partial" = has either LinkedIn OR email but not both
-- "failed" = enrichment found nothing new
-
-For EACH contact missing a LinkedIn URL, you MUST run at least:
-  duckduckgo_search "site:linkedin.com/in [first_name] [last_name] [company]"
-This single query has a high success rate and must not be skipped.
+- "failed" = enrichment found nothing new despite exhausting all methods
 
 ═══════════════════════════════════════════════════════════════
 STAGE 4: BANT SCORING
@@ -583,6 +718,15 @@ CRITICAL RULES
    A company with strong ICP match, good BANT score, but limited contacts is still
    a valuable lead. Keep it in results with whatever contact data you found (even if
    the contacts list is empty). The user values company-level intelligence.
+10. RATE LIMIT RESILIENCE: When ANY paid tool returns "RATE_LIMITED" in its error,
+   STOP using that tool for the rest of the run. Switch to free alternatives
+   (duckduckgo_search, scrape_webpage) which have NO rate limits. NEVER report
+   "no data found" without exhausting all free tool options first. Run at least
+   3 different duckduckgo_search queries with varied operators before concluding
+   data is unavailable for a contact or company.
+11. DEPTH OVER SPEED: Quality data is more important than fast completion. Use as
+   many free tool calls as needed to gather comprehensive data. There is no limit
+   on the number of duckduckgo_search or scrape_webpage calls you can make.
 """
 
 

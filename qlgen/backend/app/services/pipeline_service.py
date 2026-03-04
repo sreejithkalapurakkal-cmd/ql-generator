@@ -27,14 +27,72 @@ def _emit_event(events: dict, run_id: str, event: dict):
         events[run_id].append(event)
 
 
+def _repair_truncated_json(text: str) -> str:
+    """Attempt to repair truncated JSON by closing open strings, arrays, and objects."""
+    # Track parser state
+    in_string = False
+    escape_next = False
+    stack = []  # stack of open brackets: '{' or '['
+
+    for ch in text:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+
+    repaired = text
+    # If we ended inside a string, close it
+    if in_string:
+        repaired += '"'
+
+    # Close any remaining open brackets in reverse order
+    for bracket in reversed(stack):
+        repaired += '}' if bracket == '{' else ']'
+
+    return repaired
+
+
+def _truncate_to_last_complete_item(text: str) -> str:
+    """Cut JSON text back to the last cleanly-closed array element or object value.
+
+    This finds the last '},' or '}]' pattern that plausibly ends a complete
+    companies/contacts entry, trims there, and lets _repair_truncated_json
+    close the remaining brackets.
+    """
+    # Find the last position where a complete object ended before more data
+    # Pattern: '},\n' or '}, ' — indicates a complete array element
+    last_obj_end = -1
+    for marker in ['},\n', '},\r', '}, ']:
+        pos = text.rfind(marker)
+        if pos > last_obj_end:
+            last_obj_end = pos
+
+    if last_obj_end > 0:
+        return text[: last_obj_end + 1]  # include the closing '}'
+
+    return text
+
+
 def parse_json_from_agent_result(result) -> dict:
-    """Extract JSON from the agent's text response."""
+    """Extract JSON from the agent's text response, repairing truncation if needed."""
     text = str(result)
 
     # Try to find JSON block in markdown code fence
     if "```json" in text:
         start = text.index("```json") + 7
-        # Find closing fence; if missing, take everything after the opening
         closing = text.find("```", start)
         if closing != -1:
             text = text[start:closing].strip()
@@ -52,16 +110,41 @@ def parse_json_from_agent_result(result) -> dict:
     if "{" in text:
         start = text.index("{")
         depth = 0
+        end = len(text)
         for i, char in enumerate(text[start:], start):
             if char == "{":
                 depth += 1
             elif char == "}":
                 depth -= 1
                 if depth == 0:
-                    text = text[start : i + 1]
+                    end = i + 1
                     break
+        text = text[start:end]
 
-    return json.loads(text)
+    # 1) Try parsing as-is first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Try repairing truncated JSON directly (close open strings/brackets)
+    try:
+        repaired = _repair_truncated_json(text)
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # 3) Truncate back to the last complete array element, then repair
+    try:
+        truncated = _truncate_to_last_complete_item(text)
+        repaired = _repair_truncated_json(truncated)
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # 4) Last resort: raise with the original text for debugging
+    logger.error(f"Failed to parse agent JSON (length={len(text)}). First 500 chars: {text[:500]}")
+    return json.loads(text)  # will raise the original JSONDecodeError
 
 
 async def execute_pipeline(run_id: UUID, events: dict = None):

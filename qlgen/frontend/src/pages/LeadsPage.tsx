@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography } from 'antd';
-import { DownloadOutlined, ToolOutlined } from '@ant-design/icons';
+import { Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography, Popconfirm, message } from 'antd';
+import { DownloadOutlined, ToolOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getLeadCompanies, getExportUrl } from '../api/leadsApi';
-import { getPipelineStatus, getPipelineLogs } from '../api/pipelineApi';
+import { getPipelineStatus, getPipelineLogs, deletePipelineRun, startPipeline } from '../api/pipelineApi';
 import { Company, BANTScore, BANTSourceCitation, PipelineRun, PipelineLogEntry } from '../types';
 
 const { Text } = Typography;
@@ -503,47 +503,90 @@ const LeadsPage: React.FC = () => {
 
   const columns = [
     { title: '#', dataIndex: 'serial', width: 50 },
-    { title: 'Company Name', dataIndex: 'company_name', width: 180 },
-    {
-      title: 'Website',
-      dataIndex: 'website',
-      width: 150,
-      render: (url: string | null) => url ? <a href={url.startsWith('http') ? url : `https://${url}`} target="_blank" rel="noreferrer">{url}</a> : '-',
-    },
-    { title: 'Geo/City', dataIndex: 'city', width: 150 },
-    {
-      title: 'Source',
-      dataIndex: 'source',
-      width: 120,
-      render: (src: string | null) => src ? <Tag style={{ fontSize: 11 }}>{src}</Tag> : '-',
-    },
-    { title: 'Contact Name', dataIndex: 'contact_name', width: 150 },
-    { title: 'Designation', dataIndex: 'designation', width: 180 },
-    {
-      title: 'LinkedIn',
-      dataIndex: 'linkedin',
-      width: 80,
-      render: (url: string | null) => url ? <a href={url} target="_blank" rel="noreferrer">Profile</a> : '-',
-    },
-    { title: 'Email', dataIndex: 'email', width: 200, render: (e: string | null) => e || '-' },
-    { title: 'Phone', dataIndex: 'phone', width: 140, render: (p: string | null) => p || '-' },
+    { title: 'Company Name', dataIndex: 'company_name', width: 160 },
     {
       title: 'BANT Score',
       dataIndex: 'bant_score',
-      width: 130,
+      width: 120,
       render: (score: BANTScore | null) => <BANTScoreDisplay score={score} />,
     },
+    {
+      title: 'Website',
+      dataIndex: 'website',
+      width: 140,
+      render: (url: string | null) => url ? <a href={url.startsWith('http') ? url : `https://${url}`} target="_blank" rel="noreferrer">{url}</a> : '-',
+    },
+    { title: 'Geo/City', dataIndex: 'city', width: 130 },
+    { title: 'Contact Name', dataIndex: 'contact_name', width: 140 },
+    { title: 'Designation', dataIndex: 'designation', width: 150 },
+    {
+      title: 'LinkedIn',
+      dataIndex: 'linkedin',
+      width: 70,
+      render: (url: string | null) => url ? <a href={url} target="_blank" rel="noreferrer">Profile</a> : '-',
+    },
+    { title: 'Email', dataIndex: 'email', width: 180, render: (e: string | null) => e || '-' },
+    { title: 'Phone', dataIndex: 'phone', width: 130, render: (p: string | null) => p || '-' },
   ];
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Lead Generation</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h1 className="page-title">Search Results</h1>
-          {pipelineRun?.icp_name && (
-            <Tag color="purple" style={{ fontSize: 13, padding: '2px 12px' }}>{pipelineRun.icp_name}</Tag>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Button size="small" onClick={() => navigate('/dashboard')} style={{ fontSize: 12 }}>
+              ← Back
+            </Button>
+            <h1 className="page-title">Search Results</h1>
+            {pipelineRun?.icp_name && (
+              <Tag color="purple" style={{ fontSize: 13, padding: '2px 12px' }}>{pipelineRun.icp_name}</Tag>
+            )}
+          </div>
+          <Space>
+            {pipelineRun?.icp_config_id && (
+              <Button
+                icon={<PlayCircleOutlined />}
+                size="small"
+                onClick={async () => {
+                  try {
+                    const res = await startPipeline({
+                      icp_config_id: pipelineRun.icp_config_id,
+                      options: { max_companies: 15, max_contacts_per_company: 5 },
+                    });
+                    message.success('New search started with same criteria');
+                    navigate(`/pipeline/${res.data.id}`);
+                  } catch (err: any) {
+                    message.error(err?.response?.data?.detail || 'Failed to start search');
+                  }
+                }}
+              >
+                Run Again
+              </Button>
+            )}
+            {runId && (
+              <Popconfirm
+                title="Delete this search result?"
+                description="This will permanently remove all companies, contacts, and scores."
+                onConfirm={async () => {
+                  try {
+                    await deletePipelineRun(runId);
+                    message.success('Search result deleted');
+                    navigate('/dashboard');
+                  } catch {
+                    message.error('Failed to delete search result');
+                  }
+                }}
+                okText="Delete"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+              >
+                <Button danger icon={<DeleteOutlined />} size="small">
+                  Delete
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
         </div>
       </div>
 
@@ -611,7 +654,7 @@ const LeadsPage: React.FC = () => {
             dataSource={flatRows}
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
-            scroll={{ x: 1400 }}
+            scroll={{ x: 1270 }}
             expandable={{
               expandedRowKeys,
               onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as (string | number)[]),
@@ -634,7 +677,7 @@ const LeadsPage: React.FC = () => {
       {activeTab === 'criteria' && (
         <Card title="Search Criteria">
           {pipelineRun?.icp_config ? (
-            <ICPConfigPanel config={pipelineRun.icp_config} />
+            <ICPConfigPanel config={pipelineRun.icp_config as unknown as Record<string, unknown>} />
           ) : (
             <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
               No search criteria available

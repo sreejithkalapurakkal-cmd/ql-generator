@@ -7,6 +7,13 @@ settings = get_settings()
 EXA_API_KEY = settings.EXA_API_KEY
 EXA_BASE_URL = settings.EXA_BASE_URL
 
+RATE_LIMIT_CODES = {429, 402, 403}
+RATE_LIMIT_MSG = (
+    "RATE_LIMITED: Exa API quota exceeded. Do NOT retry this tool. "
+    "Switch immediately to free alternatives: use duckduckgo_search with "
+    "targeted queries and scrape_webpage on relevant pages."
+)
+
 
 @tool
 def exa_search(
@@ -54,5 +61,9 @@ def exa_search(
         response = httpx.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "results": []}
+        return {"error": str(e), "results": []}
     except Exception as e:
         return {"error": str(e), "results": []}

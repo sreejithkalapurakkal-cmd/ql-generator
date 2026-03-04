@@ -61,7 +61,7 @@ const OrbitAnimation: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number>();
+  const rafRef = useRef<number | undefined>(undefined);
   const tRef = useRef(0);
   const pulsePhaseRef = useRef(0);
   const hoveredIdxRef = useRef(-1);

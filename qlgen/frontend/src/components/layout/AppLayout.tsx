@@ -9,7 +9,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const menuItems = [
     { key: '/welcome', icon: '✦', label: 'Home' },
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
-    { key: '/icp', icon: '◈', label: 'Saved Searches' },
+    { key: '/icp', icon: '◈', label: 'Saved ICPs' },
   ];
 
   // Don't highlight "Saved Searches" when on ICP form pages (new or edit)

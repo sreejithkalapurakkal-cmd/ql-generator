@@ -182,34 +182,20 @@ body {
   background: #fff;
   border: 1px solid var(--g200);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 22px 24px;
   box-shadow: var(--shadow);
   transition: all 0.2s ease;
   cursor: pointer;
   position: relative;
   overflow: hidden;
-}
-
-.run-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--purple), var(--purple-l));
-  opacity: 0;
-  transition: opacity 0.2s;
+  display: flex;
+  flex-direction: column;
 }
 
 .run-card:hover {
   box-shadow: var(--shadow-md);
   border-color: var(--g300);
   transform: translateY(-1px);
-}
-
-.run-card:hover::before {
-  opacity: 1;
 }
 
 .badge-green {
@@ -1165,10 +1151,10 @@ body {
   align-items: baseline;
   justify-content: center;
   gap: 6px;
-  padding: 7px 14px;
+  padding: 8px 18px;
   border-radius: 8px;
-  font-size: 13.5px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   color: #555;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -1190,7 +1176,7 @@ body {
 }
 
 .gnav-link .gnav-icon {
-  font-size: 14px;
+  font-size: 16px;
   opacity: 0.7;
   display: inline-flex;
   align-items: center;
@@ -1240,7 +1226,7 @@ body {
 
 .builder-form {
   flex: 1;
-  max-width: 720px;
+  max-width: 960px;
 }
 
 .builder-step {
@@ -1809,38 +1795,41 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .rc-title {
   font-size: 15px;
   font-weight: 700;
   color: var(--g900);
-  letter-spacing: -0.3px;
-  line-height: 1.3;
+  letter-spacing: -0.2px;
+  line-height: 1.35;
   flex: 1;
 }
 
 .rc-meta {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin-bottom: 14px;
+  gap: 2px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--g100);
 }
 
 .rc-date {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--g400);
   font-weight: 500;
 }
 
 .rc-offering {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--g500);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+  line-height: 1.5;
 }
 
 /* Emphasized stats strip */
@@ -1848,10 +1837,9 @@ body {
   display: flex;
   align-items: stretch;
   background: var(--g50);
-  border: 1px solid var(--g200);
   border-radius: 8px;
   overflow: hidden;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .rc-stat {
@@ -1861,7 +1849,7 @@ body {
 }
 
 .rc-stat-val {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--purple);
   letter-spacing: -0.5px;
@@ -1888,29 +1876,33 @@ body {
 .rc-icp-block {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-bottom: 12px;
+  gap: 7px;
+  margin-bottom: 14px;
+  flex: 1;
 }
 
 .rc-icp-row {
   display: flex;
   align-items: baseline;
-  gap: 7px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .rc-icp-key {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--g400);
   white-space: nowrap;
   flex-shrink: 0;
-  min-width: 80px;
+  min-width: 84px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .rc-icp-val {
   color: var(--g700);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1930,16 +1922,18 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 12px;
+  padding-top: 14px;
   border-top: 1px solid var(--g100);
+  margin-top: auto;
 }
 
 .rc-edit-btn {
   font-size: 12px !important;
-  padding: 5px 12px !important;
-  color: var(--g600) !important;
+  padding: 4px 12px !important;
+  color: var(--g500) !important;
   border-color: var(--g200) !important;
   transition: all 0.15s;
+  border-radius: 6px !important;
 }
 
 .rc-edit-btn:hover {
@@ -1949,7 +1943,7 @@ body {
 }
 
 .rc-view-link {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--purple);
   font-weight: 600;
   cursor: pointer;

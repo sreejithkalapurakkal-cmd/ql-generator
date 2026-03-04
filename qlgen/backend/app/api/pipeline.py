@@ -143,6 +143,23 @@ async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db)):
     return _build_run_response(run)
 
 
+@router.delete("/{run_id}")
+async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    if run.status == "running":
+        raise HTTPException(status_code=400, detail="Cannot delete a running pipeline")
+    await db.delete(run)
+    await db.commit()
+    # Clean up in-memory events
+    run_id_str = str(run_id)
+    if run_id_str in pipeline_events:
+        del pipeline_events[run_id_str]
+    return {"detail": "Pipeline run deleted"}
+
+
 @router.get("/{run_id}/logs", response_model=List[PipelineLogResponse])
 async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db)):
     """Return persisted agent logs for a pipeline run."""

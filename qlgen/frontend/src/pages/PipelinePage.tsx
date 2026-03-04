@@ -59,6 +59,37 @@ const stageColors: Record<string, string> = {
   completed: '#52c41a',
 };
 
+const friendlyResultSummary = (toolName: string, preview: string): string => {
+  if (!preview) return 'Done';
+  const orgMatch = preview.match(/"organizations"\s*:\s*\[/);
+  const peopleMatch = preview.match(/"people"\s*:\s*\[/);
+  if (orgMatch) {
+    const count = (preview.match(/"name"/g) || []).length;
+    return count > 0 ? `Found ${count} matching companies` : 'Search complete';
+  }
+  if (peopleMatch) {
+    const count = (preview.match(/"name"/g) || []).length;
+    return count > 0 ? `Found ${count} contacts` : 'Search complete';
+  }
+  if (toolName.includes('hunter_email')) return 'Email verification complete';
+  if (toolName.includes('lusha')) return 'Phone lookup complete';
+  if (toolName.includes('scrape')) return 'Website analysis complete';
+  return 'Data collected successfully';
+};
+
+const friendlyErrorMessage = (_toolName: string, error: string): string => {
+  const lower = (error || '').toLowerCase();
+  if (lower.includes('rate limit') || lower.includes('429') || lower.includes('quota'))
+    return 'Data source rate limit reached — switching to alternative source';
+  if (lower.includes('404') || lower.includes('not found'))
+    return 'No data found at this source — trying another approach';
+  if (lower.includes('timeout') || lower.includes('timed out'))
+    return 'Source took too long to respond — moving on';
+  if (lower.includes('unauthorized') || lower.includes('401') || lower.includes('403'))
+    return 'Access issue with data source — using backup source';
+  return 'Data source temporarily unavailable — trying alternative';
+};
+
 interface ActivityEntry {
   id: number;
   type: 'tool_start' | 'agent_reasoning' | 'stage_update' | 'tool_result' | 'tool_error';
@@ -317,7 +348,7 @@ const PipelinePage: React.FC = () => {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <BulbOutlined style={{ color: '#faad14' }} />
-              <Text strong style={{ fontSize: 13 }}>Agent Reasoning</Text>
+              <Text strong style={{ fontSize: 13 }}>Analyzing...</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
               </Text>
@@ -355,43 +386,27 @@ const PipelinePage: React.FC = () => {
         return (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tag color="default" style={{ fontSize: 11 }}>
-                RESULT
+              <Tag color="success" style={{ fontSize: 11 }}>
+                FOUND
               </Tag>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {entry.toolName}
+                {friendlyResultSummary(entry.toolName || '', entry.resultPreview || '')}
               </Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
               </Text>
             </div>
-            {entry.resultPreview && (
-              <Paragraph
-                type="secondary"
-                style={{
-                  margin: '4px 0 0 0',
-                  fontSize: 12,
-                  background: '#f9f9f9',
-                  padding: '6px 10px',
-                  borderRadius: 4,
-                  fontFamily: 'monospace',
-                }}
-                ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}
-              >
-                {entry.resultPreview}
-              </Paragraph>
-            )}
           </div>
         );
 
       case 'tool_error':
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Tag color="error" style={{ fontSize: 11 }}>
-              ERROR
+            <Tag color="orange" style={{ fontSize: 11 }}>
+              RETRYING
             </Tag>
-            <Text type="danger" style={{ fontSize: 12 }}>
-              {entry.toolName}: {entry.errorMessage}
+            <Text style={{ fontSize: 12, color: '#fa8c16' }}>
+              {friendlyErrorMessage(entry.toolName || '', entry.errorMessage || '')}
             </Text>
             <Text type="secondary" style={{ fontSize: 12 }}>
               <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
@@ -408,7 +423,7 @@ const PipelinePage: React.FC = () => {
     if (entry.type === 'stage_update') return stageColors[entry.stage || ''] || '#1890ff';
     if (entry.type === 'tool_start') return toolColors[entry.toolName || ''] || '#1890ff';
     if (entry.type === 'tool_result') return '#d9d9d9';
-    if (entry.type === 'tool_error') return '#ff4d4f';
+    if (entry.type === 'tool_error') return '#fa8c16';
     return '#faad14';
   };
 
@@ -511,7 +526,7 @@ const PipelinePage: React.FC = () => {
         {/* Right Panel - Live Log */}
         <div className="prog-right">
           <div className="prog-right-header">
-            <span className="log-title">Activity Log</span>
+            <span className="log-title">AI Agent Reasoning</span>
           </div>
 
           <div className="prog-log-area" ref={logContainerRef}>
@@ -524,39 +539,39 @@ const PipelinePage: React.FC = () => {
               });
 
               let tagClass = 'system';
-              let tagText = 'SYSTEM';
+              let tagText = 'UPDATE';
 
               if (entry.type === 'tool_start') {
                 if (entry.toolName?.includes('company')) {
                   tagClass = 'discover';
-                  tagText = 'DISCOVER';
-                } else if (entry.toolName?.includes('people') || entry.toolName?.includes('contact')) {
+                  tagText = 'SEARCHING';
+                } else if (entry.toolName?.includes('people') || entry.toolName?.includes('contact') || entry.toolName?.includes('hunter') || entry.toolName?.includes('lusha')) {
                   tagClass = 'contact';
-                  tagText = 'CONTACT';
+                  tagText = 'CONTACTS';
                 } else if (entry.toolName?.includes('score')) {
                   tagClass = 'score';
-                  tagText = 'SCORE';
+                  tagText = 'SCORING';
                 } else {
                   tagClass = 'icp';
-                  tagText = 'TOOL';
+                  tagText = 'RESEARCH';
                 }
               } else if (entry.type === 'stage_update') {
                 if (entry.stage === 'completed') {
                   tagClass = 'done';
-                  tagText = 'DONE';
+                  tagText = 'COMPLETE';
                 } else {
                   tagClass = 'icp';
-                  tagText = 'STAGE';
+                  tagText = 'PROGRESS';
                 }
               } else if (entry.type === 'agent_reasoning') {
                 tagClass = 'icp';
-                tagText = 'AGENT';
+                tagText = 'THINKING';
               } else if (entry.type === 'tool_result') {
-                tagClass = 'system';
-                tagText = 'RESULT';
+                tagClass = 'done';
+                tagText = 'FOUND';
               } else if (entry.type === 'tool_error') {
                 tagClass = 'score';
-                tagText = 'ERROR';
+                tagText = 'RETRY';
               }
 
               let message = '';
@@ -570,9 +585,9 @@ const PipelinePage: React.FC = () => {
               } else if (entry.type === 'agent_reasoning') {
                 message = entry.text?.substring(0, 100) + (entry.text && entry.text.length > 100 ? '...' : '') || '';
               } else if (entry.type === 'tool_result') {
-                message = `${entry.toolName}: ${entry.resultPreview?.substring(0, 80) || 'OK'}${(entry.resultPreview?.length || 0) > 80 ? '...' : ''}`;
+                message = friendlyResultSummary(entry.toolName || '', entry.resultPreview || '');
               } else if (entry.type === 'tool_error') {
-                message = `${entry.toolName}: ${entry.errorMessage || 'Unknown error'}`;
+                message = friendlyErrorMessage(entry.toolName || '', entry.errorMessage || '');
               }
 
               return (

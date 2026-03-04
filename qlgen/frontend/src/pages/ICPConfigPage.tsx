@@ -75,6 +75,7 @@ const ICPConfigPage: React.FC = () => {
         if (icp.config) setConfig(icp.config as unknown as ICPDefinition);
         message.success('Search criteria imported — review and edit below');
         setImportModalOpen(false);
+        setCurrent(8); // Jump to Review step
       } else {
         message.error('No ICP data found in uploaded file');
       }
@@ -403,9 +404,14 @@ const ICPConfigPage: React.FC = () => {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
-      <div style={{ marginBottom: 24 }}>
+      <div style={{ marginBottom: 24, paddingLeft: 258 }}>
         <div className="section-label">Search Criteria Configuration</div>
-        <h1 className="page-title">{id ? 'Edit Search Criteria' : 'New Search Criteria'}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Button size="small" onClick={() => navigate(-1)} style={{ fontSize: 12 }}>
+            ← Back
+          </Button>
+          <h1 className="page-title">{id ? 'Edit Search Criteria' : 'New Search Criteria'}</h1>
+        </div>
       </div>
 
       <div className="builder-layout">

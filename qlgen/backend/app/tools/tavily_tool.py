@@ -7,6 +7,14 @@ settings = get_settings()
 TAVILY_API_KEY = settings.TAVILY_API_KEY
 TAVILY_BASE_URL = settings.TAVILY_BASE_URL
 
+RATE_LIMIT_CODES = {429, 402, 403}
+RATE_LIMIT_MSG = (
+    "RATE_LIMITED: Tavily API quota exceeded. Do NOT retry this tool. "
+    "Switch immediately to free alternatives: use duckduckgo_search for "
+    "news, funding rounds, and company research, and scrape_webpage on "
+    "relevant pages."
+)
+
 
 @tool
 def tavily_search(query: str, max_results: int = 5, search_depth: str = "advanced") -> dict:
@@ -37,5 +45,9 @@ def tavily_search(query: str, max_results: int = 5, search_depth: str = "advance
         response = httpx.post(url, json=payload, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "results": []}
+        return {"error": str(e), "results": []}
     except Exception as e:
         return {"error": str(e), "results": []}

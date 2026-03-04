@@ -7,6 +7,14 @@ settings = get_settings()
 APOLLO_API_KEY = settings.APOLLO_API_KEY
 APOLLO_BASE_URL = settings.APOLLO_BASE_URL
 
+RATE_LIMIT_CODES = {429, 402, 403}
+RATE_LIMIT_MSG = (
+    "RATE_LIMITED: Apollo API quota exceeded. Do NOT retry this tool. "
+    "Switch immediately to free alternatives: use duckduckgo_search with "
+    "targeted queries (site:linkedin.com/in, site:linkedin.com/company) "
+    "and scrape_webpage on company websites."
+)
+
 
 @tool
 def apollo_company_search(
@@ -56,6 +64,10 @@ def apollo_company_search(
         response = httpx.post(url, json=payload, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "organizations": []}
+        return {"error": str(e), "organizations": []}
     except Exception as e:
         return {"error": str(e), "organizations": []}
 
@@ -101,5 +113,9 @@ def apollo_people_search(
         response = httpx.post(url, json=payload, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "people": []}
+        return {"error": str(e), "people": []}
     except Exception as e:
         return {"error": str(e), "people": []}

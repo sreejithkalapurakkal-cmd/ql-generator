@@ -7,6 +7,14 @@ settings = get_settings()
 LUSHA_API_KEY = settings.LUSHA_API_KEY
 LUSHA_BASE_URL = settings.LUSHA_BASE_URL
 
+RATE_LIMIT_CODES = {429, 402, 403}
+RATE_LIMIT_MSG = (
+    "RATE_LIMITED: Lusha API quota exceeded. Do NOT retry this tool. "
+    "Switch immediately to free alternatives: use duckduckgo_search to find "
+    "phone numbers (search '[name] [company] phone' or '[name] [company] contact'), "
+    "and scrape_webpage on the company's contact page or team directory."
+)
+
 
 @tool
 def lusha_person_search(
@@ -43,5 +51,9 @@ def lusha_person_search(
         response = httpx.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True}
+        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
