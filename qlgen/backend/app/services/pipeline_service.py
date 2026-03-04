@@ -34,14 +34,21 @@ def parse_json_from_agent_result(result) -> dict:
     # Try to find JSON block in markdown code fence
     if "```json" in text:
         start = text.index("```json") + 7
-        end = text.index("```", start)
-        text = text[start:end].strip()
+        # Find closing fence; if missing, take everything after the opening
+        closing = text.find("```", start)
+        if closing != -1:
+            text = text[start:closing].strip()
+        else:
+            text = text[start:].strip()
     elif "```" in text:
         start = text.index("```") + 3
-        end = text.index("```", start)
-        text = text[start:end].strip()
+        closing = text.find("```", start)
+        if closing != -1:
+            text = text[start:closing].strip()
+        else:
+            text = text[start:].strip()
 
-    # Try to find JSON object
+    # Try to find the largest JSON object by matching braces
     if "{" in text:
         start = text.index("{")
         depth = 0
@@ -113,6 +120,8 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
             logger.info(f"Invoking agent for pipeline run {run_id}")
             result = await asyncio.to_thread(agent, prompt)
             logger.info(f"Agent completed for pipeline run {run_id}")
+            result_text = str(result)
+            logger.info(f"Agent result type: {type(result).__name__}, text length: {len(result_text)}, first 500 chars: {result_text[:500]}")
 
             _emit_event(events, run_id_str, {
                 "type": "stage_update",

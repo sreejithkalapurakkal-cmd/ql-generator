@@ -1,6 +1,9 @@
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
+
+logging.basicConfig(level=logging.INFO)
 
 # Load .env from project root
 env_path = Path(__file__).resolve().parent.parent.parent / ".env"

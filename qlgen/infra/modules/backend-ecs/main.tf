@@ -91,11 +91,13 @@ resource "aws_iam_role_policy" "bedrock_invoke" {
       Effect = "Allow"
       Action = [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream"
       ]
       Resource = [
-        "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-sonnet-4-20250514",
-        "arn:aws:bedrock:${var.aws_region}:*:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4*",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4*"
       ]
     }]
   })

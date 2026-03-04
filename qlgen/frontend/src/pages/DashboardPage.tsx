@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Button, Tag, Space, Modal, Table } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
@@ -338,8 +339,8 @@ const DashboardPage: React.FC = () => {
               <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
               <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
             </div>
-            <Table
-              columns={getModalColumns('pipeline_runs')}
+            <Table<PipelineRun>
+              columns={getModalColumns('pipeline_runs') as ColumnsType<PipelineRun>}
               dataSource={runsList}
               rowKey="id"
               pagination={false}
@@ -348,8 +349,8 @@ const DashboardPage: React.FC = () => {
             />
           </>
         ) : (
-          <Table
-            columns={getModalColumns(statsModalTile)}
+          <Table<ICPStat>
+            columns={getModalColumns(statsModalTile) as ColumnsType<ICPStat>}
             dataSource={icpStats}
             rowKey="icp_id"
             loading={statsLoading}
