@@ -22,41 +22,52 @@ make stop                 # Stop both services
 make status               # Check if services are running
 make logs                 # Tail backend + frontend logs
 
+# Docker (full stack alternative)
+docker compose up -d      # Start all services (db + backend + frontend)
+
 # Database
 make migrate-create MSG="description"   # Create new Alembic migration
-cd backend && backend/venv/bin/alembic upgrade head   # Apply migrations directly
+make migrate                            # Apply pending migrations
+cd backend && ../backend/venv/bin/alembic upgrade head  # Apply migrations directly
 
 # Frontend
 cd frontend && npm run dev              # Vite dev server
-cd frontend && npm run build            # Production build
+cd frontend && npm run build            # Production build (runs tsc -b first)
 cd frontend && npx tsc --noEmit         # Type check only
+cd frontend && npm run lint             # ESLint (TypeScript + React hooks)
 ```
 
-There is no test suite configured. The `backend/tests/` directory exists but is empty. No linter or formatter is configured for the backend.
+There is no test suite configured. The `backend/tests/` directory exists but is empty. No linter or formatter is configured for the backend. The frontend has ESLint 9 configured with TypeScript and React hooks plugins.
 
 ## Architecture
 
-**Backend** (`backend/app/`): Async FastAPI application. All routes are under `/api/v1`.
+**Backend** (`backend/app/`): Async FastAPI application (Python 3.11+). All routes are under `/api/v1`.
 
 - `main.py` — App creation, CORS middleware, router inclusion
 - `config.py` — Pydantic Settings loading env vars from `.env`
-- `api/` — Route handlers: `icp.py` (CRUD), `pipeline.py` (run + SSE stream), `leads.py` (results + export), `health.py`
+- `api/` — Route handlers: `icp.py` (CRUD + import), `pipeline.py` (run + SSE stream), `leads.py` (results + export), `health.py`
 - `api/router.py` — Aggregates all sub-routers into one
-- `models/` — SQLAlchemy async ORM: `ICPConfig`, `PipelineRun`, `Company`, `Contact`, `BANTScore`. All use UUIDs. Config/raw data stored as JSONB.
+- `models/` — SQLAlchemy async ORM: `ICPConfig`, `PipelineRun`, `PipelineLog`, `Company`, `Contact`, `BANTScore`. All use UUIDs. Config/raw data stored as JSONB.
 - `schemas/` — Pydantic request/response models
 - `services/pipeline_service.py` — Core orchestration: fetches ICP, creates agent, runs it in a thread pool, parses JSON output, saves companies/contacts/BANT to DB, emits SSE events
 - `services/export_service.py` — Generates styled XLSX (openpyxl) and CSV exports
-- `agent/lead_gen_agent.py` — Creates the Strands agent with system prompt defining 4 stages. Includes callback handler that emits SSE events (`stage_update`, `tool_start`, `agent_reasoning`, `completed`, `error`)
+- `services/icp_import_service.py` — Excel template generation and multi-ICP parsing from uploaded spreadsheets
+- `agent/lead_gen_agent.py` — Creates the Strands agent with system prompt defining 4 stages. Includes callback handler that emits SSE events (`stage_update`, `tool_start`, `agent_reasoning`, `completed`, `error`). This is the largest backend file.
 - `agent/prompt_builder.py` — Converts ICP config JSON into a human-readable prompt with all 8 ICP dimensions
 - `tools/` — 9 tools decorated with Strands `@tool`: `apollo_tool.py` (company + people search), `exa_tool.py`, `hunter_tool.py` (domain + email), `lusha_tool.py`, `tavily_tool.py`, `duckduckgo_tool.py`, `web_scraper_tool.py`
 - `db/session.py` — Async SQLAlchemy engine + session factory using asyncpg
 
-**Frontend** (`frontend/src/`): React 19 + TypeScript + Vite + Ant Design + TailwindCSS.
+**Frontend** (`frontend/src/`): React 19 + TypeScript + Vite + Ant Design 6 + TailwindCSS 4.
 
-- `App.tsx` — React Router routes and layout
-- `pages/` — `DashboardPage`, `ICPListPage`, `ICPConfigPage` (9-step wizard), `PipelinePage` (SSE progress), `LeadsPage` (results + export)
+- `App.tsx` — React Router routes (7 routes) and Ant Design ConfigProvider
+- `components/layout/AppLayout.tsx` — Sidebar navigation and header
+- `pages/` — `WelcomePage`, `DashboardPage`, `ICPListPage`, `ICPConfigPage` (9-step wizard), `PipelinePage` (SSE progress + activity log), `LeadsPage` (results table + BANT expansion + export)
 - `api/client.ts` — Axios instance using `VITE_API_BASE_URL` env var
 - `api/` — `icpApi.ts`, `pipelineApi.ts`, `leadsApi.ts`
+- `types/index.ts` — All TypeScript interfaces (ICPConfig, PipelineRun, Company, Contact, BANTScore, etc.)
+- `styles/theme.css` — Custom CSS variables and component overrides
+
+The Vite dev server proxies `/api` requests to `http://localhost:8000`, so during development the frontend can use relative API paths.
 
 **Infrastructure** (`infra/`): Terraform modules for AWS deployment — VPC/networking, Secrets Manager, RDS PostgreSQL, ECS Fargate (backend), CloudFront + S3 (frontend).
 
@@ -66,13 +77,13 @@ There is no test suite configured. The `backend/tests/` directory exists but is 
 2. `POST /api/v1/pipeline/run` creates a `PipelineRun` record and starts `execute_pipeline` as a background task
 3. Frontend connects to `GET /api/v1/pipeline/{run_id}/stream` for SSE
 4. `PipelineService` creates a Strands agent, runs it in a thread pool executor. The agent calls tools across 4 stages and returns structured JSON.
-5. JSON is parsed → `Company`, `Contact`, `BANTScore` records saved to DB
+5. JSON is parsed → `Company`, `Contact`, `BANTScore` records saved to DB. SSE events are also persisted to `pipeline_logs` for replay.
 6. Callback handler pushes SSE events to the frontend throughout execution
 7. `GET /api/v1/leads/{run_id}/companies` returns results; export endpoint generates XLSX/CSV
 
 ## Database
 
-PostgreSQL 16 with pgvector extension. Schema managed by Alembic (single migration so far). Relationships: `PipelineRun` → `Company` → `Contact` + `BANTScore`, all with cascade delete. ICP deletion is soft (`is_active=False`).
+PostgreSQL 16 with pgvector extension (Docker image: `pgvector/pgvector:pg16`). Schema managed by Alembic (2 migrations). Relationships: `PipelineRun` → `Company` → `Contact` + `BANTScore`, all with cascade delete. ICP deletion is soft (`is_active=False`).
 
 Connection strings configured via `DATABASE_URL` (async, uses `postgresql+asyncpg://`) and `DATABASE_URL_SYNC` (for Alembic, uses `postgresql://`).
 

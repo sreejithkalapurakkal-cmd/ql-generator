@@ -1,35 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Button, Tag, Empty, Space, Modal, Table } from 'antd';
-import { PlusOutlined, CloseOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
 import { listPipelineRuns, getPipelineStatsByICP, ICPStat } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
 
-const WELCOME_DISMISSED_KEY = 'qlgen_welcome_dismissed';
-
-const HOW_IT_WORKS = [
-  { step: '1', title: 'Define ICP', desc: 'Configure your ideal customer profile across 8 dimensions — industry, size, tech stack, and more.' },
-  { step: '2', title: 'Run Pipeline', desc: 'Our AI agent searches 9 data sources autonomously to discover and qualify leads.' },
-  { step: '3', title: 'Review Leads', desc: 'Get BANT-scored companies with verified decision-maker contacts.' },
-  { step: '4', title: 'Export & Act', desc: 'Download qualified leads as Excel or CSV and start outreach.' },
-];
-
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
-
-const TILE_LABELS: Record<TileKey, string> = {
-  total_leads: 'Total Leads',
-  pipeline_runs: 'Pipeline Runs',
-  companies: 'Companies Found',
-  contacts: 'Contacts Found',
-};
 
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<PipelineRun[]>([]);
-  const [welcomeDismissed, setWelcomeDismissed] = useState(
-    () => localStorage.getItem(WELCOME_DISMISSED_KEY) === 'true'
-  );
 
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
@@ -57,11 +38,6 @@ const DashboardPage: React.FC = () => {
     failed: 'error',
   };
 
-  const dismissWelcome = () => {
-    localStorage.setItem(WELCOME_DISMISSED_KEY, 'true');
-    setWelcomeDismissed(true);
-  };
-
   const openStatsModal = async (tile: TileKey) => {
     setStatsModalTile(tile);
     setStatsModalOpen(true);
@@ -76,16 +52,81 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  const statsColumns = [
-    { title: 'ICP Name', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
-    { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
-    { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 110 },
-    { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
-    {
-      title: 'Total Leads', key: 'total_leads', width: 110,
-      render: (_: unknown, record: ICPStat) => record.total_companies + record.total_contacts,
-    },
-  ];
+  const MODAL_TITLES: Record<TileKey, string> = {
+    total_leads: 'Total Leads - By Search Criteria',
+    pipeline_runs: 'Searches - Overview',
+    companies: 'Companies Found - By Search Criteria',
+    contacts: 'Contacts Found - By Search Criteria',
+  };
+
+  const getModalColumns = (tile: TileKey) => {
+    if (tile === 'pipeline_runs') {
+      return [
+        {
+          title: 'Search Criteria', key: 'icp_name', width: 180,
+          render: (_: unknown, r: PipelineRun) => <span style={{ fontWeight: 600 }}>{r.icp_name || 'Unknown'}</span>,
+        },
+        {
+          title: 'Status', dataIndex: 'status', key: 'status', width: 100,
+          render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s.toUpperCase()}</Tag>,
+        },
+        { title: 'Leads', dataIndex: 'contacts_found', key: 'contacts_found', width: 100 },
+        { title: 'Companies', dataIndex: 'companies_found', key: 'companies_found', width: 100 },
+        {
+          title: 'Started', dataIndex: 'started_at', key: 'started_at',
+          render: (d: string | null) => d ? new Date(d).toLocaleString() : '—',
+        },
+        {
+          title: '', key: 'action', width: 80,
+          render: (_: unknown, r: PipelineRun) => r.status === 'completed' ? (
+            <a onClick={() => { setStatsModalOpen(false); navigate(`/leads/${r.id}`); }}
+              style={{ color: 'var(--purple)', cursor: 'pointer', fontSize: 12 }}>View →</a>
+          ) : null,
+        },
+      ];
+    }
+    if (tile === 'companies') {
+      return [
+        { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        {
+          title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 120,
+          render: (v: number) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{v}</span>,
+        },
+        { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
+        { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+        {
+          title: 'Avg / Run', key: 'avg', width: 100,
+          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_companies / record.run_count).toFixed(1) : '—',
+        },
+      ];
+    }
+    if (tile === 'contacts') {
+      return [
+        { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        {
+          title: 'Leads', dataIndex: 'total_contacts', key: 'total_contacts', width: 120,
+          render: (v: number) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{v}</span>,
+        },
+        { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 100 },
+        { title: 'Searches', dataIndex: 'run_count', key: 'run_count', width: 80 },
+        {
+          title: 'Avg / Run', key: 'avg', width: 100,
+          render: (_: unknown, record: ICPStat) => record.run_count > 0 ? (record.total_contacts / record.run_count).toFixed(1) : '—',
+        },
+      ];
+    }
+    // total_leads (default)
+    return [
+      { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+      {
+        title: 'Total Leads', key: 'total_leads', width: 120,
+        render: (_: unknown, record: ICPStat) => <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--purple)' }}>{record.total_companies + record.total_contacts}</span>,
+      },
+      { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 110 },
+      { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 100 },
+      { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 80 },
+    ];
+  };
 
   const expandedRowRender = (stat: ICPStat) => {
     const runColumns = [
@@ -113,95 +154,44 @@ const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div>
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Overview</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="page-title">Dashboard</h1>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-            New Run
+            New Search
           </Button>
         </div>
       </div>
 
-      {/* Welcome Banner */}
-      {!welcomeDismissed && (
-        <div style={{
-          background: 'linear-gradient(135deg, var(--purple-pale) 0%, #fff 100%)',
-          border: '1px solid var(--g200)',
-          borderRadius: 'var(--radius)',
-          padding: '24px 28px',
-          marginBottom: 24,
-          position: 'relative',
-        }}>
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            onClick={dismissWelcome}
-            style={{ position: 'absolute', top: 12, right: 12, color: 'var(--g400)' }}
-          />
-          <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--g900)', margin: '0 0 4px' }}>
-            Welcome to qlGen
-          </h2>
-          <p style={{ fontSize: 13, color: 'var(--g600)', margin: '0 0 20px', lineHeight: 1.6, maxWidth: 620 }}>
-            AI-powered qualified lead generation. Define your Ideal Customer Profile, and our AI agent
-            autonomously discovers companies, finds decision-maker contacts, enriches their data, and
-            scores each lead using the BANT framework.
-          </p>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            {HOW_IT_WORKS.map((item) => (
-              <div key={item.step} style={{ flex: '1 1 140px', minWidth: 140 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: '50%',
-                  background: 'var(--purple)', color: '#fff',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 700, marginBottom: 8,
-                }}>
-                  {item.step}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--g800)' }}>{item.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 2, lineHeight: 1.5 }}>{item.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={12} md={6}>
-          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('total_leads')}>
-            <div className="metric-icon">🎯</div>
-            <div className="label">Total Leads</div>
-            <div className="value">{totalCompanies + totalContacts}</div>
-          </div>
-        </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={12} md={8}>
           <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('pipeline_runs')}>
             <div className="metric-icon">📈</div>
-            <div className="label">Pipeline Runs</div>
+            <div className="label">Total Searches</div>
             <div className="value">{runsList.length}</div>
           </div>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
+            <div className="metric-icon">👥</div>
+            <div className="label">Qualified Leads</div>
+            <div className="value">{totalContacts}</div>
+          </div>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
           <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('companies')}>
             <div className="metric-icon">🏢</div>
             <div className="label">Companies Found</div>
             <div className="value">{totalCompanies}</div>
           </div>
         </Col>
-        <Col xs={12} sm={12} md={6}>
-          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
-            <div className="metric-icon">👥</div>
-            <div className="label">Contacts Found</div>
-            <div className="value">{totalContacts}</div>
-          </div>
-        </Col>
       </Row>
 
       <div style={{ marginBottom: 16 }}>
         <div className="section-label">Recent Activity</div>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Runs</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Searches</h2>
       </div>
 
       {runsList.length > 0 ? (
@@ -215,31 +205,87 @@ const DashboardPage: React.FC = () => {
                   if (run.status === 'completed') navigate(`/leads/${run.id}`);
                   else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
                 }}
-                onMouseEnter={(e) => {
-                  if (run.status === 'failed') {
-                    e.currentTarget.style.transform = 'none';
-                    e.currentTarget.style.boxShadow = 'var(--shadow)';
-                  }
-                }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 8 }}>
-                  <div className="fw-600" style={{ fontSize: 15, color: 'var(--g900)', letterSpacing: '-0.2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
-                    {run.icp_name || `Run #${run.id.substring(0, 8)}`}
-                  </div>
-                  <Tag color={statusColor[run.status] || 'default'}>{run.status.toUpperCase()}</Tag>
+                {/* Header: name + status badge */}
+                <div className="rc-header">
+                  <div className="rc-title">{run.icp_name || `Run #${run.id.substring(0, 8)}`}</div>
+                  <Tag color={statusColor[run.status] || 'default'} style={{ fontSize: 11, height: 22 }}>
+                    {run.status.toUpperCase()}
+                  </Tag>
                 </div>
-                <div className="text-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-                  {run.started_at ? new Date(run.started_at).toLocaleDateString() : 'Not started'}
+
+                {/* Date + offering snippet */}
+                <div className="rc-meta">
+                  <span className="rc-date">
+                    🗓 {run.started_at ? new Date(run.started_at).toLocaleDateString() : 'Not started'}
+                  </span>
+                  {run.icp_description && (
+                    <span className="rc-offering" title={run.icp_description}>
+                      {run.icp_description}
+                    </span>
+                  )}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div className="text-muted" style={{ fontSize: 12 }}>
-                    {run.companies_found} companies, {run.contacts_found} contacts
+
+                {/* Emphasized stats row */}
+                <div className="rc-stats">
+                  <div className="rc-stat">
+                    <div className="rc-stat-val">{run.companies_found}</div>
+                    <div className="rc-stat-lbl">Companies</div>
                   </div>
+                  <div className="rc-stat-div"></div>
+                  <div className="rc-stat">
+                    <div className="rc-stat-val">{run.contacts_found}</div>
+                    <div className="rc-stat-lbl">Contacts</div>
+                  </div>
+                </div>
+
+                {/* ICP details */}
+                {run.icp_config && (
+                  <div className="rc-icp-block">
+                    {run.icp_config.regions?.countries && run.icp_config.regions.countries.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">📍 Regions</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.regions.countries.slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {run.icp_config.industry_types && run.icp_config.industry_types.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">🏭 Industries</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.industry_types.map(i => i.vertical).slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {run.icp_config.personas && run.icp_config.personas.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">👤 Roles</span>
+                        <span className="rc-icp-val">
+                          {run.icp_config.personas.map(p => p.job_title).slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Footer actions */}
+                <div className="rc-footer">
+                  <Button
+                    size="small"
+                    className="rc-edit-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/icp/${run.icp_config_id}/edit`);
+                    }}
+                  >
+                    ✏ Edit Search
+                  </Button>
                   {run.status === 'completed' && (
-                    <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 500 }}>View →</span>
+                    <span className="rc-view-link">View Results →</span>
                   )}
                   {run.status === 'running' && (
-                    <span style={{ fontSize: 12, color: 'var(--orange)', fontWeight: 500 }}>Progress →</span>
+                    <span className="rc-view-link" style={{ color: 'var(--orange)' }}>View Progress →</span>
                   )}
                 </div>
               </div>
@@ -250,49 +296,59 @@ const DashboardPage: React.FC = () => {
         <Card style={{ textAlign: 'center', padding: '20px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
           <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--g900)' }}>
-            Get Started with Your First Run
+            Get Started with Your First Search
           </h3>
           <p style={{ color: 'var(--g500)', marginBottom: 24, maxWidth: 460, margin: '0 auto 24px', fontSize: 13, lineHeight: 1.6 }}>
-            Create an Ideal Customer Profile to define your target market, then our AI agent will
+            Define your search criteria to set your target market, then our AI agent will
             autonomously find and qualify leads matching your criteria.
           </p>
           <Space size="middle" direction="vertical" style={{ width: '100%' }}>
             <Space size="middle">
               <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
-                Create Your First ICP
+                Create Your First Search
               </Button>
             </Space>
-            <div style={{ fontSize: 13, color: 'var(--g400)', marginTop: 4 }}>
-              or{' '}
-              <span
-                style={{ color: 'var(--purple)', cursor: 'pointer', fontWeight: 500 }}
-                onClick={() => navigate('/icp?import=true')}
-              >
-                import ICPs from an Excel spreadsheet
-              </span>
-            </div>
           </Space>
         </Card>
       )}
 
       {/* Stats Breakdown Modal */}
       <Modal
-        title={`${TILE_LABELS[statsModalTile]} — Breakdown by ICP`}
+        title={MODAL_TITLES[statsModalTile]}
         open={statsModalOpen}
         onCancel={() => setStatsModalOpen(false)}
         footer={null}
         width={800}
       >
-        <Table
-          columns={statsColumns}
-          dataSource={icpStats}
-          rowKey="icp_id"
-          loading={statsLoading}
-          expandable={{ expandedRowRender }}
-          pagination={false}
-          size="middle"
-          locale={{ emptyText: 'No pipeline runs found' }}
-        />
+        {statsModalTile === 'pipeline_runs' ? (
+          <>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+              <Tag color="success">{completedRuns.length} Completed</Tag>
+              <Tag color="processing">{runsList.filter(r => r.status === 'running').length} Running</Tag>
+              <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
+              <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
+            </div>
+            <Table
+              columns={getModalColumns('pipeline_runs')}
+              dataSource={runsList}
+              rowKey="id"
+              pagination={false}
+              size="middle"
+              locale={{ emptyText: 'No searches found' }}
+            />
+          </>
+        ) : (
+          <Table
+            columns={getModalColumns(statsModalTile)}
+            dataSource={icpStats}
+            rowKey="icp_id"
+            loading={statsLoading}
+            expandable={{ expandedRowRender }}
+            pagination={false}
+            size="middle"
+            locale={{ emptyText: 'No searches found' }}
+          />
+        )}
       </Modal>
     </div>
   );

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, theme } from 'antd';
 import AppLayout from './components/layout/AppLayout';
+import WelcomePage from './pages/WelcomePage';
 import DashboardPage from './pages/DashboardPage';
 import ICPConfigPage from './pages/ICPConfigPage';
 import ICPListPage from './pages/ICPListPage';
@@ -25,7 +26,8 @@ function App() {
       <BrowserRouter>
         <AppLayout>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" />} />
+            <Route path="/" element={<Navigate to="/welcome" />} />
+            <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/icp/new" element={<ICPConfigPage />} />
             <Route path="/icp/:id/edit" element={<ICPConfigPage />} />

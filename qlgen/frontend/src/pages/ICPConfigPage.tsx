@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Steps, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Divider } from 'antd';
+import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert } from 'antd';
+import { UploadOutlined, FileExcelOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { createICP, getICP, updateICP } from '../api/icpApi';
+import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
 import { ICPDefinition, DEFAULT_ICP } from '../types';
 
@@ -59,6 +60,31 @@ const ICPConfigPage: React.FC = () => {
   const [config, setConfig] = useState<ICPDefinition>({ ...DEFAULT_ICP });
   const [saving, setSaving] = useState(false);
   const [tagInput, setTagInput] = useState<Record<string, string>>({});
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importParsing, setImportParsing] = useState(false);
+
+  const handleImportUpload = async (file: File) => {
+    setImportParsing(true);
+    try {
+      const res = await parseICPUpload(file);
+      const parsed = Array.isArray(res.data) ? res.data : [];
+      if (parsed.length > 0) {
+        const icp = parsed[0];
+        if (icp.name) setName(icp.name);
+        if (icp.description) setDescription(icp.description);
+        if (icp.config) setConfig(icp.config as unknown as ICPDefinition);
+        message.success('Search criteria imported — review and edit below');
+        setImportModalOpen(false);
+      } else {
+        message.error('No ICP data found in uploaded file');
+      }
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || 'Failed to parse Excel file');
+    } finally {
+      setImportParsing(false);
+    }
+    return false;
+  };
 
   useEffect(() => {
     if (id) {
@@ -97,11 +123,30 @@ const ICPConfigPage: React.FC = () => {
       title: 'Offering',
       content: (
         <Form layout="vertical">
-          <Form.Item label="ICP Name" required>
+          {!id && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<FileExcelOutlined />}
+              message="Have your search criteria in a spreadsheet?"
+              description={
+                <Space size="middle" style={{ marginTop: 4 }}>
+                  <Button size="small" icon={<UploadOutlined />} onClick={() => setImportModalOpen(true)}>
+                    Import from Excel
+                  </Button>
+                  <a href={getICPTemplateURL()} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+                    <DownloadOutlined /> Download Template
+                  </a>
+                </Space>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          <Form.Item label="Name" required>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., MidMarket US ECommerce 2026" />
           </Form.Item>
           <Form.Item label="Description">
-            <TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Brief description of this ICP..." />
+            <TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Brief description of this search criteria..." />
           </Form.Item>
           <TagInputField
             label="Target Offerings / Service Areas"
@@ -301,7 +346,7 @@ const ICPConfigPage: React.FC = () => {
       title: 'Review',
       content: (
         <div>
-          <Descriptions title="ICP Summary" bordered column={2} size="small">
+          <Descriptions title="Summary" bordered column={2} size="small">
             <Descriptions.Item label="Name" span={2}>{name || '(unnamed)'}</Descriptions.Item>
             <Descriptions.Item label="Description" span={2}>{description || '-'}</Descriptions.Item>
             <Descriptions.Item label="Target Offerings" span={2}>{config.target_offering.join(', ') || '-'}</Descriptions.Item>
@@ -341,7 +386,7 @@ const ICPConfigPage: React.FC = () => {
         const res = await createICP({ name, description, config: config as unknown as Record<string, unknown> });
         icpId = res.data.id;
       }
-      message.success('ICP saved successfully');
+      message.success('Search criteria saved successfully');
 
       if (runPipeline && icpId) {
         const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 15, max_contacts_per_company: 5 } });
@@ -357,27 +402,92 @@ const ICPConfigPage: React.FC = () => {
   };
 
   return (
-    <Card title={id ? 'Edit ICP Configuration' : 'New ICP Configuration'}>
-      <Steps current={current} items={steps.map((s) => ({ title: s.title }))} style={{ marginBottom: 32 }} size="small" />
-      <div style={{ minHeight: 300, padding: '16px 0' }}>{steps[current].content}</div>
-      <Divider />
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <div>
-          {current > 0 && <Button onClick={() => setCurrent((c) => c - 1)}>Previous</Button>}
-        </div>
-        <Space>
-          {current < steps.length - 1 && (
-            <Button type="primary" onClick={() => setCurrent((c) => c + 1)}>Next</Button>
-          )}
-          {current === steps.length - 1 && (
-            <>
-              <Button onClick={() => handleSave(false)} loading={saving}>Save Only</Button>
-              <Button type="primary" onClick={() => handleSave(true)} loading={saving}>Save & Run Pipeline</Button>
-            </>
-          )}
-        </Space>
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div className="section-label">Search Criteria Configuration</div>
+        <h1 className="page-title">{id ? 'Edit Search Criteria' : 'New Search Criteria'}</h1>
       </div>
-    </Card>
+
+      <div className="builder-layout">
+        {/* Left Side Stepper */}
+        <div className="builder-stepper">
+          {steps.map((step, index) => (
+            <div
+              key={index}
+              className={`builder-step ${index === current ? 'active' : index < current ? 'complete' : ''}`}
+              onClick={() => setCurrent(index)}
+            >
+              <div className="builder-step-num">
+                {index < current ? '✓' : index + 1}
+              </div>
+              <div className="builder-step-label">{step.title}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Right Side Form */}
+        <div className="builder-form">
+          <Card>
+            <div style={{ minHeight: 300 }}>{steps[current].content}</div>
+            <div className="builder-nav">
+              <div>
+                {current > 0 && <Button onClick={() => setCurrent((c) => c - 1)}>Previous</Button>}
+              </div>
+              <Space>
+                {current < steps.length - 1 && (
+                  <Button type="primary" onClick={() => setCurrent((c) => c + 1)}>Next</Button>
+                )}
+                {current === steps.length - 1 && (
+                  <>
+                    <Button onClick={() => handleSave(false)} loading={saving}>Save Only</Button>
+                    <Button type="primary" onClick={() => handleSave(true)} loading={saving}>Save & Run Search</Button>
+                  </>
+                )}
+              </Space>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FileExcelOutlined style={{ color: 'var(--green)', fontSize: 18 }} />
+            <span>Import Search Criteria from Excel</span>
+          </div>
+        }
+        open={importModalOpen}
+        onCancel={() => setImportModalOpen(false)}
+        footer={null}
+        width={480}
+      >
+        <p style={{ color: 'var(--g600)', fontSize: 13, margin: '0 0 16px' }}>
+          Upload a filled template to pre-fill the wizard. You can review and edit all fields before saving.
+        </p>
+        <Upload.Dragger
+          accept=".xlsx"
+          showUploadList={false}
+          customRequest={({ file }) => handleImportUpload(file as File)}
+          disabled={importParsing}
+        >
+          {importParsing ? (
+            <div style={{ padding: 20 }}>
+              <Spin size="large" />
+              <p style={{ marginTop: 12, color: 'var(--g500)' }}>Parsing...</p>
+            </div>
+          ) : (
+            <div style={{ padding: 20 }}>
+              <p className="ant-upload-drag-icon">
+                <FileExcelOutlined style={{ fontSize: 36, color: 'var(--green)' }} />
+              </p>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--g800)' }}>
+                Click or drag your .xlsx file here
+              </p>
+            </div>
+          )}
+        </Upload.Dragger>
+      </Modal>
+    </div>
   );
 };
 
