@@ -14,7 +14,7 @@ if config.config_file_name is not None:
 
 # Import all models so Alembic can detect them
 from app.db.base import Base
-from app.models import ICPConfig, Company, Contact, BANTScore, PipelineRun
+from app.models import ICPConfig, Company, Contact, BANTScore, PipelineRun, PipelineLog
 
 target_metadata = Base.metadata
 

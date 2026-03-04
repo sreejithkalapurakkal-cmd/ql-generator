@@ -12,7 +12,14 @@ function App() {
     <ConfigProvider
       theme={{
         algorithm: theme.defaultAlgorithm,
-        token: { colorPrimary: '#1F4E79', borderRadius: 8 },
+        token: {
+          colorPrimary: '#5C2D8F',
+          colorSuccess: '#1E9B6B',
+          colorWarning: '#E0820A',
+          colorError: '#D93025',
+          borderRadius: 10,
+          fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        },
       }}
     >
       <BrowserRouter>

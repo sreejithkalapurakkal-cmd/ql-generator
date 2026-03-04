@@ -16,6 +16,7 @@ from app.models.icp import ICPConfig
 from app.models.company import Company
 from app.models.contact import Contact
 from app.models.bant import BANTScore
+from app.models.pipeline_log import PipelineLog
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +97,12 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
 
             # Create agent with callback handler for real-time progress
             logger.info(f"Creating agent for pipeline run {run_id}")
+            event_collector = []
             callback_handler = None
             if events is not None:
-                callback_handler = create_pipeline_callback_handler(events, run_id_str)
+                callback_handler = create_pipeline_callback_handler(events, run_id_str, event_collector)
+            else:
+                callback_handler = create_pipeline_callback_handler({}, run_id_str, event_collector)
             agent = create_lead_gen_agent(callback_handler=callback_handler)
             prompt = build_pipeline_prompt(icp, options)
 
@@ -171,16 +175,30 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
                         company_id=company.id,
                         budget_score=bant_data.get("budget_score"),
                         budget_reason=bant_data.get("budget_reason"),
+                        budget_sources=bant_data.get("budget_sources"),
                         authority_score=bant_data.get("authority_score"),
                         authority_reason=bant_data.get("authority_reason"),
+                        authority_sources=bant_data.get("authority_sources"),
                         need_score=bant_data.get("need_score"),
                         need_reason=bant_data.get("need_reason"),
+                        need_sources=bant_data.get("need_sources"),
                         timing_score=bant_data.get("timing_score"),
                         timing_reason=bant_data.get("timing_reason"),
+                        timing_sources=bant_data.get("timing_sources"),
                         total_score=bant_data.get("total_score"),
                         overall_summary=bant_data.get("overall_summary"),
                     )
                     db.add(bant)
+
+            # Persist agent logs
+            for seq, event_data in enumerate(event_collector):
+                log = PipelineLog(
+                    pipeline_run_id=run_id,
+                    event_type=event_data.get("type", "unknown"),
+                    event_data=event_data,
+                    sequence_number=seq,
+                )
+                db.add(log)
 
             # Mark completed
             run.status = "completed"
@@ -204,6 +222,17 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
             logger.error(f"Pipeline {run_id} failed: {e}\n{traceback.format_exc()}")
             run.status = "failed"
             run.error_log = f"{str(e)}\n{traceback.format_exc()}"
+
+            # Persist collected logs even on failure
+            for seq, event_data in enumerate(event_collector):
+                log = PipelineLog(
+                    pipeline_run_id=run_id,
+                    event_type=event_data.get("type", "unknown"),
+                    event_data=event_data,
+                    sequence_number=seq,
+                )
+                db.add(log)
+
             await db.commit()
 
             _emit_event(events, run_id_str, {

@@ -17,6 +17,9 @@ class PipelineRunRequest(BaseModel):
 class PipelineRunResponse(BaseModel):
     id: UUID
     icp_config_id: UUID
+    icp_name: Optional[str] = None
+    icp_description: Optional[str] = None
+    icp_config: Optional[dict] = None
     status: str
     current_stage: Optional[str]
     companies_found: int
@@ -24,6 +27,18 @@ class PipelineRunResponse(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     error_log: Optional[str] = None
+    estimated_duration_seconds: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PipelineLogResponse(BaseModel):
+    id: UUID
+    event_type: str
+    event_data: dict
+    sequence_number: int
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

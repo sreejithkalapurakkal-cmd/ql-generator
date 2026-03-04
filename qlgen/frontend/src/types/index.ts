@@ -44,6 +44,9 @@ export interface ICPDefinition {
 export interface PipelineRun {
   id: string;
   icp_config_id: string;
+  icp_name?: string | null;
+  icp_description?: string | null;
+  icp_config?: Record<string, unknown> | null;
   status: string;
   current_stage: string | null;
   companies_found: number;
@@ -51,6 +54,21 @@ export interface PipelineRun {
   started_at: string | null;
   completed_at: string | null;
   error_log?: string | null;
+  estimated_duration_seconds?: number | null;
+}
+
+export interface PipelineLogEntry {
+  id: string;
+  event_type: string;
+  event_data: Record<string, unknown>;
+  sequence_number: number;
+  created_at: string;
+}
+
+export interface BANTSourceCitation {
+  url: string;
+  title?: string | null;
+  tool?: string | null;
 }
 
 export interface Contact {
@@ -73,12 +91,16 @@ export interface BANTScore {
   id: string;
   budget_score: number | null;
   budget_reason: string | null;
+  budget_sources?: BANTSourceCitation[] | null;
   authority_score: number | null;
   authority_reason: string | null;
+  authority_sources?: BANTSourceCitation[] | null;
   need_score: number | null;
   need_reason: string | null;
+  need_sources?: BANTSourceCitation[] | null;
   timing_score: number | null;
   timing_reason: string | null;
+  timing_sources?: BANTSourceCitation[] | null;
   total_score: number | null;
   overall_summary: string | null;
 }

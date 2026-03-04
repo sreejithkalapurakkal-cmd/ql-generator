@@ -23,16 +23,26 @@ class ContactResponse(BaseModel):
         from_attributes = True
 
 
+class BANTSourceCitation(BaseModel):
+    url: str
+    title: Optional[str] = None
+    tool: Optional[str] = None
+
+
 class BANTScoreResponse(BaseModel):
     id: UUID
     budget_score: Optional[int]
     budget_reason: Optional[str]
+    budget_sources: Optional[List[BANTSourceCitation]] = None
     authority_score: Optional[int]
     authority_reason: Optional[str]
+    authority_sources: Optional[List[BANTSourceCitation]] = None
     need_score: Optional[int]
     need_reason: Optional[str]
+    need_sources: Optional[List[BANTSourceCitation]] = None
     timing_score: Optional[int]
     timing_reason: Optional[str]
+    timing_sources: Optional[List[BANTSourceCitation]] = None
     total_score: Optional[int]
     overall_summary: Optional[str]
 
