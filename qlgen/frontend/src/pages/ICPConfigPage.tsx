@@ -390,7 +390,7 @@ const ICPConfigPage: React.FC = () => {
       message.success('Search criteria saved successfully');
 
       if (runPipeline && icpId) {
-        const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 15, max_contacts_per_company: 5 } });
+        const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5 } });
         navigate(`/pipeline/${runRes.data.id}`);
       } else {
         navigate('/icp');

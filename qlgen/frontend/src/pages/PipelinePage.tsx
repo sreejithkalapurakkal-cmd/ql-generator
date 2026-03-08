@@ -92,7 +92,7 @@ const friendlyErrorMessage = (_toolName: string, error: string): string => {
 
 interface ActivityEntry {
   id: number;
-  type: 'tool_start' | 'agent_reasoning' | 'stage_update' | 'tool_result' | 'tool_error';
+  type: 'tool_start' | 'agent_reasoning' | 'stage_update' | 'tool_result' | 'tool_error' | 'company_start';
   timestamp: Date;
   // tool_start fields
   toolName?: string;
@@ -110,6 +110,10 @@ interface ActivityEntry {
   success?: boolean;
   // tool_error fields
   errorMessage?: string;
+  // company_start fields
+  companyName?: string;
+  companyIndex?: number;
+  totalCompanies?: number;
 }
 
 const PipelinePage: React.FC = () => {
@@ -162,6 +166,9 @@ const PipelinePage: React.FC = () => {
           resultPreview: log.event_data.result_preview as string | undefined,
           success: log.event_data.success as boolean | undefined,
           errorMessage: log.event_data.error_message as string | undefined,
+          companyName: log.event_data.company_name as string | undefined,
+          companyIndex: log.event_data.company_index as number | undefined,
+          totalCompanies: log.event_data.total_companies as number | undefined,
         }));
         setActivityLog(entries);
         const toolEntries = entries.filter(e => e.type === 'tool_start');
@@ -237,6 +244,18 @@ const PipelinePage: React.FC = () => {
         toolName: data.tool_name,
         errorMessage: data.error_message,
         stage: data.stage,
+      });
+    });
+
+    es.addEventListener('company_start', (event) => {
+      const data = JSON.parse(event.data);
+      setSseMessage(`Processing ${data.company_name} (${data.company_index}/${data.total_companies})...`);
+      addEntry({
+        type: 'company_start',
+        companyName: data.company_name,
+        companyIndex: data.company_index,
+        totalCompanies: data.total_companies,
+        progress: data.progress,
       });
     });
 
@@ -414,12 +433,26 @@ const PipelinePage: React.FC = () => {
           </div>
         );
 
+      case 'company_start':
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <RocketOutlined style={{ color: '#722ed1' }} />
+            <Text strong style={{ color: '#722ed1' }}>
+              Company {entry.companyIndex}/{entry.totalCompanies}: {entry.companyName}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <ClockCircleOutlined /> {getElapsedTime(entry.timestamp)}
+            </Text>
+          </div>
+        );
+
       default:
         return null;
     }
   };
 
   const getTimelineDotColor = (entry: ActivityEntry) => {
+    if (entry.type === 'company_start') return '#722ed1';
     if (entry.type === 'stage_update') return stageColors[entry.stage || ''] || '#1890ff';
     if (entry.type === 'tool_start') return toolColors[entry.toolName || ''] || '#1890ff';
     if (entry.type === 'tool_result') return '#d9d9d9';
@@ -572,6 +605,9 @@ const PipelinePage: React.FC = () => {
               } else if (entry.type === 'tool_error') {
                 tagClass = 'score';
                 tagText = 'RETRY';
+              } else if (entry.type === 'company_start') {
+                tagClass = 'icp';
+                tagText = 'COMPANY';
               }
 
               let message = '';
@@ -588,6 +624,8 @@ const PipelinePage: React.FC = () => {
                 message = friendlyResultSummary(entry.toolName || '', entry.resultPreview || '');
               } else if (entry.type === 'tool_error') {
                 message = friendlyErrorMessage(entry.toolName || '', entry.errorMessage || '');
+              } else if (entry.type === 'company_start') {
+                message = `Processing company ${entry.companyIndex}/${entry.totalCompanies}: ${entry.companyName}`;
               }
 
               return (

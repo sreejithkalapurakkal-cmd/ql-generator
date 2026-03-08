@@ -113,6 +113,15 @@ async def get_lead_companies(
         response.sort(key=lambda c: (c.bant_score.total_score if c.bant_score and c.bant_score.total_score else 0), reverse=True)
     elif sort_by == "company_name":
         response.sort(key=lambda c: c.name)
+    elif sort_by == "qualification":
+        tier_order = {
+            "verified_match": 0, "potential_match": 1, "weak_match": 2,
+            "best_fit": 3, "good_fit": 4, "possible_fit": 5, "qualified": 6,
+        }
+        response.sort(key=lambda c: (
+            tier_order.get(c.qualification or "", 4),
+            -(c.bant_score.total_score if c.bant_score and c.bant_score.total_score else 0),
+        ))
 
     return response
 

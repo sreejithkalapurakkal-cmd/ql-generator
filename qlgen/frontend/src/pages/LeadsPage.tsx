@@ -5,6 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getLeadCompanies, getExportUrl } from '../api/leadsApi';
 import { getPipelineStatus, getPipelineLogs, deletePipelineRun, startPipeline } from '../api/pipelineApi';
 import { Company, BANTScore, BANTSourceCitation, PipelineRun, PipelineLogEntry } from '../types';
+import { usePageContext } from '../context/PageContextProvider';
 
 const { Text } = Typography;
 
@@ -62,7 +63,12 @@ const BANTDetailPanel: React.FC<{ score: BANTScore }> = ({ score }) => (
 
 const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
   const matchScore = company.icp_match_score;
-  const matchColor = matchScore && matchScore >= 8 ? '#52c41a' : matchScore && matchScore >= 6 ? '#faad14' : '#ff4d4f';
+  // Support both old (1-10) and new (0-100) score ranges
+  const isNewScoring = matchScore != null && matchScore > 10;
+  const matchColor = isNewScoring
+    ? (matchScore >= 70 ? '#52c41a' : matchScore >= 50 ? '#faad14' : '#ff4d4f')
+    : (matchScore && matchScore >= 8 ? '#52c41a' : matchScore && matchScore >= 6 ? '#faad14' : '#ff4d4f');
+  const scoreDisplay = isNewScoring ? `${Math.round(matchScore)}%` : `${matchScore}/10`;
   const techStack = company.tech_stack_json;
   const techItems: string[] = Array.isArray(techStack) ? techStack.map(String) : [];
   const revenue = company.revenue_estimate;
@@ -75,7 +81,7 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
         {matchScore != null && (
           <div>
             <Text type="secondary" style={{ fontSize: 11 }}>Match Score</Text>
-            <div style={{ fontWeight: 700, fontSize: 16, color: matchColor }}>{matchScore}/10</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: matchColor }}>{scoreDisplay}</div>
           </div>
         )}
         {revenueStr && (
@@ -394,6 +400,7 @@ const RunSummaryPanel: React.FC<{ logs: PipelineLogEntry[]; companies: Company[]
 const LeadsPage: React.FC = () => {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
+  const { setCompanyId } = usePageContext();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('bant_score');
@@ -446,6 +453,7 @@ const LeadsPage: React.FC = () => {
     email: string | null;
     phone: string | null;
     bant_score: BANTScore | null;
+    qualification: string | null;
     source: string | null;
     company: Company;
     contact: any;
@@ -466,6 +474,7 @@ const LeadsPage: React.FC = () => {
           email: contact.email,
           phone: contact.phone,
           bant_score: company.bant_score,
+          qualification: company.qualification,
           source: contact.source || company.source,
           company,
           contact,
@@ -484,6 +493,7 @@ const LeadsPage: React.FC = () => {
         email: null,
         phone: null,
         bant_score: company.bant_score,
+        qualification: company.qualification,
         source: company.source,
         company,
         contact: null,
@@ -500,6 +510,15 @@ const LeadsPage: React.FC = () => {
     const t = c.bant_score?.total_score || 0;
     return t >= 12 && t < 16;
   }).length;
+  // New evidence-based classifications
+  const verifiedCount = companies.filter((c) => c.qualification === 'verified_match').length;
+  const potentialCount = companies.filter((c) => c.qualification === 'potential_match').length;
+  const weakCount = companies.filter((c) => c.qualification === 'weak_match').length;
+  // Old classifications for backward compat with previous pipeline runs
+  const bestFitCount = companies.filter((c) => c.qualification === 'best_fit').length;
+  const goodFitCount = companies.filter((c) => c.qualification === 'good_fit').length;
+  const possibleFitCount = companies.filter((c) => c.qualification === 'possible_fit').length;
+  const hasNewClassifications = verifiedCount > 0 || potentialCount > 0 || weakCount > 0;
 
   const columns = [
     { title: '#', dataIndex: 'serial', width: 50 },
@@ -509,6 +528,23 @@ const LeadsPage: React.FC = () => {
       dataIndex: 'bant_score',
       width: 120,
       render: (score: BANTScore | null) => <BANTScoreDisplay score={score} />,
+    },
+    {
+      title: 'Category',
+      dataIndex: 'qualification',
+      width: 110,
+      render: (q: string | null) => {
+        // New evidence-based classifications
+        if (q === 'verified_match') return <Tag color="green">Verified Match</Tag>;
+        if (q === 'potential_match') return <Tag color="blue">Potential Match</Tag>;
+        if (q === 'weak_match') return <Tag color="gold">Weak Match</Tag>;
+        // Old classifications for backward compat
+        if (q === 'best_fit') return <Tag color="green">Best Fit</Tag>;
+        if (q === 'good_fit') return <Tag color="blue">Good Fit</Tag>;
+        if (q === 'possible_fit') return <Tag color="gold">Possible Fit</Tag>;
+        if (q === 'qualified') return <Tag color="default">Qualified</Tag>;
+        return <Tag color="default">{q || 'N/A'}</Tag>;
+      },
     },
     {
       title: 'Website',
@@ -552,7 +588,7 @@ const LeadsPage: React.FC = () => {
                   try {
                     const res = await startPipeline({
                       icp_config_id: pipelineRun.icp_config_id,
-                      options: { max_companies: 15, max_contacts_per_company: 5 },
+                      options: { max_companies: 25, max_contacts_per_company: 5 },
                     });
                     message.success('New search started with same criteria');
                     navigate(`/pipeline/${res.data.id}`);
@@ -609,6 +645,21 @@ const LeadsPage: React.FC = () => {
           </div>
           <div className="lbl">Hot / Warm</div>
         </div>
+        {hasNewClassifications ? (
+          <div className="summary-item">
+            <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
+              {verifiedCount} / {potentialCount} / {weakCount}
+            </div>
+            <div className="lbl">Verified / Potential / Weak</div>
+          </div>
+        ) : (bestFitCount > 0 || goodFitCount > 0 || possibleFitCount > 0) ? (
+          <div className="summary-item">
+            <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
+              {bestFitCount} / {goodFitCount} / {possibleFitCount}
+            </div>
+            <div className="lbl">Best / Good / Possible</div>
+          </div>
+        ) : null}
       </div>
 
       {/* Tabs Navigation */}
@@ -639,8 +690,9 @@ const LeadsPage: React.FC = () => {
           title="Qualified Leads"
           extra={
             <Space>
-              <Select value={sortBy} onChange={setSortBy} style={{ width: 160 }}>
+              <Select value={sortBy} onChange={setSortBy} style={{ width: 170 }}>
                 <Select.Option value="bant_score">Sort by BANT Score</Select.Option>
+                <Select.Option value="qualification">Sort by Category</Select.Option>
                 <Select.Option value="company_name">Sort by Company</Select.Option>
               </Select>
               <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
@@ -654,10 +706,21 @@ const LeadsPage: React.FC = () => {
             dataSource={flatRows}
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
-            scroll={{ x: 1270 }}
+            scroll={{ x: 1380 }}
             expandable={{
               expandedRowKeys,
-              onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as (string | number)[]),
+              onExpandedRowsChange: (keys) => {
+                setExpandedRowKeys(keys as (string | number)[]);
+                // Report expanded company to co-pilot context
+                const lastKey = keys.length > 0 ? String(keys[keys.length - 1]) : null;
+                if (lastKey) {
+                  // Key format is "companyId-contactId" or just "companyId"
+                  const companyId = lastKey.includes('-') ? lastKey.split('-')[0] : lastKey;
+                  setCompanyId(companyId);
+                } else {
+                  setCompanyId(null);
+                }
+              },
               expandedRowRender: (record) => (
                 <div>
                   {record.company && <CompanyInsightsPanel company={record.company} />}

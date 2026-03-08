@@ -6,10 +6,14 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.lead_gen_agent import create_lead_gen_agent, create_pipeline_callback_handler
-from app.agent.prompt_builder import build_pipeline_prompt
+from app.agent.lead_gen_agent import (
+    create_discovery_agent,
+    create_contact_agent,
+    create_bant_agent,
+    create_pipeline_callback_handler,
+)
+from app.agent.prompt_builder import build_discovery_prompt, build_contact_prompt, build_bant_prompt
 from app.db.session import async_session
 from app.models.pipeline import PipelineRun
 from app.models.icp import ICPConfig
@@ -148,7 +152,19 @@ def parse_json_from_agent_result(result) -> dict:
 
 
 async def execute_pipeline(run_id: UUID, events: dict = None):
-    """Main pipeline execution."""
+    """Multi-phase pipeline execution with per-company specialized agents.
+
+    Phase 1 — Discovery: Agent uses discover_icp_companies tool to find 50+ candidates,
+    scores them against ICP, classifies into tiers.
+
+    Phase 2 — Contact Discovery: For each company individually, a Contact Agent finds
+    decision-maker contacts and gathers research data (financials, news, tech signals).
+
+    Phase 3 — BANT Scoring: For each company individually, a BANT Agent produces
+    evidence-based scores using the pre-gathered research data.
+
+    Results are saved to DB incrementally per company for error isolation.
+    """
     run_id_str = str(run_id)
 
     async with async_session() as db:
@@ -170,6 +186,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
 
         icp = icp_config.config_json
         options = run.options or {}
+        event_collector = []
 
         try:
             # Mark pipeline as running
@@ -182,66 +199,169 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
                 "type": "stage_update",
                 "stage": "company_discovery",
                 "progress": 5,
-                "message": "Initializing agent...",
+                "message": "Phase 1: Starting company discovery...",
             })
 
-            # Create agent with callback handler for real-time progress
-            logger.info(f"Creating agent for pipeline run {run_id}")
-            event_collector = []
-            callback_handler = None
-            if events is not None:
-                callback_handler = create_pipeline_callback_handler(events, run_id_str, event_collector)
-            else:
-                callback_handler = create_pipeline_callback_handler({}, run_id_str, event_collector)
-            agent = create_lead_gen_agent(callback_handler=callback_handler)
-            prompt = build_pipeline_prompt(icp, options)
+            # ════════════════════════════════════════
+            # PHASE 1: Company Discovery
+            # ════════════════════════════════════════
+            logger.info(f"[Phase 1] Creating discovery agent for run {run_id}")
+            callback_handler = create_pipeline_callback_handler(
+                events or {}, run_id_str, event_collector
+            )
+            discovery_agent = create_discovery_agent(callback_handler=callback_handler)
+            discovery_prompt = build_discovery_prompt(icp, options)
 
-            # Single agent call — handles all 4 stages
-            # The callback handler emits granular tool_start, agent_reasoning, and stage_update events
-            # IMPORTANT: agent() is synchronous — run in thread pool so the event loop
-            # remains free to yield SSE events in real-time
-            logger.info(f"Invoking agent for pipeline run {run_id}")
-            result = await asyncio.to_thread(agent, prompt)
-            logger.info(f"Agent completed for pipeline run {run_id}")
-            result_text = str(result)
-            logger.info(f"Agent result type: {type(result).__name__}, text length: {len(result_text)}, first 500 chars: {result_text[:500]}")
+            logger.info(f"[Phase 1] Invoking discovery agent for run {run_id}")
+            discovery_result = await asyncio.to_thread(discovery_agent, discovery_prompt)
+            discovery_text = str(discovery_result)
+            logger.info(
+                f"[Phase 1] Discovery complete. Result length: {len(discovery_text)}, "
+                f"first 500 chars: {discovery_text[:500]}"
+            )
 
             _emit_event(events, run_id_str, {
                 "type": "stage_update",
-                "stage": "completed",
-                "progress": 90,
-                "message": "Agent completed. Parsing and saving results...",
+                "stage": "company_discovery",
+                "progress": 30,
+                "message": "Phase 1 complete. Parsing discovered companies...",
             })
 
-            # Parse the agent's JSON output
-            result_json = parse_json_from_agent_result(result)
+            # Parse Phase 1 results
+            discovery_json = parse_json_from_agent_result(discovery_result)
+            discovered_companies = discovery_json.get("companies", [])
+            logger.info(f"[Phase 1] Parsed {len(discovered_companies)} companies from discovery")
 
-            # Save results to database
+            # Log discovery summary if present
+            discovery_summary = discovery_json.get("discovery_summary")
+            if discovery_summary:
+                logger.info(f"[Phase 1] Discovery summary: {json.dumps(discovery_summary, default=str)}")
+                _emit_event(events, run_id_str, {
+                    "type": "agent_reasoning",
+                    "text": (
+                        f"Discovery complete: {discovery_summary.get('verified_match_count', 0)} verified, "
+                        f"{discovery_summary.get('potential_match_count', 0)} potential, "
+                        f"{discovery_summary.get('weak_match_count', 0)} weak matches "
+                        f"from {discovery_summary.get('total_candidates_found', '?')} candidates."
+                    ),
+                    "stage": "company_discovery",
+                })
+
+            if not discovered_companies:
+                raise ValueError("Phase 1 discovery returned no companies")
+
+            # Deduplicate by website/domain
+            seen_domains = set()
+            unique_companies = []
+            for c in discovered_companies:
+                domain = (c.get("website") or "").lower().strip()
+                if domain and domain in seen_domains:
+                    continue
+                if domain:
+                    seen_domains.add(domain)
+                unique_companies.append(c)
+            discovered_companies = unique_companies
+            logger.info(f"[Phase 1] {len(discovered_companies)} unique companies after dedup")
+
+            # ════════════════════════════════════════
+            # PHASE 2 & 3: Per-company Contact Discovery + BANT Scoring
+            # ════════════════════════════════════════
+            total_companies = len(discovered_companies)
+            _emit_event(events, run_id_str, {
+                "type": "stage_update",
+                "stage": "contact_discovery",
+                "progress": 35,
+                "message": f"Phase 2-3: Researching {total_companies} companies individually...",
+            })
+
+            run.current_stage = "contact_discovery"
+            await db.commit()
+
             companies_saved = 0
             contacts_saved = 0
 
-            for company_data in result_json.get("companies", []):
+            for i, disc_company in enumerate(discovered_companies):
+                company_name = disc_company.get("name", "Unknown")
+                company_domain = disc_company.get("website", "unknown")
+                progress = 10 + int(80 * (i + 1) / total_companies)
+
+                # ── Emit company_start event ──
+                _emit_event(events, run_id_str, {
+                    "type": "company_start",
+                    "company_name": company_name,
+                    "company_index": i + 1,
+                    "total_companies": total_companies,
+                    "progress": progress,
+                })
+
+                logger.info(
+                    f"[Company {i+1}/{total_companies}] Starting: {company_name} ({company_domain})"
+                )
+
+                # Merged company data starts from Phase 1 fields
+                company_data = dict(disc_company)
+                company_data.setdefault("source", "discover_icp_companies")
+
+                # ── Phase 2: Contact Agent ──
+                _emit_event(events, run_id_str, {
+                    "type": "stage_update",
+                    "stage": "contact_discovery",
+                    "progress": progress,
+                    "message": f"Finding contacts for {company_name} ({i+1}/{total_companies})...",
+                })
+
+                try:
+                    contact_callback = create_pipeline_callback_handler(
+                        events or {}, run_id_str, event_collector,
+                        initial_stage="contact_discovery",
+                    )
+                    contact_agent = create_contact_agent(callback_handler=contact_callback)
+                    contact_prompt = build_contact_prompt(disc_company, icp)
+
+                    contact_result = await asyncio.to_thread(contact_agent, contact_prompt)
+                    contact_json = parse_json_from_agent_result(contact_result)
+
+                    # Merge contact data — agent returns single company object
+                    company_data["contacts"] = contact_json.get("contacts", [])
+                    company_data["research_data"] = contact_json.get("research_data", {})
+
+                    logger.info(
+                        f"[Company {i+1}/{total_companies}] Contact agent found "
+                        f"{len(company_data['contacts'])} contacts for {company_name}"
+                    )
+
+                except Exception as contact_err:
+                    logger.warning(
+                        f"[Company {i+1}/{total_companies}] Contact agent failed for "
+                        f"{company_name}: {contact_err}. Saving Phase 1 data only."
+                    )
+                    company_data["contacts"] = []
+                    company_data["research_data"] = {}
+
+                # ── Save Company + Contacts to DB immediately ──
                 company = Company(
                     pipeline_run_id=run_id,
                     name=company_data.get("name", "Unknown"),
                     website=company_data.get("website"),
                     industry=company_data.get("industry"),
+                    sub_industry=company_data.get("sub_industry"),
                     city=company_data.get("city"),
                     state_region=company_data.get("state"),
                     country=company_data.get("country"),
                     employee_count=company_data.get("employee_count"),
                     revenue_estimate=company_data.get("revenue_estimate"),
                     tech_stack_json=company_data.get("tech_signals"),
+                    description=company_data.get("description"),
                     source=company_data.get("source"),
                     icp_match_score=company_data.get("icp_match_score"),
                     match_reasoning=company_data.get("match_reasoning"),
-                    qualification="qualified",
+                    qualification=company_data.get("qualification", "good_fit"),
+                    raw_data_json=company_data.get("dimension_evidence"),
                 )
                 db.add(company)
                 await db.flush()
                 companies_saved += 1
 
-                # Save contacts
                 for contact_data in company_data.get("contacts", []):
                     contact = Contact(
                         company_id=company.id,
@@ -260,27 +380,59 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
                     db.add(contact)
                     contacts_saved += 1
 
-                # Save BANT score
-                bant_data = company_data.get("bant_score")
-                if bant_data:
-                    bant = BANTScore(
-                        company_id=company.id,
-                        budget_score=bant_data.get("budget_score"),
-                        budget_reason=bant_data.get("budget_reason"),
-                        budget_sources=bant_data.get("budget_sources"),
-                        authority_score=bant_data.get("authority_score"),
-                        authority_reason=bant_data.get("authority_reason"),
-                        authority_sources=bant_data.get("authority_sources"),
-                        need_score=bant_data.get("need_score"),
-                        need_reason=bant_data.get("need_reason"),
-                        need_sources=bant_data.get("need_sources"),
-                        timing_score=bant_data.get("timing_score"),
-                        timing_reason=bant_data.get("timing_reason"),
-                        timing_sources=bant_data.get("timing_sources"),
-                        total_score=bant_data.get("total_score"),
-                        overall_summary=bant_data.get("overall_summary"),
+                # ── Phase 3: BANT Agent ──
+                _emit_event(events, run_id_str, {
+                    "type": "stage_update",
+                    "stage": "scoring",
+                    "progress": progress,
+                    "message": f"BANT scoring {company_name} ({i+1}/{total_companies})...",
+                })
+
+                try:
+                    bant_callback = create_pipeline_callback_handler(
+                        events or {}, run_id_str, event_collector,
+                        initial_stage="scoring",
                     )
-                    db.add(bant)
+                    bant_agent = create_bant_agent(callback_handler=bant_callback)
+                    bant_prompt = build_bant_prompt(company_data, icp)
+
+                    bant_result = await asyncio.to_thread(bant_agent, bant_prompt)
+                    bant_json = parse_json_from_agent_result(bant_result)
+
+                    bant_data = bant_json.get("bant_score", {})
+                    if bant_data:
+                        bant = BANTScore(
+                            company_id=company.id,
+                            budget_score=bant_data.get("budget_score"),
+                            budget_reason=bant_data.get("budget_reason"),
+                            budget_sources=bant_data.get("budget_sources"),
+                            authority_score=bant_data.get("authority_score"),
+                            authority_reason=bant_data.get("authority_reason"),
+                            authority_sources=bant_data.get("authority_sources"),
+                            need_score=bant_data.get("need_score"),
+                            need_reason=bant_data.get("need_reason"),
+                            need_sources=bant_data.get("need_sources"),
+                            timing_score=bant_data.get("timing_score"),
+                            timing_reason=bant_data.get("timing_reason"),
+                            timing_sources=bant_data.get("timing_sources"),
+                            total_score=bant_data.get("total_score"),
+                            overall_summary=bant_data.get("overall_summary"),
+                        )
+                        db.add(bant)
+
+                    logger.info(
+                        f"[Company {i+1}/{total_companies}] BANT scoring complete for "
+                        f"{company_name}: total={bant_data.get('total_score', 'N/A')}"
+                    )
+
+                except Exception as bant_err:
+                    logger.warning(
+                        f"[Company {i+1}/{total_companies}] BANT agent failed for "
+                        f"{company_name}: {bant_err}. Contacts already saved."
+                    )
+
+                # Flush after each company so data is persisted incrementally
+                await db.flush()
 
             # Persist agent logs
             for seq, event_data in enumerate(event_collector):
@@ -299,6 +451,19 @@ async def execute_pipeline(run_id: UUID, events: dict = None):
             run.contacts_found = contacts_saved
             run.completed_at = datetime.now(timezone.utc)
             await db.commit()
+
+            # Generate embeddings for newly saved companies
+            try:
+                from app.services.embedding_service import embed_company
+                company_results = await db.execute(
+                    select(Company).where(Company.pipeline_run_id == run_id)
+                )
+                for comp in company_results.scalars().all():
+                    await embed_company(comp, db)
+                await db.commit()
+                logger.info(f"Embeddings generated for {companies_saved} companies in run {run_id}")
+            except Exception as embed_err:
+                logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
             _emit_event(events, run_id_str, {
                 "type": "completed",

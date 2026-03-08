@@ -126,6 +126,40 @@ export interface Company {
   created_at: string;
 }
 
+// Co-pilot Chat types
+export interface PageContext {
+  route: string;
+  page_type: string;
+  run_id?: string;
+  company_id?: string;
+  icp_id?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  tool_calls?: { tool_name: string; display_name: string }[];
+  created_at?: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string | null;
+  page_context: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string | null;
+  message_count: number;
+  last_message_preview: string | null;
+}
+
+export interface RecommendationItem {
+  icon: string;
+  text: string;
+  prompt: string;
+}
+
 export const DEFAULT_ICP: ICPDefinition = {
   target_offering: [],
   regions: { countries: [], priority_areas: [] },

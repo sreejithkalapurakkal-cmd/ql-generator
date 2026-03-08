@@ -2,11 +2,6 @@ import httpx
 from strands import tool
 from app.config import get_settings
 
-settings = get_settings()
-
-LUSHA_API_KEY = settings.LUSHA_API_KEY
-LUSHA_BASE_URL = settings.LUSHA_BASE_URL
-
 RATE_LIMIT_CODES = {429, 402, 403}
 RATE_LIMIT_MSG = (
     "RATE_LIMITED: Lusha API quota exceeded. Do NOT retry this tool. "
@@ -37,8 +32,9 @@ def lusha_person_search(
     Returns:
         dict with phone numbers, email addresses, and social profiles
     """
-    url = f"{LUSHA_BASE_URL}/person"
-    headers = {"api_key": LUSHA_API_KEY, "Content-Type": "application/json"}
+    settings = get_settings()
+    url = f"{settings.LUSHA_BASE_URL}/person"
+    headers = {"api_key": settings.LUSHA_API_KEY, "Content-Type": "application/json"}
     payload = {
         "firstName": first_name,
         "lastName": last_name,

@@ -93,7 +93,7 @@ const ICPListPage: React.FC = () => {
 
   const handleRunPipeline = async (icpId: string) => {
     try {
-      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 15, max_contacts_per_company: 5 } });
+      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5 } });
       message.success('Pipeline started');
       navigate(`/pipeline/${res.data.id}`);
     } catch (err: any) {
@@ -148,7 +148,7 @@ const ICPListPage: React.FC = () => {
         const res = await createICP({ name: icp.name, description: icp.description, config: icp.config });
         successCount++;
         try {
-          await startPipeline({ icp_config_id: res.data.id!, options: { max_companies: 15, max_contacts_per_company: 5 } });
+          await startPipeline({ icp_config_id: res.data.id!, options: { max_companies: 25, max_contacts_per_company: 5 } });
         } catch {
           message.warning(`ICP "${icp.name}" saved but pipeline failed to start`);
         }

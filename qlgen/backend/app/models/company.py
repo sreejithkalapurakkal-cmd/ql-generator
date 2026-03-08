@@ -30,6 +30,7 @@ class Company(Base):
     icp_match_score = Column(Float)
     match_reasoning = Column(Text)
     raw_data_json = Column(JSONB)
+    embedding = Column(Vector(1024), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     contacts = relationship("Contact", back_populates="company", cascade="all, delete-orphan")
