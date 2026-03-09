@@ -22,6 +22,7 @@ from app.models.company import Company
 from app.models.contact import Contact
 from app.models.bant import BANTScore
 from app.models.pipeline_log import PipelineLog
+from app.services.tool_registry_service import get_disabled_tool_names
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,12 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
         options = run.options or {}
         event_collector = []
 
+        # Fetch disabled tools once for the entire pipeline run
+        try:
+            disabled_tools = await get_disabled_tool_names(db)
+        except Exception:
+            disabled_tools = set()
+
         try:
             # Mark pipeline as running
             run.status = "running"
@@ -231,7 +238,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                 events or {}, run_id_str, event_collector,
                 cancelled_runs=cancelled_runs,
             )
-            discovery_agent = create_discovery_agent(callback_handler=callback_handler)
+            discovery_agent = create_discovery_agent(callback_handler=callback_handler, disabled_tools=disabled_tools)
             discovery_prompt = build_discovery_prompt(icp, options)
 
             logger.info(f"[Phase 1] Invoking discovery agent for run {run_id}")
@@ -397,6 +404,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     total_companies=total_companies,
                     cancelled_runs=cancelled_runs,
                     options=options,
+                    disabled_tools=disabled_tools,
                 )
                 companies_saved += 1
                 contacts_saved += new_contacts
@@ -529,6 +537,7 @@ async def _process_company_phases_2_3(
     existing_company: "Company | None" = None,
     cancelled_runs: set = None,
     options: dict = None,
+    disabled_tools: set[str] | None = None,
 ) -> tuple:
     """Run Phase 2 (contacts) + Phase 3 (BANT) for a single company.
 
@@ -569,7 +578,7 @@ async def _process_company_phases_2_3(
             initial_stage="contact_discovery",
             cancelled_runs=cancelled_runs,
         )
-        contact_agent = create_contact_agent(callback_handler=contact_callback)
+        contact_agent = create_contact_agent(callback_handler=contact_callback, disabled_tools=disabled_tools)
         contact_prompt = build_contact_prompt(disc_company, icp)
 
         contact_result = await asyncio.to_thread(contact_agent, contact_prompt)
@@ -651,7 +660,7 @@ async def _process_company_phases_2_3(
             initial_stage="scoring",
             cancelled_runs=cancelled_runs,
         )
-        bant_agent = create_bant_agent(callback_handler=bant_callback)
+        bant_agent = create_bant_agent(callback_handler=bant_callback, disabled_tools=disabled_tools)
         bant_prompt = build_bant_prompt(company_data, icp)
 
         bant_result = await asyncio.to_thread(bant_agent, bant_prompt)
@@ -720,6 +729,12 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
         icp = icp_config.config_json
         options = run.options or {}
         event_collector = []
+
+        # Fetch disabled tools for the resume run
+        try:
+            disabled_tools = await get_disabled_tool_names(db)
+        except Exception:
+            disabled_tools = set()
 
         try:
             run.status = "running"
@@ -792,6 +807,7 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
                     existing_company=company,
                     cancelled_runs=cancelled_runs,
                     options=options,
+                    disabled_tools=disabled_tools,
                 )
                 contacts_saved += new_contacts
 

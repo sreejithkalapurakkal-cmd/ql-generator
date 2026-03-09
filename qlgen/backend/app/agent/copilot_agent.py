@@ -281,47 +281,57 @@ def create_copilot_callback_handler(event_queue: queue.Queue):
     return callback_handler
 
 
-def create_copilot_agent(callback_handler=None) -> Agent:
-    """Create the co-pilot agent with all 25 tools (6 DB + 19 external)."""
+def create_copilot_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create the co-pilot agent with all 25 tools (6 DB + 19 external).
+
+    disabled_tools filters external tools only — the 6 copilot_db tools are always included.
+    """
     settings = get_settings()
     model = BedrockModel(
         model_id=settings.BEDROCK_MODEL_ID,
         region_name=settings.AWS_REGION,
     )
 
+    # DB tools are never filtered
+    db_tools = [
+        search_companies_semantic,
+        search_companies_structured,
+        get_company_details,
+        get_icp_details,
+        get_pipeline_summary,
+        get_data_statistics,
+    ]
+
+    external_tools = [
+        apollo_company_search,
+        apollo_people_search,
+        exa_search,
+        tavily_search,
+        duckduckgo_search,
+        hunter_domain_search,
+        hunter_email_finder,
+        lusha_person_search,
+        scrape_webpage,
+        search_yc_companies,
+        find_linkedin_profiles,
+        scrape_team_page,
+        get_company_phone,
+        get_sec_filings,
+        get_company_registry,
+        get_market_data,
+        get_economic_indicators,
+        get_financial_statements,
+        get_investor_data,
+        get_news_sentiment,
+    ]
+
+    if disabled_tools:
+        external_tools = [t for t in external_tools if getattr(t, "__name__", "") not in disabled_tools]
+
     kwargs = {
         "model": model,
         "system_prompt": COPILOT_SYSTEM_PROMPT,
-        "tools": [
-            # DB search tools
-            search_companies_semantic,
-            search_companies_structured,
-            get_company_details,
-            get_icp_details,
-            get_pipeline_summary,
-            get_data_statistics,
-            # External tools
-            apollo_company_search,
-            apollo_people_search,
-            exa_search,
-            tavily_search,
-            duckduckgo_search,
-            hunter_domain_search,
-            hunter_email_finder,
-            lusha_person_search,
-            scrape_webpage,
-            search_yc_companies,
-            find_linkedin_profiles,
-            scrape_team_page,
-            get_company_phone,
-            get_sec_filings,
-            get_company_registry,
-            get_market_data,
-            get_economic_indicators,
-            get_financial_statements,
-            get_investor_data,
-            get_news_sentiment,
-        ],
+        "tools": db_tools + external_tools,
     }
 
     if callback_handler is not None:

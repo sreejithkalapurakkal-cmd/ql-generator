@@ -7,6 +7,7 @@ import ICPConfigPage from './pages/ICPConfigPage';
 import ICPListPage from './pages/ICPListPage';
 import PipelinePage from './pages/PipelinePage';
 import LeadsPage from './pages/LeadsPage';
+import ToolsPage from './pages/ToolsPage';
 import { PageContextProvider } from './context/PageContextProvider';
 import CoPilotPanel from './components/CoPilotPanel';
 
@@ -37,6 +38,7 @@ function App() {
               <Route path="/icp" element={<ICPListPage />} />
               <Route path="/pipeline/:runId" element={<PipelinePage />} />
               <Route path="/leads/:runId" element={<LeadsPage />} />
+              <Route path="/tools" element={<ToolsPage />} />
             </Routes>
           </AppLayout>
           <CoPilotPanel />

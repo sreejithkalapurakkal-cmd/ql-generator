@@ -6,8 +6,10 @@ from app.models.pipeline import PipelineRun
 from app.models.pipeline_log import PipelineLog
 from app.models.chat_session import ChatSession
 from app.models.chat_message import ChatMessage
+from app.models.tool_registry import ToolRegistry
 
 __all__ = [
     "ICPConfig", "Company", "Contact", "BANTScore",
     "PipelineRun", "PipelineLog", "ChatSession", "ChatMessage",
+    "ToolRegistry",
 ]

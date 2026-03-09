@@ -187,6 +187,46 @@ export interface RecommendationItem {
   prompt: string;
 }
 
+// Tool registry types
+export interface ToolRegistryItem {
+  id: string;
+  tool_name: string;
+  display_name: string;
+  category: string;
+  requires_api_key: boolean;
+  api_key_env_var: string | null;
+  base_url: string | null;
+  is_enabled: boolean;
+  health_status: string;
+  last_health_check_at: string | null;
+  last_health_message: string | null;
+  notes: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  total_calls: number;
+  successful_calls: number;
+  failed_calls: number;
+  success_rate: number | null;
+  last_used_at: string | null;
+  last_error: string | null;
+}
+
+export interface ToolMetricsSummary {
+  total_tools: number;
+  healthy_count: number;
+  unhealthy_count: number;
+  disabled_count: number;
+  no_api_key_count: number;
+  unknown_count: number;
+}
+
+export interface ToolHealthCheckResult {
+  tool_name: string;
+  status: string;
+  message: string;
+  checked_at: string;
+}
+
 export const DEFAULT_ICP: ICPDefinition = {
   target_offering: [],
   regions: { countries: [], priority_areas: [] },

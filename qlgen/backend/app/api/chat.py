@@ -128,10 +128,17 @@ async def send_chat_message(request: ChatMessageRequest):
                     page_ctx,
                 )
 
+                # Fetch disabled tools for copilot
+                from app.services.tool_registry_service import get_disabled_tool_names
+                try:
+                    disabled_tools = await get_disabled_tool_names(db)
+                except Exception:
+                    disabled_tools = set()
+
                 # Create agent with callback handler
                 event_queue = queue.Queue()
                 callback_handler = create_copilot_callback_handler(event_queue)
-                agent = create_copilot_agent(callback_handler=callback_handler)
+                agent = create_copilot_agent(callback_handler=callback_handler, disabled_tools=disabled_tools)
 
                 # Run agent in thread pool
                 full_response = ""

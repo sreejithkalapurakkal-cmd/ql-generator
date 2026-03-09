@@ -359,7 +359,7 @@ SECONDARY (use at least 2):
   - tavily_search — news, press releases, market data
   - duckduckgo_search — general web search for niche queries
 
-VERIFICATION (for top 10-15 candidates):
+VERIFICATION (for all the candidates):
   - scrape_webpage — read /about, /technology, /careers pages to verify qualitative
     dimensions (tech maturity, infrastructure readiness, transformation signals)
 
@@ -763,7 +763,14 @@ Return a JSON object with the BANT score. Keep reason strings concise (1-2 sente
 """
 
 
-def create_discovery_agent(callback_handler=None) -> Agent:
+def _filter_tools(tools: list, disabled_tools: set[str] | None) -> list:
+    """Filter out disabled tools by their __name__ attribute."""
+    if not disabled_tools:
+        return tools
+    return [t for t in tools if getattr(t, "__name__", "") not in disabled_tools]
+
+
+def create_discovery_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
     """Create Phase 1 agent — company discovery and ICP scoring only."""
     settings = get_settings()
     model = BedrockModel(
@@ -772,18 +779,20 @@ def create_discovery_agent(callback_handler=None) -> Agent:
         max_tokens=64000,
     )
 
+    tools = _filter_tools([
+        apollo_company_search,   # PRIMARY
+        exa_search,              # PRIMARY
+        discover_icp_companies,  # SECONDARY
+        tavily_search,           # SECONDARY
+        search_yc_companies,     # SECONDARY
+        duckduckgo_search,       # FALLBACK
+        scrape_webpage,          # VERIFICATION
+    ], disabled_tools)
+
     kwargs = {
         "model": model,
         "system_prompt": PHASE1_DISCOVERY_PROMPT,
-        "tools": [
-            apollo_company_search,   # PRIMARY
-            exa_search,              # PRIMARY
-            discover_icp_companies,  # SECONDARY
-            tavily_search,           # SECONDARY
-            search_yc_companies,     # SECONDARY
-            duckduckgo_search,       # FALLBACK
-            scrape_webpage,          # VERIFICATION
-        ],
+        "tools": tools,
     }
 
     if callback_handler is not None:
@@ -792,7 +801,7 @@ def create_discovery_agent(callback_handler=None) -> Agent:
     return Agent(**kwargs)
 
 
-def create_contact_agent(callback_handler=None) -> Agent:
+def create_contact_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
     """Create Phase 2 agent — contact discovery + enrichment for one company."""
     settings = get_settings()
     model = BedrockModel(
@@ -801,21 +810,23 @@ def create_contact_agent(callback_handler=None) -> Agent:
         max_tokens=16000,
     )
 
+    tools = _filter_tools([
+        research_company,
+        find_company_executives,
+        duckduckgo_search,
+        scrape_webpage,
+        find_linkedin_profiles,
+        scrape_team_page,
+        hunter_domain_search,
+        hunter_email_finder,
+        lusha_person_search,
+        get_company_phone,
+    ], disabled_tools)
+
     kwargs = {
         "model": model,
         "system_prompt": CONTACT_AGENT_PROMPT,
-        "tools": [
-            research_company,
-            find_company_executives,
-            duckduckgo_search,
-            scrape_webpage,
-            find_linkedin_profiles,
-            scrape_team_page,
-            hunter_domain_search,
-            hunter_email_finder,
-            lusha_person_search,
-            get_company_phone,
-        ],
+        "tools": tools,
     }
 
     if callback_handler is not None:
@@ -824,7 +835,7 @@ def create_contact_agent(callback_handler=None) -> Agent:
     return Agent(**kwargs)
 
 
-def create_bant_agent(callback_handler=None) -> Agent:
+def create_bant_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
     """Create Phase 3 agent — BANT scoring for one company."""
     settings = get_settings()
     model = BedrockModel(
@@ -833,17 +844,19 @@ def create_bant_agent(callback_handler=None) -> Agent:
         max_tokens=8000,
     )
 
+    tools = _filter_tools([
+        get_sec_filings,
+        get_market_data,
+        get_news_sentiment,
+        get_economic_indicators,
+        duckduckgo_search,
+        scrape_webpage,
+    ], disabled_tools)
+
     kwargs = {
         "model": model,
         "system_prompt": BANT_AGENT_PROMPT,
-        "tools": [
-            get_sec_filings,
-            get_market_data,
-            get_news_sentiment,
-            get_economic_indicators,
-            duckduckgo_search,
-            scrape_webpage,
-        ],
+        "tools": tools,
     }
 
     if callback_handler is not None:
