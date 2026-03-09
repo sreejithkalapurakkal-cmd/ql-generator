@@ -91,6 +91,8 @@ const DashboardPage: React.FC = () => {
     running: 'processing',
     completed: 'success',
     failed: 'error',
+    awaiting_review: 'warning',
+    cancelled: 'default',
   };
 
   const openStatsModal = async (tile: TileKey) => {
@@ -136,6 +138,9 @@ const DashboardPage: React.FC = () => {
           render: (_: unknown, r: PipelineRun) => r.status === 'completed' ? (
             <a onClick={() => { setStatsModalOpen(false); navigate(`/leads/${r.id}`); }}
               style={{ color: 'var(--purple)', cursor: 'pointer', fontSize: 12 }}>View →</a>
+          ) : r.status === 'awaiting_review' ? (
+            <a onClick={() => { setStatsModalOpen(false); navigate(`/pipeline/${r.id}`); }}
+              style={{ color: 'var(--orange)', cursor: 'pointer', fontSize: 12 }}>Review →</a>
           ) : null,
         },
       ];
@@ -250,7 +255,7 @@ const DashboardPage: React.FC = () => {
               style={{ maxWidth: 320, width: 280 }}
             />
             <div style={{ display: 'flex', gap: 6 }}>
-              {(['all', 'completed', 'running', 'failed'] as const).map((status) => (
+              {(['all', 'completed', 'running', 'cancelled', 'failed'] as const).map((status) => (
                 <div
                   key={status}
                   onClick={() => setStatusFilter(status)}
@@ -294,7 +299,11 @@ const DashboardPage: React.FC = () => {
                 style={run.status === 'failed' ? { cursor: 'default' } : {}}
                 onClick={() => {
                   if (run.status === 'completed') navigate(`/leads/${run.id}`);
-                  else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
+                  else if (run.status === 'running' || run.status === 'awaiting_review') navigate(`/pipeline/${run.id}`);
+                  else if (run.status === 'cancelled') {
+                    if (run.companies_found > 0) navigate(`/leads/${run.id}`);
+                    else navigate(`/pipeline/${run.id}`);
+                  }
                 }}
               >
                 {/* Header: name + status badge */}
@@ -373,7 +382,7 @@ const DashboardPage: React.FC = () => {
                     >
                       ✏ Edit Search
                     </Button>
-                    {(run.status === 'completed' || run.status === 'failed') && (
+                    {(run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') && (
                       <Popconfirm
                         title="Delete this search result?"
                         description="This will permanently remove all companies, contacts, and scores from this run."
@@ -400,6 +409,14 @@ const DashboardPage: React.FC = () => {
                   )}
                   {run.status === 'running' && (
                     <span className="rc-view-link" style={{ color: 'var(--orange)' }}>View Progress →</span>
+                  )}
+                  {run.status === 'awaiting_review' && (
+                    <span className="rc-view-link" style={{ color: 'var(--orange)' }}>Review Companies →</span>
+                  )}
+                  {run.status === 'cancelled' && (
+                    <span className="rc-view-link" style={{ color: 'var(--g500)' }}>
+                      {run.companies_found > 0 ? 'View Partial Results →' : 'Cancelled'}
+                    </span>
                   )}
                 </div>
               </div>
@@ -452,6 +469,7 @@ const DashboardPage: React.FC = () => {
               <Tag color="success">{completedRuns.length} Completed</Tag>
               <Tag color="processing">{runsList.filter(r => r.status === 'running').length} Running</Tag>
               <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
+              <Tag>{runsList.filter(r => r.status === 'cancelled').length} Cancelled</Tag>
               <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
             </div>
             <Table

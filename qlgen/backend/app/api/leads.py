@@ -100,6 +100,9 @@ async def get_lead_companies(
             match_reasoning=company.match_reasoning,
             contacts=contacts,
             bant_score=bant,
+            promoted=company.promoted,
+            description=company.description,
+            raw_data_json=company.raw_data_json,
             created_at=company.created_at,
         )
         response.append(comp_resp)

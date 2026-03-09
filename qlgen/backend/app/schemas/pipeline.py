@@ -1,12 +1,22 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+
+
+class BANTWeights(BaseModel):
+    budget: int = Field(default=3, ge=1, le=5)
+    authority: int = Field(default=3, ge=1, le=5)
+    need: int = Field(default=3, ge=1, le=5)
+    timing: int = Field(default=3, ge=1, le=5)
 
 
 class PipelineOptions(BaseModel):
     max_companies: int = 25
     max_contacts_per_company: int = 5
+    pipeline_mode: str = "single_run"
+    match_strictness: str = "moderate"
+    bant_weights: BANTWeights = BANTWeights()
 
 
 class PipelineRunRequest(BaseModel):
@@ -28,9 +38,17 @@ class PipelineRunResponse(BaseModel):
     completed_at: Optional[datetime]
     error_log: Optional[str] = None
     estimated_duration_seconds: Optional[int] = None
+    pipeline_mode: Optional[str] = None
+    match_strictness: Optional[str] = None
+    bant_weights: Optional[dict] = None
+    stage_details: Optional[dict] = None
 
     class Config:
         from_attributes = True
+
+
+class PromoteCompaniesRequest(BaseModel):
+    company_ids: List[UUID]
 
 
 class PipelineLogResponse(BaseModel):

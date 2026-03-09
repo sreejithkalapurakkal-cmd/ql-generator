@@ -68,6 +68,9 @@ class CompanyResponse(BaseModel):
     match_reasoning: Optional[str]
     contacts: List[ContactResponse] = []
     bant_score: Optional[BANTScoreResponse] = None
+    promoted: Optional[bool] = None
+    description: Optional[str] = None
+    raw_data_json: Optional[Any] = None
     created_at: datetime
 
     class Config:

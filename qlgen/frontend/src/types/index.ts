@@ -55,7 +55,31 @@ export interface PipelineRun {
   completed_at: string | null;
   error_log?: string | null;
   estimated_duration_seconds?: number | null;
+  pipeline_mode?: string | null;
+  match_strictness?: 'strict' | 'moderate' | 'relaxed' | null;
+  bant_weights?: BANTWeights | null;
+  stage_details?: {
+    total_discovered?: number;
+    promoted_count?: number;
+    promoted_company_ids?: string[];
+    discovery_completed_at?: string;
+    contacts_found?: number;
+  } | null;
 }
+
+export interface BANTWeights {
+  budget: number;
+  authority: number;
+  need: number;
+  timing: number;
+}
+
+export const DEFAULT_BANT_WEIGHTS: BANTWeights = {
+  budget: 3,
+  authority: 3,
+  need: 3,
+  timing: 3,
+};
 
 export interface PipelineLogEntry {
   id: string;
@@ -123,6 +147,9 @@ export interface Company {
   match_reasoning: string | null;
   contacts: Contact[];
   bant_score: BANTScore | null;
+  promoted?: boolean | null;
+  description?: string | null;
+  raw_data_json?: Record<string, unknown> | null;
   created_at: string;
 }
 

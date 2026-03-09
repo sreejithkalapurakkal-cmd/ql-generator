@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin, Input } from 'antd';
+import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin, Input, Slider } from 'antd';
 import { PlusOutlined, DownloadOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
-import { ICPConfig } from '../types';
+import { ICPConfig, BANTWeights, DEFAULT_BANT_WEIGHTS } from '../types';
 
 const ICPListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -47,6 +47,12 @@ const ICPListPage: React.FC = () => {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [filteredICPs.length]);
+
+  // Run pipeline modal state
+  const [runModalIcpId, setRunModalIcpId] = useState<string | null>(null);
+  const [runModalMode, setRunModalMode] = useState<string>('single_run');
+  const [runModalStrictness, setRunModalStrictness] = useState<'strict' | 'moderate' | 'relaxed'>('moderate');
+  const [runModalBantWeights, setRunModalBantWeights] = useState<BANTWeights>({ ...DEFAULT_BANT_WEIGHTS });
 
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
@@ -91,14 +97,21 @@ const ICPListPage: React.FC = () => {
     fetchICPs();
   };
 
-  const handleRunPipeline = async (icpId: string) => {
+  const handleRunPipeline = async (icpId: string, pipelineMode: string = 'single_run', strictness: 'strict' | 'moderate' | 'relaxed' = 'moderate', bantWts: BANTWeights = { ...DEFAULT_BANT_WEIGHTS }) => {
     try {
-      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5 } });
-      message.success('Pipeline started');
+      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5, pipeline_mode: pipelineMode, match_strictness: strictness, bant_weights: bantWts } });
+      message.success(pipelineMode === 'multi_step' ? 'Pipeline started in review mode' : 'Pipeline started');
       navigate(`/pipeline/${res.data.id}`);
     } catch (err: any) {
       message.error(err?.response?.data?.detail || 'Failed to start pipeline');
     }
+  };
+
+  const openRunModal = (icpId: string, mode: string = 'single_run') => {
+    setRunModalIcpId(icpId);
+    setRunModalMode(mode);
+    setRunModalStrictness('moderate');
+    setRunModalBantWeights({ ...DEFAULT_BANT_WEIGHTS });
   };
 
   const handleFileUpload = async (file: File) => {
@@ -253,10 +266,19 @@ const ICPListPage: React.FC = () => {
                         className="menu-item"
                         onClick={() => {
                           setOpenMenuId(null);
-                          handleRunPipeline(icp.id!);
+                          openRunModal(icp.id!);
                         }}
                       >
                         Run Pipeline
+                      </div>
+                      <div
+                        className="menu-item"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          openRunModal(icp.id!, 'multi_step');
+                        }}
+                      >
+                        Run Pipeline (Review Mode)
                       </div>
                       <div
                         className="menu-item"
@@ -379,10 +401,17 @@ const ICPListPage: React.FC = () => {
             }}>
               Edit
             </Button>
+            <Button onClick={() => {
+              const icpId = selectedICP?.id;
+              setSelectedICP(null);
+              if (icpId) openRunModal(icpId, 'multi_step');
+            }}>
+              Run (Review Mode)
+            </Button>
             <Button type="primary" onClick={() => {
               const icpId = selectedICP?.id;
               setSelectedICP(null);
-              if (icpId) handleRunPipeline(icpId);
+              if (icpId) openRunModal(icpId);
             }}>
               Run Pipeline
             </Button>
@@ -459,6 +488,115 @@ const ICPListPage: React.FC = () => {
             </div>
           );
         })()}
+      </Modal>
+
+      {/* Run Pipeline Modal */}
+      <Modal
+        title="Run Pipeline"
+        open={!!runModalIcpId}
+        onCancel={() => setRunModalIcpId(null)}
+        width={520}
+        footer={
+          <Space>
+            <Button onClick={() => setRunModalIcpId(null)}>Cancel</Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                if (runModalIcpId) {
+                  handleRunPipeline(runModalIcpId, runModalMode, runModalStrictness, runModalBantWeights);
+                  setRunModalIcpId(null);
+                }
+              }}
+            >
+              Run {runModalMode === 'multi_step' ? '(Review Mode)' : 'Pipeline'}
+            </Button>
+          </Space>
+        }
+      >
+        {runModalMode === 'multi_step' && (
+          <div style={{ marginBottom: 16, padding: '8px 12px', background: '#f0f9ff', borderRadius: 6, fontSize: 12, color: 'var(--g600)' }}>
+            Review Mode: The pipeline will pause after company discovery so you can select which companies to proceed with.
+          </div>
+        )}
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Match Strictness</div>
+        <div style={{ display: 'flex', gap: 12 }}>
+          {([
+            { key: 'strict' as const, label: 'Strict', desc: 'Fewer, higher-confidence results. No weak matches.' },
+            { key: 'moderate' as const, label: 'Moderate', desc: 'Balanced matching with standard thresholds.' },
+            { key: 'relaxed' as const, label: 'Relaxed', desc: 'Wider net with partial matches and detailed reasoning.' },
+          ]).map((opt) => (
+            <div
+              key={opt.key}
+              onClick={() => setRunModalStrictness(opt.key)}
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: 8,
+                border: runModalStrictness === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
+                background: runModalStrictness === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: 13, color: runModalStrictness === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
+                {opt.label}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, color: 'var(--g800)' }}>BANT Score Priority</div>
+          <div style={{ fontSize: 12, color: 'var(--g500)', marginBottom: 10 }}>
+            Adjust relative importance of each BANT dimension for lead ranking.
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            {([
+              { label: 'Balanced', weights: { budget: 3, authority: 3, need: 3, timing: 3 } },
+              { label: 'Budget Focus', weights: { budget: 5, authority: 3, need: 3, timing: 2 } },
+              { label: 'Need Focus', weights: { budget: 2, authority: 3, need: 5, timing: 2 } },
+              { label: 'Timing Focus', weights: { budget: 2, authority: 2, need: 3, timing: 5 } },
+              { label: 'Authority Focus', weights: { budget: 2, authority: 5, need: 3, timing: 2 } },
+            ] as { label: string; weights: BANTWeights }[]).map((preset) => {
+              const isActive = runModalBantWeights.budget === preset.weights.budget && runModalBantWeights.authority === preset.weights.authority && runModalBantWeights.need === preset.weights.need && runModalBantWeights.timing === preset.weights.timing;
+              return (
+                <Button
+                  key={preset.label}
+                  size="small"
+                  onClick={() => setRunModalBantWeights({ ...preset.weights })}
+                  style={{
+                    borderColor: isActive ? 'var(--purple, #722ed1)' : undefined,
+                    color: isActive ? 'var(--purple, #722ed1)' : undefined,
+                    background: isActive ? 'var(--purple-pale, #f9f0ff)' : undefined,
+                    fontWeight: isActive ? 600 : 400,
+                  }}
+                >
+                  {preset.label}
+                </Button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px' }}>
+            {([
+              { key: 'budget' as const, label: 'Budget' },
+              { key: 'authority' as const, label: 'Authority' },
+              { key: 'need' as const, label: 'Need' },
+              { key: 'timing' as const, label: 'Timing' },
+            ]).map((dim) => (
+              <div key={dim.key}>
+                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--g700)', marginBottom: 2 }}>{dim.label}</div>
+                <Slider
+                  min={1}
+                  max={5}
+                  value={runModalBantWeights[dim.key]}
+                  onChange={(val) => setRunModalBantWeights((prev) => ({ ...prev, [dim.key]: val }))}
+                  marks={{ 1: 'Low', 3: 'Normal', 5: 'High' }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       </Modal>
 
       {/* Import from Excel Modal */}

@@ -61,6 +61,45 @@ const BANTDetailPanel: React.FC<{ score: BANTScore }> = ({ score }) => (
   </Descriptions>
 );
 
+const DIMENSION_LABELS: Record<string, string> = {
+  offering_fit: 'Offering',
+  geography_fit: 'Geography',
+  industry_fit: 'Industry',
+  size_fit: 'Size',
+  tech_maturity: 'Tech',
+  infra_readiness: 'Infra',
+  transformation_drivers: 'Transformation',
+  leadership_fit: 'Leadership',
+  priority_areas: 'Priority Areas',
+};
+
+const DimensionScoreTags: React.FC<{ rawData: Record<string, unknown> | null | undefined }> = ({ rawData }) => {
+  if (!rawData) return null;
+  const evidence = (rawData.dimension_evidence || rawData) as Record<string, unknown>;
+  const dims = Object.entries(DIMENSION_LABELS);
+  const rendered: React.ReactNode[] = [];
+  dims.forEach(([key, label]) => {
+    const dim = evidence[key] as Record<string, unknown> | undefined;
+    if (!dim) return;
+    const score = typeof dim.score === 'number' ? dim.score : null;
+    const dimEvidence = (dim.evidence || dim.reasoning || '') as string;
+    if (score === null) return;
+    const color = score === 2 ? 'green' : score === 1 ? 'gold' : 'default';
+    rendered.push(
+      <Tooltip key={key} title={dimEvidence || `${label}: ${score}/2`}>
+        <Tag color={color} style={{ fontSize: 11, marginBottom: 3 }}>{label} ({score}/2)</Tag>
+      </Tooltip>
+    );
+  });
+  if (rendered.length === 0) return null;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <Text type="secondary" style={{ fontSize: 11 }}>Dimension Scores: </Text>
+      {rendered}
+    </div>
+  );
+};
+
 const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
   const matchScore = company.icp_match_score;
   // Support both old (1-10) and new (0-100) score ranges
@@ -115,6 +154,7 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
           {company.match_reasoning}
         </div>
       )}
+      <DimensionScoreTags rawData={company.raw_data_json} />
     </div>
   );
 };
@@ -409,6 +449,7 @@ const LeadsPage: React.FC = () => {
   const [agentLogs, setAgentLogs] = useState<PipelineLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'companies' | 'criteria' | 'summary'>('companies');
+  const [promotedFilter, setPromotedFilter] = useState<'promoted' | 'all' | 'skipped'>('promoted');
 
   useEffect(() => {
     if (runId) {
@@ -440,6 +481,21 @@ const LeadsPage: React.FC = () => {
       .finally(() => setLoading(false));
   }, [runId, sortBy]);
 
+  // Filter companies by promoted status for multi-step runs
+  const isMultiStepRun = pipelineRun?.pipeline_mode === 'multi_step';
+  const filteredCompanies = useMemo(() => {
+    if (!isMultiStepRun) return companies;
+    switch (promotedFilter) {
+      case 'promoted':
+        return companies.filter((c) => c.promoted === true);
+      case 'skipped':
+        return companies.filter((c) => c.promoted === false);
+      case 'all':
+      default:
+        return companies;
+    }
+  }, [companies, promotedFilter, isMultiStepRun]);
+
   // Flatten companies+contacts into rows for the main table
   const flatRows: Array<{
     key: string | number;
@@ -459,7 +515,7 @@ const LeadsPage: React.FC = () => {
     contact: any;
   }> = [];
   let serial = 1;
-  companies.forEach((company) => {
+  filteredCompanies.forEach((company) => {
     if (company.contacts.length > 0) {
       company.contacts.forEach((contact) => {
         flatRows.push({
@@ -501,24 +557,27 @@ const LeadsPage: React.FC = () => {
     }
   });
 
-  const totalContacts = companies.reduce((s, c) => s + c.contacts.length, 0);
-  const avgBant = companies.length > 0
-    ? (companies.reduce((s, c) => s + (c.bant_score?.total_score || 0), 0) / companies.length).toFixed(1)
+  const totalContacts = filteredCompanies.reduce((s, c) => s + c.contacts.length, 0);
+  const avgBant = filteredCompanies.length > 0
+    ? (filteredCompanies.reduce((s, c) => s + (c.bant_score?.total_score || 0), 0) / filteredCompanies.length).toFixed(1)
     : '0';
-  const hotLeads = companies.filter((c) => (c.bant_score?.total_score || 0) >= 16).length;
-  const warmLeads = companies.filter((c) => {
+  const hotLeads = filteredCompanies.filter((c) => (c.bant_score?.total_score || 0) >= 16).length;
+  const warmLeads = filteredCompanies.filter((c) => {
     const t = c.bant_score?.total_score || 0;
     return t >= 12 && t < 16;
   }).length;
   // New evidence-based classifications
-  const verifiedCount = companies.filter((c) => c.qualification === 'verified_match').length;
-  const potentialCount = companies.filter((c) => c.qualification === 'potential_match').length;
-  const weakCount = companies.filter((c) => c.qualification === 'weak_match').length;
+  const verifiedCount = filteredCompanies.filter((c) => c.qualification === 'verified_match').length;
+  const potentialCount = filteredCompanies.filter((c) => c.qualification === 'potential_match').length;
+  const weakCount = filteredCompanies.filter((c) => c.qualification === 'weak_match').length;
   // Old classifications for backward compat with previous pipeline runs
-  const bestFitCount = companies.filter((c) => c.qualification === 'best_fit').length;
-  const goodFitCount = companies.filter((c) => c.qualification === 'good_fit').length;
-  const possibleFitCount = companies.filter((c) => c.qualification === 'possible_fit').length;
+  const bestFitCount = filteredCompanies.filter((c) => c.qualification === 'best_fit').length;
+  const goodFitCount = filteredCompanies.filter((c) => c.qualification === 'good_fit').length;
+  const possibleFitCount = filteredCompanies.filter((c) => c.qualification === 'possible_fit').length;
   const hasNewClassifications = verifiedCount > 0 || potentialCount > 0 || weakCount > 0;
+  // Multi-step summary counts
+  const promotedCount = isMultiStepRun ? companies.filter((c) => c.promoted === true).length : 0;
+  const totalDiscovered = isMultiStepRun ? companies.length : 0;
 
   const columns = [
     { title: '#', dataIndex: 'serial', width: 50 },
@@ -628,9 +687,27 @@ const LeadsPage: React.FC = () => {
 
       <div className="summary-bar" style={{ marginBottom: 24 }}>
         <div className="summary-item">
-          <div className="val">{companies.length}</div>
+          <div className="val">{filteredCompanies.length}</div>
           <div className="lbl">Companies</div>
         </div>
+        {pipelineRun?.match_strictness && pipelineRun.match_strictness !== 'moderate' && (
+          <div className="summary-item">
+            <div className="val">
+              <Tag color={pipelineRun.match_strictness === 'strict' ? 'red' : 'blue'} style={{ fontSize: 13, padding: '2px 10px', margin: 0 }}>
+                {pipelineRun.match_strictness === 'strict' ? 'Strict' : 'Relaxed'}
+              </Tag>
+            </div>
+            <div className="lbl">Match Mode</div>
+          </div>
+        )}
+        {isMultiStepRun && (
+          <div className="summary-item">
+            <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
+              {promotedCount} / {totalDiscovered}
+            </div>
+            <div className="lbl">Promoted / Discovered</div>
+          </div>
+        )}
         <div className="summary-item">
           <div className="val">{totalContacts}</div>
           <div className="lbl">Contacts</div>
@@ -690,6 +767,13 @@ const LeadsPage: React.FC = () => {
           title="Qualified Leads"
           extra={
             <Space>
+              {isMultiStepRun && (
+                <Select value={promotedFilter} onChange={setPromotedFilter} style={{ width: 160 }}>
+                  <Select.Option value="promoted">Promoted Only</Select.Option>
+                  <Select.Option value="all">All Discovered</Select.Option>
+                  <Select.Option value="skipped">Skipped</Select.Option>
+                </Select>
+              )}
               <Select value={sortBy} onChange={setSortBy} style={{ width: 170 }}>
                 <Select.Option value="bant_score">Sort by BANT Score</Select.Option>
                 <Select.Option value="qualification">Sort by Category</Select.Option>

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
 
     class Config:
-        env_file = ".env", "../.env"
+        env_file = ".env", "../.env", "backend/.env"
         env_file_encoding = "utf-8"
         extra = "ignore"
 

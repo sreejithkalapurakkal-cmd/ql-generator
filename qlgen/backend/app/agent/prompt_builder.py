@@ -271,6 +271,55 @@ def _group_regions_into_zones(regions: list[str]) -> list[dict]:
     return zones
 
 
+def _build_strictness_override(strictness: str) -> str:
+    """Return prompt text overriding classification thresholds for strict/relaxed modes.
+
+    Returns empty string for moderate (default), preserving current behavior exactly.
+    """
+    if strictness == "strict":
+        return """
+
+═══════════════════════════════════════════
+OVERRIDE: STRICT MATCHING MODE
+═══════════════════════════════════════════
+You are operating in STRICT mode. Apply these REPLACEMENT thresholds (ignore the defaults above):
+
+CLASSIFICATION (STRICT):
+- verified_match: icp_match_score >= 80, ALL 4 critical dimensions (offering, geography, industry, size) score 2, AND 7+ dimensions have evidence
+- potential_match: icp_match_score >= 65, ALL 4 critical dimensions score >= 1, AND 5+ dimensions have evidence
+- weak_match: ELIMINATED — do NOT return any weak_match companies. Discard them entirely.
+- DISCARD: icp_match_score < 65 OR any critical dimension scores 0
+
+BEHAVIORAL RULES (STRICT):
+- Prefer FEWER, higher-quality results over volume. Quality over quantity.
+- Spend more time on verification — use scrape_webpage on company websites to confirm dimension evidence before classifying.
+- If in doubt about a classification, demote the company to the lower tier or discard.
+- Do NOT pad results with marginal matches."""
+    elif strictness == "relaxed":
+        return """
+
+═══════════════════════════════════════════
+OVERRIDE: RELAXED MATCHING MODE
+═══════════════════════════════════════════
+You are operating in RELAXED mode. Apply these REPLACEMENT thresholds (ignore the defaults above):
+
+CLASSIFICATION (RELAXED):
+- verified_match: icp_match_score >= 50, ALL 4 critical dimensions (offering, geography, industry, size) score >= 1, AND 5+ dimensions have evidence
+- potential_match: icp_match_score >= 35, offering_fit >= 1, AND at least 1 other critical dimension (geography, industry, or size) scores >= 1
+- weak_match: icp_match_score >= 20, offering_fit >= 1
+- DISCARD: icp_match_score < 20 OR offering_fit = 0
+
+BEHAVIORAL RULES (RELAXED):
+- Cast a WIDER net. Include partial-match candidates that show promise on key dimensions.
+- Prioritize breadth of discovery — find more companies rather than being overly selective.
+- For EVERY company in your results, match_reasoning MUST explicitly list:
+  (a) Which ICP criteria were met (with evidence)
+  (b) Which ICP criteria were NOT met
+  (c) Percentage of dimensions with positive evidence, e.g. "6 of 9 dimensions matched (67%)"
+- This transparency is critical for relaxed mode — users need to see exactly what matched and what didn't."""
+    return ""
+
+
 def build_discovery_prompt(icp: dict, options: dict) -> str:
     """Build prompt for Phase 1 — multi-source company discovery with 9-dimension ICP scoring."""
     max_companies = options.get("max_companies", 25)
@@ -391,7 +440,7 @@ NEGATIVE SIGNAL CHECK:
 MINIMUM TOOL USAGE: You MUST call at least 3 different tool types (e.g. apollo + exa + discover_icp_companies).
 
 AFTER DISCOVERY: Score each company on all 9 ICP dimensions, classify by evidence strength,
-and return the JSON as specified in your system prompt."""
+and return the JSON as specified in your system prompt.{_build_strictness_override(options.get("match_strictness", "moderate"))}"""
 
 
 def build_contact_prompt(company: dict, icp: dict) -> str:

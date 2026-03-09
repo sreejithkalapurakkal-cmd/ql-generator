@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert } from 'antd';
-import { UploadOutlined, FileExcelOutlined, DownloadOutlined } from '@ant-design/icons';
+import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Slider } from 'antd';
+import { UploadOutlined, FileExcelOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload } from '../api/icpApi';
+import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
-import { ICPDefinition, DEFAULT_ICP } from '../types';
+import { ICPDefinition, DEFAULT_ICP, BANTWeights, DEFAULT_BANT_WEIGHTS } from '../types';
 
 const { TextArea } = Input;
 
@@ -60,8 +60,14 @@ const ICPConfigPage: React.FC = () => {
   const [config, setConfig] = useState<ICPDefinition>({ ...DEFAULT_ICP });
   const [saving, setSaving] = useState(false);
   const [tagInput, setTagInput] = useState<Record<string, string>>({});
+  const [matchStrictness, setMatchStrictness] = useState<'strict' | 'moderate' | 'relaxed'>('moderate');
+  const [bantWeights, setBantWeights] = useState<BANTWeights>({ ...DEFAULT_BANT_WEIGHTS });
+  const [pipelineMode, setPipelineMode] = useState<'single_run' | 'multi_step'>('single_run');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importParsing, setImportParsing] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiDescription, setAiDescription] = useState('');
+  const [aiGenerating, setAiGenerating] = useState(false);
 
   const handleImportUpload = async (file: File) => {
     setImportParsing(true);
@@ -75,7 +81,7 @@ const ICPConfigPage: React.FC = () => {
         if (icp.config) setConfig(icp.config as unknown as ICPDefinition);
         message.success('Search criteria imported — review and edit below');
         setImportModalOpen(false);
-        setCurrent(8); // Jump to Review step
+        setCurrent(9); // Jump to Review step
       } else {
         message.error('No ICP data found in uploaded file');
       }
@@ -85,6 +91,25 @@ const ICPConfigPage: React.FC = () => {
       setImportParsing(false);
     }
     return false;
+  };
+
+  const handleAIGenerate = async () => {
+    setAiGenerating(true);
+    try {
+      const res = await generateICPWithAI({ description: aiDescription });
+      const { name: aiName, description: aiDesc, config: aiConfig } = res.data;
+      if (aiName) setName(aiName);
+      if (aiDesc) setDescription(aiDesc);
+      if (aiConfig) setConfig(aiConfig as unknown as ICPDefinition);
+      message.success('Search criteria generated — review and edit below');
+      setAiModalOpen(false);
+      setAiDescription('');
+      setCurrent(9); // Jump to Review step
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || 'Failed to generate search criteria with AI');
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   useEffect(() => {
@@ -138,6 +163,23 @@ const ICPConfigPage: React.FC = () => {
                   <a href={getICPTemplateURL()} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
                     <DownloadOutlined /> Download Template
                   </a>
+                </Space>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {!id && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<RobotOutlined />}
+              message="Want AI to build your search criteria?"
+              description={
+                <Space size="middle" style={{ marginTop: 4 }}>
+                  <Button size="small" icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>
+                    Create with AI
+                  </Button>
+                  <span style={{ fontSize: 12, color: 'var(--g500)' }}>Describe your ideal customer and let AI fill in all the fields</span>
                 </Space>
               }
               style={{ marginBottom: 16 }}
@@ -344,6 +386,123 @@ const ICPConfigPage: React.FC = () => {
       ),
     },
     {
+      title: 'Settings',
+      content: (
+        <div>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Run Mode</div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {([
+                { key: 'single_run' as const, label: 'Single Run', desc: 'Run the full pipeline in one go. Discovery → Contacts → BANT Scoring.' },
+                { key: 'multi_step' as const, label: 'Review Mode', desc: 'Pause after company discovery to review and select companies before proceeding.' },
+              ]).map((opt) => (
+                <div
+                  key={opt.key}
+                  onClick={() => setPipelineMode(opt.key)}
+                  style={{
+                    flex: 1,
+                    padding: '12px 16px',
+                    borderRadius: 8,
+                    border: pipelineMode === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
+                    background: pipelineMode === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 13, color: pipelineMode === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
+                    {opt.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Match Strictness</div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {([
+                { key: 'strict' as const, label: 'Strict', desc: 'Fewer, higher-confidence results. No weak matches.' },
+                { key: 'moderate' as const, label: 'Moderate', desc: 'Balanced matching with standard thresholds.' },
+                { key: 'relaxed' as const, label: 'Relaxed', desc: 'Wider net with partial matches and detailed reasoning.' },
+              ]).map((opt) => (
+                <div
+                  key={opt.key}
+                  onClick={() => setMatchStrictness(opt.key)}
+                  style={{
+                    flex: 1,
+                    padding: '12px 16px',
+                    borderRadius: 8,
+                    border: matchStrictness === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
+                    background: matchStrictness === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 13, color: matchStrictness === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
+                    {opt.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, color: 'var(--g800)' }}>BANT Score Priority</div>
+            <div style={{ fontSize: 12, color: 'var(--g500)', marginBottom: 10 }}>
+              Adjust relative importance of each BANT dimension. Leads are scored on Budget, Authority, Need, and Timing — higher weight means that dimension matters more for ranking.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+              {([
+                { label: 'Balanced', weights: { budget: 3, authority: 3, need: 3, timing: 3 } },
+                { label: 'Budget Focus', weights: { budget: 5, authority: 3, need: 3, timing: 2 } },
+                { label: 'Need Focus', weights: { budget: 2, authority: 3, need: 5, timing: 2 } },
+                { label: 'Timing Focus', weights: { budget: 2, authority: 2, need: 3, timing: 5 } },
+                { label: 'Authority Focus', weights: { budget: 2, authority: 5, need: 3, timing: 2 } },
+              ] as { label: string; weights: BANTWeights }[]).map((preset) => {
+                const isActive = bantWeights.budget === preset.weights.budget && bantWeights.authority === preset.weights.authority && bantWeights.need === preset.weights.need && bantWeights.timing === preset.weights.timing;
+                return (
+                  <Button
+                    key={preset.label}
+                    size="small"
+                    onClick={() => setBantWeights({ ...preset.weights })}
+                    style={{
+                      borderColor: isActive ? 'var(--purple, #722ed1)' : undefined,
+                      color: isActive ? 'var(--purple, #722ed1)' : undefined,
+                      background: isActive ? 'var(--purple-pale, #f9f0ff)' : undefined,
+                      fontWeight: isActive ? 600 : 400,
+                    }}
+                  >
+                    {preset.label}
+                  </Button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px' }}>
+              {([
+                { key: 'budget' as const, label: 'Budget' },
+                { key: 'authority' as const, label: 'Authority' },
+                { key: 'need' as const, label: 'Need' },
+                { key: 'timing' as const, label: 'Timing' },
+              ]).map((dim) => (
+                <div key={dim.key}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--g700)', marginBottom: 2 }}>{dim.label}</div>
+                  <Slider
+                    min={1}
+                    max={5}
+                    value={bantWeights[dim.key]}
+                    onChange={(val) => setBantWeights((prev) => ({ ...prev, [dim.key]: val }))}
+                    marks={{ 1: 'Low', 3: 'Normal', 5: 'High' }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
       title: 'Review',
       content: (
         <div>
@@ -373,7 +532,7 @@ const ICPConfigPage: React.FC = () => {
     },
   ];
 
-  const handleSave = async (runPipeline: boolean) => {
+  const handleSave = async (runPipeline: boolean, pipelineMode: string = 'single_run') => {
     if (!name.trim()) {
       message.error('Please provide an ICP name');
       return;
@@ -390,7 +549,7 @@ const ICPConfigPage: React.FC = () => {
       message.success('Search criteria saved successfully');
 
       if (runPipeline && icpId) {
-        const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5 } });
+        const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5, pipeline_mode: pipelineMode, match_strictness: matchStrictness, bant_weights: bantWeights } });
         navigate(`/pipeline/${runRes.data.id}`);
       } else {
         navigate('/icp');
@@ -446,7 +605,7 @@ const ICPConfigPage: React.FC = () => {
                 {current === steps.length - 1 && (
                   <>
                     <Button onClick={() => handleSave(false)} loading={saving}>Save Only</Button>
-                    <Button type="primary" onClick={() => handleSave(true)} loading={saving}>Save & Run Search</Button>
+                    <Button type="primary" onClick={() => handleSave(true, pipelineMode)} loading={saving}>Save & Run Search</Button>
                   </>
                 )}
               </Space>
@@ -492,6 +651,44 @@ const ICPConfigPage: React.FC = () => {
             </div>
           )}
         </Upload.Dragger>
+      </Modal>
+
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <RobotOutlined style={{ color: 'var(--purple, #722ed1)', fontSize: 18 }} />
+            <span>Create Search Criteria with AI</span>
+          </div>
+        }
+        open={aiModalOpen}
+        onCancel={() => !aiGenerating && setAiModalOpen(false)}
+        maskClosable={!aiGenerating}
+        footer={
+          <Space>
+            <Button onClick={() => setAiModalOpen(false)} disabled={aiGenerating}>Cancel</Button>
+            <Button
+              type="primary"
+              onClick={handleAIGenerate}
+              loading={aiGenerating}
+              disabled={!aiDescription.trim()}
+            >
+              Generate
+            </Button>
+          </Space>
+        }
+        width={560}
+      >
+        <p style={{ color: 'var(--g600)', fontSize: 13, margin: '0 0 12px' }}>
+          Describe your ideal customer in plain language. Include details like your product/service,
+          target industry, company size, geography, and any technology or business signals you care about.
+        </p>
+        <TextArea
+          rows={5}
+          value={aiDescription}
+          onChange={(e) => setAiDescription(e.target.value)}
+          placeholder="Example: We sell cloud migration services to mid-market US ecommerce companies with 200-2000 employees running legacy platforms like Magento 1 or Shopify Basic. We target CTOs and VPs of Engineering who are experiencing site performance issues during peak traffic."
+          disabled={aiGenerating}
+        />
       </Modal>
     </div>
   );

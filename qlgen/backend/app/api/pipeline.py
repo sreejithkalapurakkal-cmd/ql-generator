@@ -10,14 +10,17 @@ from typing import List
 
 from app.db.session import get_db
 from app.models.pipeline import PipelineRun
+from app.models.company import Company
 from app.models.icp import ICPConfig
-from app.schemas.pipeline import PipelineRunRequest, PipelineRunResponse, PipelineLogResponse
-from app.services.pipeline_service import execute_pipeline
+from app.schemas.pipeline import PipelineRunRequest, PipelineRunResponse, PipelineLogResponse, PromoteCompaniesRequest
+from app.services.pipeline_service import execute_pipeline, resume_pipeline_post_review
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
 # In-memory store for SSE progress updates
 pipeline_events: dict[str, list] = {}
+# Set of run IDs that have been requested to cancel
+cancelled_runs: set[str] = set()
 
 
 def _estimate_duration(options: dict | None) -> int:
@@ -29,6 +32,7 @@ def _estimate_duration(options: dict | None) -> int:
 def _build_run_response(run: PipelineRun) -> PipelineRunResponse:
     """Build a PipelineRunResponse from a PipelineRun model with ICP info."""
     icp = run.icp_config if hasattr(run, 'icp_config') and run.icp_config else None
+    options = run.options or {}
     return PipelineRunResponse(
         id=run.id,
         icp_config_id=run.icp_config_id,
@@ -43,6 +47,10 @@ def _build_run_response(run: PipelineRun) -> PipelineRunResponse:
         completed_at=run.completed_at,
         error_log=run.error_log,
         estimated_duration_seconds=_estimate_duration(run.options),
+        pipeline_mode=options.get("pipeline_mode"),
+        match_strictness=options.get("match_strictness"),
+        bant_weights=options.get("bant_weights"),
+        stage_details=run.stage_details,
     )
 
 
@@ -74,7 +82,7 @@ async def start_pipeline(
     pipeline_events[run_id_str] = []
 
     # Start pipeline in background
-    background_tasks.add_task(execute_pipeline, run.id, pipeline_events)
+    background_tasks.add_task(execute_pipeline, run.id, pipeline_events, cancelled_runs)
 
     # Attach icp_config for response building
     run.icp_config = icp
@@ -157,7 +165,72 @@ async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db)):
     run_id_str = str(run_id)
     if run_id_str in pipeline_events:
         del pipeline_events[run_id_str]
+    cancelled_runs.discard(run_id_str)
     return {"detail": "Pipeline run deleted"}
+
+
+@router.post("/{run_id}/cancel")
+async def cancel_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Request cancellation of a running pipeline."""
+    result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    if run.status not in ("running", "pending"):
+        raise HTTPException(status_code=400, detail=f"Cannot cancel pipeline with status '{run.status}'")
+    run_id_str = str(run_id)
+    cancelled_runs.add(run_id_str)
+    return {"detail": "Cancellation requested"}
+
+
+@router.post("/{run_id}/promote", response_model=PipelineRunResponse)
+async def promote_companies(
+    run_id: UUID,
+    request: PromoteCompaniesRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Promote selected companies and resume the pipeline for Phase 2+3."""
+    result = await db.execute(
+        select(PipelineRun)
+        .options(selectinload(PipelineRun.icp_config))
+        .where(PipelineRun.id == run_id)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    if run.status != "awaiting_review":
+        raise HTTPException(status_code=400, detail=f"Pipeline is not awaiting review (current status: {run.status})")
+
+    # Mark selected companies as promoted, others as skipped
+    company_result = await db.execute(
+        select(Company).where(Company.pipeline_run_id == run_id)
+    )
+    all_companies = company_result.scalars().all()
+    promoted_ids = set(request.company_ids)
+    promoted_count = 0
+    for company in all_companies:
+        if company.id in promoted_ids:
+            company.promoted = True
+            promoted_count += 1
+        else:
+            company.promoted = False
+
+    # Update stage_details with promotion metadata
+    stage_details = run.stage_details or {}
+    stage_details["promoted_company_ids"] = [str(cid) for cid in request.company_ids]
+    stage_details["promoted_count"] = promoted_count
+    run.stage_details = stage_details
+    await db.commit()
+
+    # Initialize SSE event list for the resumed pipeline
+    run_id_str = str(run_id)
+    pipeline_events[run_id_str] = []
+
+    # Start resumed pipeline in background
+    background_tasks.add_task(resume_pipeline_post_review, run.id, pipeline_events, cancelled_runs)
+
+    return _build_run_response(run)
 
 
 @router.get("/{run_id}/logs", response_model=List[PipelineLogResponse])
@@ -189,10 +262,14 @@ async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
     # Check if run is already finished — send terminal event immediately
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
-    if run and run.status in ("completed", "failed"):
+    if run and run.status in ("completed", "failed", "awaiting_review", "cancelled"):
         async def finished_generator():
             if run.status == "completed":
                 yield f'event: completed\ndata: {json.dumps({"companies_found": run.companies_found or 0, "contacts_found": run.contacts_found or 0})}\n\n'
+            elif run.status == "awaiting_review":
+                yield f'event: awaiting_review\ndata: {json.dumps({"companies_found": run.companies_found or 0})}\n\n'
+            elif run.status == "cancelled":
+                yield f'event: cancelled\ndata: {json.dumps({"companies_found": run.companies_found or 0, "contacts_found": run.contacts_found or 0})}\n\n'
             else:
                 yield f'event: error\ndata: {json.dumps({"message": run.error_log or "Pipeline failed"})}\n\n'
 
@@ -215,7 +292,7 @@ async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
                     data = json.dumps(event)
                     yield f"event: {event_type}\ndata: {data}\n\n"
                     last_index += 1
-                    if event_type == "completed" or event_type == "error":
+                    if event_type in ("completed", "error", "awaiting_review", "cancelled"):
                         return
             else:
                 no_event_cycles += 1

@@ -3,7 +3,7 @@ import { PipelineRun, PipelineLogEntry } from '../types';
 
 export const startPipeline = (data: {
   icp_config_id: string;
-  options?: { max_companies?: number; max_contacts_per_company?: number };
+  options?: { max_companies?: number; max_contacts_per_company?: number; pipeline_mode?: string; match_strictness?: 'strict' | 'moderate' | 'relaxed'; bant_weights?: { budget: number; authority: number; need: number; timing: number } };
 }) => client.post<PipelineRun>('/pipeline/run', data);
 
 export const getPipelineStatus = (runId: string) =>
@@ -17,6 +17,12 @@ export const getPipelineLogs = (runId: string) =>
 
 export const deletePipelineRun = (runId: string) =>
   client.delete(`/pipeline/${runId}`);
+
+export const cancelPipeline = (runId: string) =>
+  client.post(`/pipeline/${runId}/cancel`);
+
+export const promoteCompanies = (runId: string, companyIds: string[]) =>
+  client.post<PipelineRun>(`/pipeline/${runId}/promote`, { company_ids: companyIds });
 
 export interface ICPStat {
   icp_id: string;

@@ -13,6 +13,9 @@ export const updateICP = (id: string, data: Partial<{ name: string; description:
 
 export const deleteICP = (id: string) => client.delete(`/icp/${id}`);
 
+export const generateICPWithAI = (data: { description: string }) =>
+  client.post<{ name: string; description: string | null; config: Record<string, unknown> }>('/icp/generate', data);
+
 export const getICPTemplateURL = () => {
   const base = client.defaults.baseURL || '/api/v1';
   return `${base}/icp/template/download`;

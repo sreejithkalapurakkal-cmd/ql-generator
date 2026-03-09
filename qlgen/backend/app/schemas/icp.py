@@ -4,6 +4,16 @@ from datetime import datetime
 from typing import Optional
 
 
+class ICPGenerateRequest(BaseModel):
+    description: str
+
+
+class ICPGenerateResponse(BaseModel):
+    name: str
+    description: Optional[str] = None
+    config: dict
+
+
 class ICPConfigCreate(BaseModel):
     name: str
     description: Optional[str] = None

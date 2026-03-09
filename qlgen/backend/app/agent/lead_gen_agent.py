@@ -26,6 +26,12 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+class PipelineCancelled(Exception):
+    """Raised when a pipeline run is cancelled by the user."""
+    pass
+
+
 # Friendly display names for each tool
 TOOL_DISPLAY_NAMES = {
     "apollo_company_search": "Searching company database",
@@ -57,7 +63,7 @@ STAGE_DISPLAY_NAMES = {
 }
 
 
-def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collector: list = None, initial_stage: str = "company_discovery"):
+def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collector: list = None, initial_stage: str = "company_discovery", cancelled_runs: set = None):
     """Create a Strands callback handler that emits SSE events for pipeline progress.
 
     The handler captures tool calls, agent reasoning text, and lifecycle events
@@ -170,6 +176,10 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
         state["pending_tool"] = None
 
     def callback_handler(**kwargs):
+        # Check for cancellation before any processing
+        if cancelled_runs is not None and run_id_str in cancelled_runs:
+            raise PipelineCancelled(f"Pipeline {run_id_str} cancelled by user")
+
         try:
             # Handle tool use events
             # Strands streams current_tool_use multiple times as input accumulates.
@@ -187,11 +197,17 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 if tool_id and tool_id in state["emitted_tool_ids"]:
                     return
 
-                # Capture any unflushed reasoning text as context for this tool
+                # Flush reasoning buffer before the tool call
                 if state["text_buffer"].strip():
                     text = state["text_buffer"].strip()
                     if not text.startswith("{") and not text.startswith("```"):
                         state["last_reasoning"] = text
+                        _try_detect_stage_from_text(text)
+                        _emit({
+                            "type": "agent_reasoning",
+                            "text": text,
+                            "stage": state["current_stage"],
+                        })
                     state["text_buffer"] = ""
 
                 # If this is a different tool_id, flush the previous pending tool
@@ -215,6 +231,19 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 if pending_id:
                     state["emitted_tool_ids"].add(pending_id)
                 _flush_pending_tool()
+
+            # Flush reasoning buffer before showing tool result
+            if "tool_result" in kwargs and state["text_buffer"].strip():
+                text = state["text_buffer"].strip()
+                if not text.startswith("{") and not text.startswith("```"):
+                    state["last_reasoning"] = text
+                    _try_detect_stage_from_text(text)
+                    _emit({
+                        "type": "agent_reasoning",
+                        "text": text,
+                        "stage": state["current_stage"],
+                    })
+                state["text_buffer"] = ""
 
             # Handle tool result events
             if "tool_result" in kwargs:
@@ -258,13 +287,12 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 chunk = kwargs["data"]
                 if chunk and isinstance(chunk, str):
                     state["text_buffer"] += chunk
-                    # Emit reasoning in smaller chunks for finer granularity
-                    buf = state["text_buffer"]
-                    if len(buf) > 80 or buf.rstrip().endswith((".", "!", "?", ":")):
-                        text = buf.strip()
+                    # Only emit at safety cap; natural flush happens when
+                    # tool calls, tool results, or lifecycle events arrive
+                    if len(state["text_buffer"]) > 500:
+                        text = state["text_buffer"].strip()
                         if text and not text.startswith("{") and not text.startswith("```"):
                             state["last_reasoning"] = text
-                            # Detect stage transitions from reasoning text
                             _try_detect_stage_from_text(text)
                             _emit({
                                 "type": "agent_reasoning",
@@ -293,6 +321,8 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                     "message": f"Agent initialized, starting {stage_name}...",
                 })
 
+        except PipelineCancelled:
+            raise
         except Exception as e:
             logger.warning(f"Callback handler error (non-fatal): {e}")
 
