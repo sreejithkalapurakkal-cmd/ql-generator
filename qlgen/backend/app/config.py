@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     SIMFIN_API_KEY: str = ""
     FMP_API_KEY: str = ""
     NEWS_API_KEY: str = ""
+    FRED_API_KEY: str = ""
 
     class Config:
         env_file = ".env", "../.env", "backend/.env"

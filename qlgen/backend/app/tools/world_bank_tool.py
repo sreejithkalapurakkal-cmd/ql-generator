@@ -1,11 +1,54 @@
 import httpx
 from strands import tool
+from app.config import get_settings
 
 DEFAULT_INDICATORS = {
     "NY.GDP.MKTP.CD": "GDP (current US$)",
     "FP.CPI.TOTL.ZG": "Inflation (consumer prices, annual %)",
     "SL.UEM.TOTL.ZS": "Unemployment (% of total labor force)",
 }
+
+# FRED series for US-specific data (Federal Reserve Economic Data)
+FRED_US_SERIES = {
+    "GDPC1": "Real GDP (Billions of Chained 2017 Dollars)",
+    "CPIAUCSL": "Consumer Price Index (All Urban Consumers)",
+    "UNRATE": "Unemployment Rate (%)",
+}
+
+
+def _fetch_fred_us() -> dict:
+    """Fetch key US economic indicators from FRED API."""
+    settings = get_settings()
+    fred_key = settings.FRED_API_KEY
+    if not fred_key:
+        return {}
+
+    results = {}
+    for series_id, label in FRED_US_SERIES.items():
+        try:
+            resp = httpx.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": series_id,
+                    "api_key": fred_key,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": 5,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            obs = resp.json().get("observations", [])
+            values = [
+                {"date": o["date"], "value": float(o["value"])}
+                for o in obs
+                if o.get("value") not in (".", None)
+            ]
+            results[series_id] = {"label": label, "source": "FRED", "data": values}
+        except Exception as e:
+            results[series_id] = {"label": label, "source": "FRED", "error": str(e)}
+
+    return results
 
 
 @tool
@@ -14,7 +57,8 @@ def get_economic_indicators(
     indicator: str = "",
 ) -> dict:
     """
-    Fetch macro-economic indicators from the World Bank. FREE, no API key needed.
+    Fetch macro-economic indicators from World Bank (all countries) and FRED
+    (US only, more granular). FREE — World Bank needs no key; FRED uses FRED_API_KEY.
     BEST FOR: Market sizing and macro context — GDP, inflation, unemployment rates
     for a company's home market. Returns data for the last 5 years.
     USE IN STAGE: BANT Scoring (Stage 4) — Budget and Timing dimensions.
@@ -27,7 +71,7 @@ def get_economic_indicators(
                    SL.UEM.TOTL.ZS (unemployment), NY.GDP.MKTP.KD.ZG (GDP growth)
 
     Returns:
-        dict with indicator data for last 5 years
+        dict with indicator data for last 5 years, plus FRED data for US
     """
     code = country_code.strip().upper()
 
@@ -77,7 +121,12 @@ def get_economic_indicators(
         except Exception as e:
             results[ind_code] = {"label": ind_label, "error": str(e)}
 
-    return {
-        "country_code": code,
-        "indicators": results,
-    }
+    response = {"country_code": code, "indicators": results}
+
+    # Supplement with FRED data for US (more granular and recent)
+    if code == "US" and not indicator:
+        fred_data = _fetch_fred_us()
+        if fred_data:
+            response["fred_indicators"] = fred_data
+
+    return response

@@ -23,6 +23,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "APOLLO_API_KEY",
         "base_url": "https://api.apollo.io/v1",
+        "rate_limit_info": "50 req/hr (free)",
     },
     {
         "tool_name": "apollo_people_search",
@@ -31,6 +32,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "APOLLO_API_KEY",
         "base_url": "https://api.apollo.io/v1",
+        "rate_limit_info": "50 req/hr (free)",
     },
     {
         "tool_name": "exa_search",
@@ -39,6 +41,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "EXA_API_KEY",
         "base_url": "https://api.exa.ai",
+        "rate_limit_info": "1,000 req/mo (free)",
     },
     {
         "tool_name": "tavily_search",
@@ -47,6 +50,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "TAVILY_API_KEY",
         "base_url": "https://api.tavily.com",
+        "rate_limit_info": "1,000 req/mo (free)",
     },
     {
         "tool_name": "duckduckgo_search",
@@ -55,6 +59,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "~5 req/burst, auto-backoff",
     },
     {
         "tool_name": "hunter_domain_search",
@@ -63,6 +68,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "HUNTER_API_KEY",
         "base_url": "https://api.hunter.io/v2",
+        "rate_limit_info": "25 req/mo (free)",
     },
     {
         "tool_name": "hunter_email_finder",
@@ -71,6 +77,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "HUNTER_API_KEY",
         "base_url": "https://api.hunter.io/v2",
+        "rate_limit_info": "25 req/mo (free)",
     },
     {
         "tool_name": "lusha_person_search",
@@ -79,6 +86,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "LUSHA_API_KEY",
         "base_url": "https://api.lusha.com",
+        "rate_limit_info": "5 credits/mo (free)",
     },
     {
         "tool_name": "scrape_webpage",
@@ -87,6 +95,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (self-hosted)",
     },
     {
         "tool_name": "search_yc_companies",
@@ -95,6 +104,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": None,
     },
     {
         "tool_name": "find_linkedin_profiles",
@@ -103,6 +113,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "2s delay between searches",
     },
     {
         "tool_name": "scrape_team_page",
@@ -111,6 +122,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (self-hosted)",
     },
     {
         "tool_name": "get_company_phone",
@@ -119,6 +131,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "GOOGLE_PLACES_API_KEY",
         "base_url": "https://maps.googleapis.com/maps/api/place",
+        "rate_limit_info": None,
     },
     {
         "tool_name": "discover_icp_companies",
@@ -127,6 +140,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "Exp. backoff 4-20s",
     },
     {
         "tool_name": "research_company",
@@ -135,6 +149,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "30s backoff on limit",
     },
     {
         "tool_name": "find_company_executives",
@@ -143,6 +158,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "30s backoff on limit",
     },
     # Research tools
     {
@@ -152,6 +168,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": "https://data.sec.gov",
+        "rate_limit_info": "10 req/sec (SEC EDGAR)",
     },
     {
         "tool_name": "get_company_registry",
@@ -160,6 +177,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": "https://api.opencorporates.com",
+        "rate_limit_info": None,
     },
     {
         "tool_name": "get_market_data",
@@ -168,6 +186,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": None,
     },
     {
         "tool_name": "get_economic_indicators",
@@ -176,6 +195,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": "https://api.worldbank.org",
+        "rate_limit_info": None,
     },
     {
         "tool_name": "get_financial_statements",
@@ -184,6 +204,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "SIMFIN_API_KEY",
         "base_url": "https://backend.simfin.com/api/v3",
+        "rate_limit_info": None,
     },
     {
         "tool_name": "get_investor_data",
@@ -192,6 +213,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "FMP_API_KEY",
         "base_url": "https://financialmodelingprep.com/api/v3",
+        "rate_limit_info": "250 req/day (FMP free)",
     },
     {
         "tool_name": "get_news_sentiment",
@@ -200,6 +222,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": True,
         "api_key_env_var": "NEWS_API_KEY",
         "base_url": "https://newsapi.org/v2",
+        "rate_limit_info": "100 req/day (NewsAPI free)",
     },
     # Copilot DB tools
     {
@@ -209,6 +232,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
     {
         "tool_name": "search_companies_structured",
@@ -217,6 +241,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
     {
         "tool_name": "get_company_details",
@@ -225,6 +250,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
     {
         "tool_name": "get_icp_details",
@@ -233,6 +259,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
     {
         "tool_name": "get_pipeline_summary",
@@ -241,6 +268,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
     {
         "tool_name": "get_data_statistics",
@@ -249,6 +277,7 @@ TOOL_SEED_DATA = [
         "requires_api_key": False,
         "api_key_env_var": None,
         "base_url": None,
+        "rate_limit_info": "No limit (local DB)",
     },
 ]
 
@@ -265,6 +294,7 @@ async def ensure_tools_seeded(db: AsyncSession) -> None:
             requires_api_key=tool_data["requires_api_key"],
             api_key_env_var=tool_data["api_key_env_var"],
             base_url=tool_data["base_url"],
+            rate_limit_info=tool_data.get("rate_limit_info"),
         ).on_conflict_do_update(
             index_elements=["tool_name"],
             set_={
@@ -273,6 +303,7 @@ async def ensure_tools_seeded(db: AsyncSession) -> None:
                 "requires_api_key": tool_data["requires_api_key"],
                 "api_key_env_var": tool_data["api_key_env_var"],
                 "base_url": tool_data["base_url"],
+                "rate_limit_info": tool_data.get("rate_limit_info"),
             },
         )
         await db.execute(stmt)

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Slider } from 'antd';
+import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Switch } from 'antd';
 import { UploadOutlined, FileExcelOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI } from '../api/icpApi';
+import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI, generateICPFromFile } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
-import { ICPDefinition, DEFAULT_ICP, BANTWeights, DEFAULT_BANT_WEIGHTS } from '../types';
+import { ICPDefinition, DEFAULT_ICP } from '../types';
 
 const { TextArea } = Input;
 
@@ -16,7 +16,8 @@ const TagInputField: React.FC<{
   placeholder?: string;
   tagInput: Record<string, string>;
   setTagInput: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-}> = ({ label, field, values, onChange, placeholder, tagInput, setTagInput }) => {
+  tagColor?: string;
+}> = ({ label, field, values, onChange, placeholder, tagInput, setTagInput, tagColor = 'blue' }) => {
   const addTag = () => {
     const value = tagInput[field] || '';
     if (value.trim() && !values.includes(value.trim())) {
@@ -30,7 +31,7 @@ const TagInputField: React.FC<{
       <Space direction="vertical" style={{ width: '100%' }}>
         <Space wrap>
           {values.map((v) => (
-            <Tag key={v} closable onClose={() => onChange(values.filter((t) => t !== v))} color="blue">
+            <Tag key={v} closable onClose={() => onChange(values.filter((t) => t !== v))} color={tagColor}>
               {v}
             </Tag>
           ))}
@@ -60,13 +61,11 @@ const ICPConfigPage: React.FC = () => {
   const [config, setConfig] = useState<ICPDefinition>({ ...DEFAULT_ICP });
   const [saving, setSaving] = useState(false);
   const [tagInput, setTagInput] = useState<Record<string, string>>({});
-  const [matchStrictness, setMatchStrictness] = useState<'strict' | 'moderate' | 'relaxed'>('moderate');
-  const [bantWeights, setBantWeights] = useState<BANTWeights>({ ...DEFAULT_BANT_WEIGHTS });
-  const [pipelineMode, setPipelineMode] = useState<'single_run' | 'multi_step'>('single_run');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importParsing, setImportParsing] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiDescription, setAiDescription] = useState('');
+  const [aiFile, setAiFile] = useState<File | null>(null);
   const [aiGenerating, setAiGenerating] = useState(false);
 
   const handleImportUpload = async (file: File) => {
@@ -81,7 +80,7 @@ const ICPConfigPage: React.FC = () => {
         if (icp.config) setConfig(icp.config as unknown as ICPDefinition);
         message.success('Search criteria imported — review and edit below');
         setImportModalOpen(false);
-        setCurrent(9); // Jump to Review step
+        setCurrent(5); // Jump to Review step
       } else {
         message.error('No ICP data found in uploaded file');
       }
@@ -96,7 +95,9 @@ const ICPConfigPage: React.FC = () => {
   const handleAIGenerate = async () => {
     setAiGenerating(true);
     try {
-      const res = await generateICPWithAI({ description: aiDescription });
+      const res = aiFile
+        ? await generateICPFromFile(aiFile, aiDescription)
+        : await generateICPWithAI({ description: aiDescription });
       const { name: aiName, description: aiDesc, config: aiConfig } = res.data;
       if (aiName) setName(aiName);
       if (aiDesc) setDescription(aiDesc);
@@ -104,7 +105,8 @@ const ICPConfigPage: React.FC = () => {
       message.success('Search criteria generated — review and edit below');
       setAiModalOpen(false);
       setAiDescription('');
-      setCurrent(9); // Jump to Review step
+      setAiFile(null);
+      setCurrent(5); // Jump to Review step
     } catch (err: any) {
       message.error(err?.response?.data?.detail || 'Failed to generate search criteria with AI');
     } finally {
@@ -124,29 +126,38 @@ const ICPConfigPage: React.FC = () => {
 
   const updateIndustry = useCallback((index: number, field: 'vertical' | 'sub_vertical', value: string) => {
     setConfig((prev) => {
-      const updated = [...prev.industry_types];
+      const updated = [...prev.firmographic_details.industry_types];
       updated[index] = { ...updated[index], [field]: field === 'sub_vertical' ? (value || null) : value };
-      return { ...prev, industry_types: updated };
+      return {
+        ...prev,
+        firmographic_details: { ...prev.firmographic_details, industry_types: updated },
+      };
     });
   }, []);
 
   const removeIndustry = useCallback((index: number) => {
     setConfig((prev) => ({
       ...prev,
-      industry_types: prev.industry_types.filter((_, j) => j !== index),
+      firmographic_details: {
+        ...prev.firmographic_details,
+        industry_types: prev.firmographic_details.industry_types.filter((_, j) => j !== index),
+      },
     }));
   }, []);
 
   const addIndustry = useCallback(() => {
     setConfig((prev) => ({
       ...prev,
-      industry_types: [...prev.industry_types, { vertical: '', sub_vertical: null }],
+      firmographic_details: {
+        ...prev.firmographic_details,
+        industry_types: [...prev.firmographic_details.industry_types, { vertical: '', sub_vertical: null }],
+      },
     }));
   }, []);
 
   const steps = [
     {
-      title: 'Offering',
+      title: 'Firmographics',
       content: (
         <Form layout="vertical">
           {!id && (
@@ -191,53 +202,24 @@ const ICPConfigPage: React.FC = () => {
           <Form.Item label="Description">
             <TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Brief description of this search criteria..." />
           </Form.Item>
-          <TagInputField
-            label="Target Offerings / Service Areas"
-            field="offerings"
-            values={config.target_offering}
-            onChange={(v) => setConfig({ ...config, target_offering: v })}
-            placeholder="e.g., Platform engineering & replatforming"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-        </Form>
-      ),
-    },
-    {
-      title: 'Regions',
-      content: (
-        <Form layout="vertical">
-          <TagInputField
-            label="Target Countries"
-            field="countries"
-            values={config.regions.countries}
-            onChange={(v) => setConfig({ ...config, regions: { ...config.regions, countries: v } })}
-            placeholder="e.g., United States"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-          <TagInputField
-            label="Priority Areas (States, Cities)"
-            field="priority_areas"
-            values={config.regions.priority_areas}
-            onChange={(v) => setConfig({ ...config, regions: { ...config.regions, priority_areas: v } })}
-            placeholder="e.g., California, New York"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-        </Form>
-      ),
-    },
-    {
-      title: 'Industry',
-      content: (
-        <Form layout="vertical">
+
+          {/* Industry Verticals */}
           <Form.Item label="Industry Verticals">
             <Space direction="vertical" style={{ width: '100%' }}>
-              {config.industry_types.map((ind, i) => (
+              {config.firmographic_details.industry_types.map((ind, i) => (
                 <Space key={i} wrap>
-                  <Input value={ind.vertical} onChange={(e) => updateIndustry(i, 'vertical', e.target.value)} placeholder="Vertical" style={{ width: 250 }} />
-                  <Input value={ind.sub_vertical || ''} onChange={(e) => updateIndustry(i, 'sub_vertical', e.target.value)} placeholder="Sub-vertical (optional)" style={{ width: 250 }} />
+                  <Input
+                    value={ind.vertical}
+                    onChange={(e) => updateIndustry(i, 'vertical', e.target.value)}
+                    placeholder="Vertical (e.g., E-Commerce)"
+                    style={{ width: 250 }}
+                  />
+                  <Input
+                    value={ind.sub_vertical || ''}
+                    onChange={(e) => updateIndustry(i, 'sub_vertical', e.target.value)}
+                    placeholder="Sub-vertical (optional)"
+                    style={{ width: 250 }}
+                  />
                   <Button danger size="small" onClick={() => removeIndustry(i)}>Remove</Button>
                 </Space>
               ))}
@@ -246,260 +228,347 @@ const ICPConfigPage: React.FC = () => {
               </Button>
             </Space>
           </Form.Item>
-        </Form>
-      ),
-    },
-    {
-      title: 'Size',
-      content: (
-        <Form layout="vertical">
+
+          {/* Geography */}
+          <TagInputField
+            label="Target Countries"
+            field="countries"
+            values={config.firmographic_details.geography.countries}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                firmographic_details: {
+                  ...prev.firmographic_details,
+                  geography: { ...prev.firmographic_details.geography, countries: v },
+                },
+              }))
+            }
+            placeholder="e.g., United States"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
+          />
+          <TagInputField
+            label="Priority Areas (States, Cities)"
+            field="priority_areas"
+            values={config.firmographic_details.geography.priority_areas}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                firmographic_details: {
+                  ...prev.firmographic_details,
+                  geography: { ...prev.firmographic_details.geography, priority_areas: v },
+                },
+              }))
+            }
+            placeholder="e.g., California, New York"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
+          />
+
+          {/* Employee Range */}
           <Form.Item label="Employee Count Range">
             <Space wrap>
-              <InputNumber min={1} value={config.company_size.employees_min} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, employees_min: v || 1 } })} addonBefore="Min" />
+              <InputNumber
+                min={1}
+                value={config.firmographic_details.employee_range.min}
+                onChange={(v) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    firmographic_details: {
+                      ...prev.firmographic_details,
+                      employee_range: { ...prev.firmographic_details.employee_range, min: v || 1 },
+                    },
+                  }))
+                }
+                addonBefore="Min"
+              />
               <span>to</span>
-              <InputNumber min={1} value={config.company_size.employees_max} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, employees_max: v || 10000 } })} addonBefore="Max" />
+              <InputNumber
+                min={1}
+                value={config.firmographic_details.employee_range.max}
+                onChange={(v) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    firmographic_details: {
+                      ...prev.firmographic_details,
+                      employee_range: { ...prev.firmographic_details.employee_range, max: v || 10000 },
+                    },
+                  }))
+                }
+                addonBefore="Max"
+              />
             </Space>
           </Form.Item>
+
+          {/* Revenue Range */}
           <Form.Item label="Revenue Range">
             <Space wrap>
-              <Select value={config.company_size.revenue_currency} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, revenue_currency: v } })} style={{ width: 80 }}>
+              <Select
+                value={config.firmographic_details.revenue_range.currency}
+                onChange={(v) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    firmographic_details: {
+                      ...prev.firmographic_details,
+                      revenue_range: { ...prev.firmographic_details.revenue_range, currency: v },
+                    },
+                  }))
+                }
+                style={{ width: 80 }}
+              >
                 <Select.Option value="USD">USD</Select.Option>
                 <Select.Option value="INR">INR</Select.Option>
                 <Select.Option value="EUR">EUR</Select.Option>
                 <Select.Option value="GBP">GBP</Select.Option>
               </Select>
-              <InputNumber min={0} value={config.company_size.revenue_min} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, revenue_min: v || 0 } })} formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} addonBefore="Min" style={{ width: 200 }} />
+              <InputNumber
+                min={0}
+                value={config.firmographic_details.revenue_range.min}
+                onChange={(v) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    firmographic_details: {
+                      ...prev.firmographic_details,
+                      revenue_range: { ...prev.firmographic_details.revenue_range, min: v || 0 },
+                    },
+                  }))
+                }
+                formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                addonBefore="Min"
+                style={{ width: 200 }}
+              />
               <span>to</span>
-              <InputNumber min={0} value={config.company_size.revenue_max} onChange={(v) => setConfig({ ...config, company_size: { ...config.company_size, revenue_max: v || 0 } })} formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} addonBefore="Max" style={{ width: 200 }} />
+              <InputNumber
+                min={0}
+                value={config.firmographic_details.revenue_range.max}
+                onChange={(v) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    firmographic_details: {
+                      ...prev.firmographic_details,
+                      revenue_range: { ...prev.firmographic_details.revenue_range, max: v || 0 },
+                    },
+                  }))
+                }
+                formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                addonBefore="Max"
+                style={{ width: 200 }}
+              />
             </Space>
+          </Form.Item>
+
+          {/* Low Cost Center Toggle */}
+          <Form.Item label="Low Cost Center">
+            <Switch
+              checked={config.firmographic_details.low_cost_center}
+              onChange={(checked) =>
+                setConfig((prev) => ({
+                  ...prev,
+                  firmographic_details: { ...prev.firmographic_details, low_cost_center: checked },
+                }))
+              }
+            />
+            <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--g500)' }}>
+              Target companies with low-cost center operations
+            </span>
+          </Form.Item>
+
+        </Form>
+      ),
+    },
+    {
+      title: 'Capability',
+      content: (
+        <Form layout="vertical">
+          <TagInputField
+            label="Target Offerings / Service Areas"
+            field="offerings"
+            values={config.target_capability.offerings}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                target_capability: { ...prev.target_capability, offerings: v },
+              }))
+            }
+            placeholder="e.g., Platform engineering & replatforming"
+            tagInput={tagInput}
+            setTagInput={setTagInput}
+          />
+          <Form.Item label="Match Condition">
+            <div style={{ display: 'flex', gap: 12 }}>
+              {(['AND', 'OR'] as const).map((opt) => (
+                <div
+                  key={opt}
+                  onClick={() =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      target_capability: { ...prev.target_capability, condition: opt },
+                    }))
+                  }
+                  style={{
+                    flex: 1,
+                    padding: '12px 16px',
+                    borderRadius: 8,
+                    border:
+                      config.target_capability.condition === opt
+                        ? '2px solid var(--purple, #722ed1)'
+                        : '1px solid var(--g200, #e0e0e0)',
+                    background:
+                      config.target_capability.condition === opt
+                        ? 'var(--purple-pale, #f9f0ff)'
+                        : '#fff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 14,
+                      color:
+                        config.target_capability.condition === opt
+                          ? 'var(--purple, #722ed1)'
+                          : 'var(--g800)',
+                    }}
+                  >
+                    {opt}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>
+                    {opt === 'AND'
+                      ? 'Company must match ALL offerings'
+                      : 'Company must match ANY offering'}
+                  </div>
+                </div>
+              ))}
+            </div>
           </Form.Item>
         </Form>
       ),
     },
     {
-      title: 'Tech',
+      title: 'Urgency',
       content: (
         <Form layout="vertical">
           <TagInputField
-            label="Technology Maturity Signals (Positive)"
-            field="tech_signals"
-            values={config.technology_maturity.signals}
-            onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, signals: v } })}
-            placeholder="e.g., Running on Shopify Plus"
+            label="Urgency Signals"
+            field="urgency"
+            values={config.urgency_signals.signals}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                urgency_signals: { ...prev.urgency_signals, signals: v },
+              }))
+            }
+            placeholder="e.g., Recent funding round, Leadership change, Regulatory deadline"
             tagInput={tagInput}
             setTagInput={setTagInput}
+            tagColor="orange"
           />
-          <TagInputField
-            label="Negative Signals (Migration Needs)"
-            field="tech_negative"
-            values={config.technology_maturity.negative_signals}
-            onChange={(v) => setConfig({ ...config, technology_maturity: { ...config.technology_maturity, negative_signals: v } })}
-            placeholder="e.g., Legacy Magento 1 migration overdue"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
+          <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: -8, marginBottom: 16 }}>
+            Add signals that indicate a company has an urgent need. These are free-form — type your own signals based on your domain expertise.
+          </div>
+          <Form.Item label="Match Condition">
+            <div style={{ display: 'flex', gap: 12 }}>
+              {(['AND', 'OR'] as const).map((opt) => (
+                <div
+                  key={opt}
+                  onClick={() =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      urgency_signals: { ...prev.urgency_signals, condition: opt },
+                    }))
+                  }
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 8, cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center',
+                    border: config.urgency_signals.condition === opt ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
+                    background: config.urgency_signals.condition === opt ? 'var(--purple-pale, #f9f0ff)' : '#fff',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 14, color: config.urgency_signals.condition === opt ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
+                    {opt}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>
+                    {opt === 'AND' ? 'Company must show ALL signals' : 'Company must show ANY signal'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Form.Item>
         </Form>
       ),
     },
     {
-      title: 'Infra',
+      title: 'Budget',
       content: (
         <Form layout="vertical">
           <TagInputField
-            label="Infrastructure Readiness Indicators"
-            field="infra"
-            values={config.infrastructure_readiness.indicators}
-            onChange={(v) => setConfig({ ...config, infrastructure_readiness: { indicators: v } })}
-            placeholder="e.g., Cloud-hosted storefront"
+            label="Budget Signals"
+            field="budget"
+            values={config.budget_signals.signals}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                budget_signals: { ...prev.budget_signals, signals: v },
+              }))
+            }
+            placeholder="e.g., Recent fundraise >$10M, IT budget expansion, New CTO hire"
             tagInput={tagInput}
             setTagInput={setTagInput}
+            tagColor="green"
           />
+          <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: -8, marginBottom: 16 }}>
+            Add signals that indicate a company has budget availability. These are free-form — type your own signals based on your domain expertise.
+          </div>
+          <Form.Item label="Match Condition">
+            <div style={{ display: 'flex', gap: 12 }}>
+              {(['AND', 'OR'] as const).map((opt) => (
+                <div
+                  key={opt}
+                  onClick={() =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      budget_signals: { ...prev.budget_signals, condition: opt },
+                    }))
+                  }
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 8, cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center',
+                    border: config.budget_signals.condition === opt ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
+                    background: config.budget_signals.condition === opt ? 'var(--purple-pale, #f9f0ff)' : '#fff',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 14, color: config.budget_signals.condition === opt ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
+                    {opt}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>
+                    {opt === 'AND' ? 'Company must show ALL signals' : 'Company must show ANY signal'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Form.Item>
         </Form>
       ),
     },
     {
-      title: 'Drivers',
-      content: (
-        <Form layout="vertical">
-          <TagInputField
-            label="Growth Triggers"
-            field="growth"
-            values={config.digital_transformation_drivers.growth_triggers}
-            onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, growth_triggers: v } })}
-            placeholder="e.g., YoY revenue growth >20%"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-          <TagInputField
-            label="Operational Pains"
-            field="pains"
-            values={config.digital_transformation_drivers.operational_pains}
-            onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, operational_pains: v } })}
-            placeholder="e.g., Site performance degrading during peak traffic"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-          <TagInputField
-            label="Competitive Pressures"
-            field="pressures"
-            values={config.digital_transformation_drivers.competitive_pressures}
-            onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, competitive_pressures: v } })}
-            placeholder="e.g., Rising CAC"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-          <TagInputField
-            label="Strategic Initiatives"
-            field="initiatives"
-            values={config.digital_transformation_drivers.strategic_initiatives}
-            onChange={(v) => setConfig({ ...config, digital_transformation_drivers: { ...config.digital_transformation_drivers, strategic_initiatives: v } })}
-            placeholder="e.g., Launching mobile app or PWA"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-        </Form>
-      ),
-    },
-    {
-      title: 'Leadership',
+      title: 'Authority',
       content: (
         <Form layout="vertical">
           <TagInputField
             label="Target Roles"
             field="roles"
-            values={config.leadership_traits.target_roles}
-            onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, target_roles: v } })}
-            placeholder="e.g., CTO, VP of Engineering"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
-          <TagInputField
-            label="Behavioral Traits"
-            field="traits"
-            values={config.leadership_traits.behavioral_traits}
-            onChange={(v) => setConfig({ ...config, leadership_traits: { ...config.leadership_traits, behavioral_traits: v } })}
-            placeholder="e.g., Data-driven decision maker"
+            values={config.authority_roles.target_roles}
+            onChange={(v) =>
+              setConfig((prev) => ({
+                ...prev,
+                authority_roles: { ...prev.authority_roles, target_roles: v },
+              }))
+            }
+            placeholder="e.g., CTO, VP of Engineering, Head of Platform"
             tagInput={tagInput}
             setTagInput={setTagInput}
           />
         </Form>
-      ),
-    },
-    {
-      title: 'Settings',
-      content: (
-        <div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Run Mode</div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {([
-                { key: 'single_run' as const, label: 'Single Run', desc: 'Run the full pipeline in one go. Discovery → Contacts → BANT Scoring.' },
-                { key: 'multi_step' as const, label: 'Review Mode', desc: 'Pause after company discovery to review and select companies before proceeding.' },
-              ]).map((opt) => (
-                <div
-                  key={opt.key}
-                  onClick={() => setPipelineMode(opt.key)}
-                  style={{
-                    flex: 1,
-                    padding: '12px 16px',
-                    borderRadius: 8,
-                    border: pipelineMode === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
-                    background: pipelineMode === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13, color: pipelineMode === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
-                    {opt.label}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 20 }}>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Match Strictness</div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {([
-                { key: 'strict' as const, label: 'Strict', desc: 'Fewer, higher-confidence results. No weak matches.' },
-                { key: 'moderate' as const, label: 'Moderate', desc: 'Balanced matching with standard thresholds.' },
-                { key: 'relaxed' as const, label: 'Relaxed', desc: 'Wider net with partial matches and detailed reasoning.' },
-              ]).map((opt) => (
-                <div
-                  key={opt.key}
-                  onClick={() => setMatchStrictness(opt.key)}
-                  style={{
-                    flex: 1,
-                    padding: '12px 16px',
-                    borderRadius: 8,
-                    border: matchStrictness === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
-                    background: matchStrictness === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13, color: matchStrictness === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
-                    {opt.label}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 20 }}>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, color: 'var(--g800)' }}>BANT Score Priority</div>
-            <div style={{ fontSize: 12, color: 'var(--g500)', marginBottom: 10 }}>
-              Adjust relative importance of each BANT dimension. Leads are scored on Budget, Authority, Need, and Timing — higher weight means that dimension matters more for ranking.
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-              {([
-                { label: 'Balanced', weights: { budget: 3, authority: 3, need: 3, timing: 3 } },
-                { label: 'Budget Focus', weights: { budget: 5, authority: 3, need: 3, timing: 2 } },
-                { label: 'Need Focus', weights: { budget: 2, authority: 3, need: 5, timing: 2 } },
-                { label: 'Timing Focus', weights: { budget: 2, authority: 2, need: 3, timing: 5 } },
-                { label: 'Authority Focus', weights: { budget: 2, authority: 5, need: 3, timing: 2 } },
-              ] as { label: string; weights: BANTWeights }[]).map((preset) => {
-                const isActive = bantWeights.budget === preset.weights.budget && bantWeights.authority === preset.weights.authority && bantWeights.need === preset.weights.need && bantWeights.timing === preset.weights.timing;
-                return (
-                  <Button
-                    key={preset.label}
-                    size="small"
-                    onClick={() => setBantWeights({ ...preset.weights })}
-                    style={{
-                      borderColor: isActive ? 'var(--purple, #722ed1)' : undefined,
-                      color: isActive ? 'var(--purple, #722ed1)' : undefined,
-                      background: isActive ? 'var(--purple-pale, #f9f0ff)' : undefined,
-                      fontWeight: isActive ? 600 : 400,
-                    }}
-                  >
-                    {preset.label}
-                  </Button>
-                );
-              })}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px' }}>
-              {([
-                { key: 'budget' as const, label: 'Budget' },
-                { key: 'authority' as const, label: 'Authority' },
-                { key: 'need' as const, label: 'Need' },
-                { key: 'timing' as const, label: 'Timing' },
-              ]).map((dim) => (
-                <div key={dim.key}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--g700)', marginBottom: 2 }}>{dim.label}</div>
-                  <Slider
-                    min={1}
-                    max={5}
-                    value={bantWeights[dim.key]}
-                    onChange={(val) => setBantWeights((prev) => ({ ...prev, [dim.key]: val }))}
-                    marks={{ 1: 'Low', 3: 'Normal', 5: 'High' }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       ),
     },
     {
@@ -509,30 +578,59 @@ const ICPConfigPage: React.FC = () => {
           <Descriptions title="Summary" bordered column={2} size="small">
             <Descriptions.Item label="Name" span={2}>{name || '(unnamed)'}</Descriptions.Item>
             <Descriptions.Item label="Description" span={2}>{description || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Target Offerings" span={2}>{config.target_offering.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Countries">{config.regions.countries.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Priority Areas">{config.regions.priority_areas.join(', ') || '-'}</Descriptions.Item>
             <Descriptions.Item label="Industries" span={2}>
-              {config.industry_types.map((i) => `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`).join(', ') || '-'}
+              {config.firmographic_details.industry_types
+                .map((i) => `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`)
+                .join(', ') || '-'}
             </Descriptions.Item>
-            <Descriptions.Item label="Employees">{config.company_size.employees_min.toLocaleString()}–{config.company_size.employees_max.toLocaleString()}</Descriptions.Item>
-            <Descriptions.Item label="Revenue">{config.company_size.revenue_currency} {config.company_size.revenue_min.toLocaleString()}–{config.company_size.revenue_max.toLocaleString()}</Descriptions.Item>
-            <Descriptions.Item label="Tech Signals (Positive)">{config.technology_maturity.signals.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Tech Signals (Negative)">{config.technology_maturity.negative_signals.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Infrastructure" span={2}>{config.infrastructure_readiness.indicators.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Growth Triggers">{config.digital_transformation_drivers.growth_triggers.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Operational Pains">{config.digital_transformation_drivers.operational_pains.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Competitive Pressures">{config.digital_transformation_drivers.competitive_pressures.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Strategic Initiatives">{config.digital_transformation_drivers.strategic_initiatives.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Target Roles">{config.leadership_traits.target_roles.join(', ') || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Behavioral Traits">{config.leadership_traits.behavioral_traits.join(', ') || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Countries">
+              {config.firmographic_details.geography.countries.join(', ') || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Priority Areas">
+              {config.firmographic_details.geography.priority_areas.join(', ') || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Employees">
+              {config.firmographic_details.employee_range.min.toLocaleString()}
+              &ndash;
+              {config.firmographic_details.employee_range.max.toLocaleString()}
+            </Descriptions.Item>
+            <Descriptions.Item label="Revenue">
+              {config.firmographic_details.revenue_range.currency}{' '}
+              {config.firmographic_details.revenue_range.min.toLocaleString()}
+              &ndash;
+              {config.firmographic_details.revenue_range.max.toLocaleString()}
+            </Descriptions.Item>
+            <Descriptions.Item label="Low Cost Center">
+              {config.firmographic_details.low_cost_center ? 'Yes' : 'No'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Target Offerings" span={2}>
+              {config.target_capability.offerings.join(', ') || '-'}
+              {config.target_capability.offerings.length > 1 && (
+                <Tag color="purple" style={{ marginLeft: 8 }}>{config.target_capability.condition}</Tag>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="Urgency Signals" span={2}>
+              {config.urgency_signals.signals.join(', ') || '-'}
+              {config.urgency_signals.signals.length > 1 && (
+                <Tag color="orange" style={{ marginLeft: 8 }}>{config.urgency_signals.condition}</Tag>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="Budget Signals" span={2}>
+              {config.budget_signals.signals.join(', ') || '-'}
+              {config.budget_signals.signals.length > 1 && (
+                <Tag color="green" style={{ marginLeft: 8 }}>{config.budget_signals.condition}</Tag>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="Target Roles" span={2}>
+              {config.authority_roles.target_roles.join(', ') || '-'}
+            </Descriptions.Item>
           </Descriptions>
         </div>
       ),
     },
   ];
 
-  const handleSave = async (runPipeline: boolean, pipelineMode: string = 'single_run') => {
+  const handleSave = async (runPipeline: boolean) => {
     if (!name.trim()) {
       message.error('Please provide an ICP name');
       return;
@@ -549,7 +647,7 @@ const ICPConfigPage: React.FC = () => {
       message.success('Search criteria saved successfully');
 
       if (runPipeline && icpId) {
-        const runRes = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5, pipeline_mode: pipelineMode, match_strictness: matchStrictness, bant_weights: bantWeights } });
+        const runRes = await startPipeline({ icp_config_id: icpId });
         navigate(`/pipeline/${runRes.data.id}`);
       } else {
         navigate('/icp');
@@ -567,7 +665,7 @@ const ICPConfigPage: React.FC = () => {
         <div className="section-label">Search Criteria Configuration</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Button size="small" onClick={() => navigate(-1)} style={{ fontSize: 12 }}>
-            ← Back
+            &larr; Back
           </Button>
           <h1 className="page-title">{id ? 'Edit Search Criteria' : 'New Search Criteria'}</h1>
         </div>
@@ -583,7 +681,7 @@ const ICPConfigPage: React.FC = () => {
               onClick={() => setCurrent(index)}
             >
               <div className="builder-step-num">
-                {index < current ? '✓' : index + 1}
+                {index < current ? '\u2713' : index + 1}
               </div>
               <div className="builder-step-label">{step.title}</div>
             </div>
@@ -605,7 +703,7 @@ const ICPConfigPage: React.FC = () => {
                 {current === steps.length - 1 && (
                   <>
                     <Button onClick={() => handleSave(false)} loading={saving}>Save Only</Button>
-                    <Button type="primary" onClick={() => handleSave(true, pipelineMode)} loading={saving}>Save & Run Search</Button>
+                    <Button type="primary" onClick={() => handleSave(true)} loading={saving}>Run Pipeline</Button>
                   </>
                 )}
               </Space>
@@ -661,29 +759,62 @@ const ICPConfigPage: React.FC = () => {
           </div>
         }
         open={aiModalOpen}
-        onCancel={() => !aiGenerating && setAiModalOpen(false)}
+        onCancel={() => { if (!aiGenerating) { setAiModalOpen(false); setAiFile(null); setAiDescription(''); } }}
         maskClosable={!aiGenerating}
         footer={
           <Space>
-            <Button onClick={() => setAiModalOpen(false)} disabled={aiGenerating}>Cancel</Button>
+            <Button onClick={() => { setAiModalOpen(false); setAiFile(null); setAiDescription(''); }} disabled={aiGenerating}>Cancel</Button>
             <Button
               type="primary"
               onClick={handleAIGenerate}
               loading={aiGenerating}
-              disabled={!aiDescription.trim()}
+              disabled={!aiDescription.trim() && !aiFile}
             >
               Generate
             </Button>
           </Space>
         }
-        width={560}
+        width={600}
       >
         <p style={{ color: 'var(--g600)', fontSize: 13, margin: '0 0 12px' }}>
-          Describe your ideal customer in plain language. Include details like your product/service,
-          target industry, company size, geography, and any technology or business signals you care about.
+          Upload a sales deck, product brief, or any document describing your offering — or type a description below.
         </p>
+        <Upload.Dragger
+          accept=".pdf,.docx,.xlsx,.txt,.csv"
+          showUploadList={false}
+          beforeUpload={(file) => {
+            setAiFile(file);
+            return false;
+          }}
+          disabled={aiGenerating}
+          style={{ marginBottom: 12 }}
+        >
+          {aiFile ? (
+            <div style={{ padding: 12 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--g800)', margin: 0 }}>
+                {aiFile.name}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--g400)', margin: '4px 0 0' }}>
+                {(aiFile.size / 1024).toFixed(0)} KB — Click or drag to replace
+              </p>
+            </div>
+          ) : (
+            <div style={{ padding: 12 }}>
+              <p className="ant-upload-drag-icon">
+                <UploadOutlined style={{ fontSize: 28, color: 'var(--purple, #722ed1)' }} />
+              </p>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--g800)', margin: 0 }}>
+                Upload PDF, DOCX, XLSX, TXT, or CSV
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--g400)', margin: '4px 0 0' }}>Max 10 MB</p>
+            </div>
+          )}
+        </Upload.Dragger>
+        <div style={{ textAlign: 'center', color: 'var(--g400)', fontSize: 12, margin: '8px 0' }}>
+          — or describe in your own words —
+        </div>
         <TextArea
-          rows={5}
+          rows={4}
           value={aiDescription}
           onChange={(e) => setAiDescription(e.target.value)}
           placeholder="Example: We sell cloud migration services to mid-market US ecommerce companies with 200-2000 employees running legacy platforms like Magento 1 or Shopify Basic. We target CTOs and VPs of Engineering who are experiencing site performance issues during peak traffic."

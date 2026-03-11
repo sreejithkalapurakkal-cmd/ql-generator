@@ -14,7 +14,7 @@ from strands import tool
 from app.config import get_settings
 from app.models.company import Company
 from app.models.contact import Contact
-from app.models.bant import BANTScore
+from app.models.company_stage import CompanyStageResult
 from app.models.icp import ICPConfig
 from app.models.pipeline import PipelineRun
 from app.services.embedding_service import generate_embedding
@@ -52,22 +52,12 @@ def _company_to_dict(company, include_contacts=False):
         "icp_match_score": company.icp_match_score,
         "match_reasoning": company.match_reasoning,
         "qualification": company.qualification,
+        "current_stage": company.current_stage,
+        "budget_signal_score": company.budget_signal_score,
+        "urgency_signal_score": company.urgency_signal_score,
+        "final_score": company.final_score,
+        "final_rank": company.final_rank,
     }
-
-    if company.bant_score:
-        bant = company.bant_score
-        result["bant_score"] = {
-            "budget_score": bant.budget_score,
-            "budget_reason": bant.budget_reason,
-            "authority_score": bant.authority_score,
-            "authority_reason": bant.authority_reason,
-            "need_score": bant.need_score,
-            "need_reason": bant.need_reason,
-            "timing_score": bant.timing_score,
-            "timing_reason": bant.timing_reason,
-            "total_score": bant.total_score,
-            "overall_summary": bant.overall_summary,
-        }
 
     if include_contacts and company.contacts:
         result["contacts"] = [
@@ -119,6 +109,7 @@ def search_companies_semantic(query: str, limit: int = 10) -> str:
                        c.city, c.state_region, c.country, c.employee_count,
                        c.revenue_estimate, c.tech_stack_json, c.source,
                        c.icp_match_score, c.match_reasoning, c.qualification,
+                       c.final_score, c.current_stage,
                        1 - (c.embedding <=> :embedding::vector) as similarity
                 FROM companies c
                 WHERE c.embedding IS NOT NULL
@@ -146,6 +137,8 @@ def search_companies_semantic(query: str, limit: int = 10) -> str:
                 "icp_match_score": row.icp_match_score,
                 "match_reasoning": row.match_reasoning,
                 "qualification": row.qualification,
+                "final_score": row.final_score,
+                "current_stage": row.current_stage,
                 "similarity": round(row.similarity, 4) if row.similarity else None,
             })
 
@@ -166,8 +159,8 @@ def search_companies_structured(
     industry: str = None,
     country: str = None,
     city: str = None,
-    min_bant_score: int = None,
-    max_bant_score: int = None,
+    min_final_score: float = None,
+    max_final_score: float = None,
     min_employees: int = None,
     max_employees: int = None,
     tech_keyword: str = None,
@@ -175,14 +168,14 @@ def search_companies_structured(
 ) -> str:
     """
     Search companies using structured filters on known fields.
-    BEST FOR: Precise filtering by industry, location, BANT range, size.
+    BEST FOR: Precise filtering by industry, location, score range, size.
 
     Args:
         industry: Filter by industry name (partial match, case-insensitive)
         country: Filter by country (partial match)
         city: Filter by city (partial match)
-        min_bant_score: Minimum total BANT score (1-20)
-        max_bant_score: Maximum total BANT score (1-20)
+        min_final_score: Minimum final score (0-100)
+        max_final_score: Maximum final score (0-100)
         min_employees: Minimum employee count
         max_employees: Maximum employee count
         tech_keyword: Search for a keyword in tech stack JSON
@@ -196,12 +189,7 @@ def search_companies_structured(
     try:
         query = (
             session.query(Company)
-            .outerjoin(BANTScore, and_(
-                BANTScore.company_id == Company.id,
-                BANTScore.contact_id.is_(None),
-            ))
             .options(
-                joinedload(Company.bant_score),
                 joinedload(Company.contacts),
             )
         )
@@ -216,16 +204,16 @@ def search_companies_structured(
             query = query.filter(Company.employee_count >= min_employees)
         if max_employees is not None:
             query = query.filter(Company.employee_count <= max_employees)
-        if min_bant_score is not None:
-            query = query.filter(BANTScore.total_score >= min_bant_score)
-        if max_bant_score is not None:
-            query = query.filter(BANTScore.total_score <= max_bant_score)
+        if min_final_score is not None:
+            query = query.filter(Company.final_score >= min_final_score)
+        if max_final_score is not None:
+            query = query.filter(Company.final_score <= max_final_score)
         if tech_keyword:
             query = query.filter(
                 cast(Company.tech_stack_json, String).ilike(f"%{tech_keyword}%")
             )
 
-        query = query.order_by(BANTScore.total_score.desc().nullslast())
+        query = query.order_by(Company.final_score.desc().nullslast())
         companies = query.limit(limit).all()
 
         results = [_company_to_dict(c, include_contacts=True) for c in companies]
@@ -234,7 +222,7 @@ def search_companies_structured(
             "filters_applied": {
                 k: v for k, v in {
                     "industry": industry, "country": country, "city": city,
-                    "min_bant_score": min_bant_score, "max_bant_score": max_bant_score,
+                    "min_final_score": min_final_score, "max_final_score": max_final_score,
                     "min_employees": min_employees, "max_employees": max_employees,
                     "tech_keyword": tech_keyword,
                 }.items() if v is not None
@@ -252,21 +240,21 @@ def search_companies_structured(
 def get_company_details(company_id: str) -> str:
     """
     Get full details for a specific company by its UUID.
-    Returns all company data, contacts, and BANT score breakdown.
+    Returns all company data, contacts, and stage results.
 
     Args:
         company_id: The UUID of the company
 
     Returns:
-        JSON string with full company details including contacts and BANT
+        JSON string with full company details including contacts and stage results
     """
     session = _get_sync_session()
     try:
         company = (
             session.query(Company)
             .options(
-                joinedload(Company.bant_score),
                 joinedload(Company.contacts),
+                joinedload(Company.stage_results),
             )
             .filter(Company.id == company_id)
             .first()
@@ -275,7 +263,23 @@ def get_company_details(company_id: str) -> str:
         if not company:
             return json.dumps({"error": f"Company {company_id} not found"})
 
-        return json.dumps(_company_to_dict(company, include_contacts=True))
+        result = _company_to_dict(company, include_contacts=True)
+
+        # Add stage results
+        if company.stage_results:
+            result["stage_results"] = [
+                {
+                    "stage": sr.stage,
+                    "status": sr.status,
+                    "score": sr.score,
+                    "reasoning": sr.reasoning,
+                    "evidence": sr.evidence,
+                    "user_override": sr.user_override,
+                }
+                for sr in company.stage_results
+            ]
+
+        return json.dumps(result)
     except Exception as e:
         logger.error(f"Get company details failed: {e}")
         return json.dumps({"error": str(e)})
@@ -363,6 +367,8 @@ def get_pipeline_summary(run_id: str = None) -> str:
                 "icp_name": icp.name if icp else None,
                 "status": run.status,
                 "current_stage": run.current_stage,
+                "signal_mode": run.signal_mode,
+                "signal_phase": run.signal_phase,
                 "companies_found": run.companies_found,
                 "contacts_found": run.contacts_found,
                 "started_at": str(run.started_at) if run.started_at else None,
@@ -383,6 +389,7 @@ def get_pipeline_summary(run_id: str = None) -> str:
                 "id": str(run.id),
                 "icp_name": icp.name if icp else None,
                 "status": run.status,
+                "signal_mode": run.signal_mode,
                 "companies_found": run.companies_found,
                 "contacts_found": run.contacts_found,
                 "started_at": str(run.started_at) if run.started_at else None,
@@ -401,7 +408,7 @@ def get_pipeline_summary(run_id: str = None) -> str:
 def get_data_statistics() -> str:
     """
     Get aggregate statistics across all data: totals, industry breakdown,
-    BANT score distribution, geographic distribution, and more.
+    score distribution, geographic distribution, and more.
 
     Returns:
         JSON string with comprehensive data statistics
@@ -414,23 +421,20 @@ def get_data_statistics() -> str:
         total_runs = session.query(func.count(PipelineRun.id)).scalar() or 0
         total_icps = session.query(func.count(ICPConfig.id)).filter(ICPConfig.is_active == True).scalar() or 0
 
-        # BANT distribution
-        avg_bant = session.query(func.avg(BANTScore.total_score)).filter(
-            BANTScore.contact_id.is_(None)
+        # Score distribution
+        avg_final = session.query(func.avg(Company.final_score)).filter(
+            Company.final_score.isnot(None)
         ).scalar()
-        hot_leads = session.query(func.count(BANTScore.id)).filter(
-            BANTScore.contact_id.is_(None),
-            BANTScore.total_score >= 16,
+        high_score = session.query(func.count(Company.id)).filter(
+            Company.final_score >= 75,
         ).scalar() or 0
-        warm_leads = session.query(func.count(BANTScore.id)).filter(
-            BANTScore.contact_id.is_(None),
-            BANTScore.total_score >= 12,
-            BANTScore.total_score < 16,
+        medium_score = session.query(func.count(Company.id)).filter(
+            Company.final_score >= 50,
+            Company.final_score < 75,
         ).scalar() or 0
-        cool_leads = session.query(func.count(BANTScore.id)).filter(
-            BANTScore.contact_id.is_(None),
-            BANTScore.total_score >= 8,
-            BANTScore.total_score < 12,
+        low_score = session.query(func.count(Company.id)).filter(
+            Company.final_score > 0,
+            Company.final_score < 50,
         ).scalar() or 0
 
         # Industry breakdown
@@ -462,11 +466,11 @@ def get_data_statistics() -> str:
                 "pipeline_runs": total_runs,
                 "active_icps": total_icps,
             },
-            "bant_distribution": {
-                "average_score": round(avg_bant, 1) if avg_bant else None,
-                "hot_leads": hot_leads,
-                "warm_leads": warm_leads,
-                "cool_leads": cool_leads,
+            "score_distribution": {
+                "average_final_score": round(avg_final, 1) if avg_final else None,
+                "high_score_leads": high_score,
+                "medium_score_leads": medium_score,
+                "low_score_leads": low_score,
             },
             "industry_breakdown": industry_breakdown,
             "country_breakdown": country_breakdown,
@@ -474,5 +478,78 @@ def get_data_statistics() -> str:
     except Exception as e:
         logger.error(f"Get data statistics failed: {e}")
         return json.dumps({"error": str(e)})
+    finally:
+        session.close()
+
+
+@tool
+def search_local_companies(
+    industry: str = None,
+    country: str = None,
+    domain: str = None,
+    min_employees: int = None,
+    max_employees: int = None,
+    limit: int = 50,
+) -> str:
+    """
+    Search the local qlGen database for companies matching criteria.
+    Returns companies from ALL previous pipeline runs.
+    Use this BEFORE external tools to check what data already exists.
+
+    Args:
+        industry: Filter by industry (partial match, case-insensitive)
+        country: Filter by country (partial match)
+        domain: Filter by website domain (partial match)
+        min_employees: Minimum employee count
+        max_employees: Maximum employee count
+        limit: Maximum results (default 50, max 100)
+
+    Returns:
+        JSON string with matching companies from the local database
+    """
+    limit = min(limit, 100)
+    session = _get_sync_session()
+    try:
+        query = (
+            session.query(Company)
+            .options(joinedload(Company.contacts))
+        )
+
+        if industry:
+            query = query.filter(Company.industry.ilike(f"%{industry}%"))
+        if country:
+            query = query.filter(Company.country.ilike(f"%{country}%"))
+        if domain:
+            domain_clean = domain.lower().strip().removeprefix("www.").removeprefix("http://").removeprefix("https://")
+            query = query.filter(func.lower(Company.website).contains(domain_clean))
+        if min_employees is not None:
+            query = query.filter(Company.employee_count >= min_employees)
+        if max_employees is not None:
+            query = query.filter(Company.employee_count <= max_employees)
+
+        # Prefer companies with more data (final_score set, more recent)
+        query = query.order_by(
+            Company.final_score.desc().nullslast(),
+            Company.created_at.desc(),
+        )
+        companies = query.limit(limit).all()
+
+        results = []
+        for c in companies:
+            entry = _company_to_dict(c, include_contacts=False)
+            entry["data_freshness"] = str(c.data_freshness) if c.data_freshness else str(c.created_at) if c.created_at else None
+            entry["has_contacts"] = bool(c.contacts)
+            entry["contact_count"] = len(c.contacts) if c.contacts else 0
+            entry["pipeline_run_id"] = str(c.pipeline_run_id) if c.pipeline_run_id else None
+            results.append(entry)
+
+        return json.dumps({
+            "count": len(results),
+            "source": "local_database",
+            "companies": results,
+        })
+    except Exception as e:
+        logger.error(f"Local company search failed: {e}")
+        return json.dumps({"error": str(e), "companies": []})
     finally:
         session.close()

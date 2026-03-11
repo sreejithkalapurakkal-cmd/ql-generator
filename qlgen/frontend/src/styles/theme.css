@@ -293,7 +293,7 @@ body {
   background: var(--g50);
   z-index: 1000;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: var(--prog-left-width, 300px) 1fr;
   overflow: hidden;
 }
 
@@ -304,6 +304,25 @@ body {
   display: flex;
   flex-direction: column;
   padding: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+.prog-left-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 10;
+  transition: background 0.15s;
+}
+
+.prog-left-resize-handle:hover,
+.prog-left-resize-handle.dragging {
+  background: var(--purple-l);
 }
 
 .prog-left-header {
@@ -1052,6 +1071,10 @@ body {
     border-bottom: 1px solid var(--g200);
     max-height: 40vh;
     overflow-y: auto;
+  }
+
+  .prog-left-resize-handle {
+    display: none;
   }
 
   /* Summary bar: wrap items */
@@ -2280,6 +2303,31 @@ body {
 
 .copilot-panel.open {
   right: 0;
+}
+
+.copilot-panel.fullscreen {
+  width: 100vw;
+  top: 0;
+  right: -100vw;
+  height: 100vh;
+  z-index: 1001;
+  border-left: none;
+}
+
+.copilot-panel.fullscreen.open {
+  right: 0;
+}
+
+.copilot-panel.fullscreen .copilot-messages {
+  padding: 24px 40px;
+}
+
+.copilot-panel.fullscreen .copilot-input-area {
+  padding: 16px 40px;
+}
+
+.copilot-panel.fullscreen .copilot-header {
+  padding: 14px 24px;
 }
 
 /* Header */

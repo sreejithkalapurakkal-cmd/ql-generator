@@ -40,7 +40,7 @@ DEFAULT_ROLES = ["CEO", "CTO", "COO", "CIO", "CDO", "VP Engineering",
 def _ddg(query: str, max_results: int = 8) -> list[dict]:
     """DuckDuckGo search with rate-limit backoff."""
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
@@ -48,7 +48,7 @@ def _ddg(query: str, max_results: int = 8) -> list[dict]:
             logger.warning("DDG rate limit hit, waiting 30s")
             time.sleep(30)
             try:
-                from duckduckgo_search import DDGS
+                from ddgs import DDGS
                 with DDGS() as ddgs:
                     return list(ddgs.text(query, max_results=max_results))
             except Exception:

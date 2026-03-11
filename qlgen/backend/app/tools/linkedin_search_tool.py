@@ -26,9 +26,9 @@ def find_linkedin_profiles(
         titles = ["CEO", "CTO", "VP Engineering", "Head of Product"]
 
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        return {"error": "duckduckgo_search package not installed", "profiles": []}
+        return {"error": "ddgs package not installed", "profiles": []}
 
     profiles = []
     seen_urls = set()

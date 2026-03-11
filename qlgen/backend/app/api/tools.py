@@ -57,6 +57,7 @@ async def list_tools(db: AsyncSession = Depends(get_db)):
             last_health_check_at=tool.last_health_check_at,
             last_health_message=tool.last_health_message,
             notes=tool.notes,
+            rate_limit_info=tool.rate_limit_info,
             created_at=tool.created_at,
             updated_at=tool.updated_at,
             total_calls=total,
@@ -118,6 +119,7 @@ async def update_tool(tool_id: UUID, update: ToolRegistryUpdate, db: AsyncSessio
         last_health_check_at=tool.last_health_check_at,
         last_health_message=tool.last_health_message,
         notes=tool.notes,
+        rate_limit_info=tool.rate_limit_info,
         created_at=tool.created_at,
         updated_at=tool.updated_at,
     )

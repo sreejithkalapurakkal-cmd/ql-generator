@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import json
 import logging
 
@@ -11,15 +13,75 @@ settings = get_settings()
 
 _bedrock_client = None
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_EXTRACTED_TEXT = 50_000  # chars
+
+
+def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
+    """Extract text content from uploaded file (PDF, DOCX, XLSX, TXT, CSV).
+
+    Raises ValueError on unsupported type, empty content, or oversized file.
+    """
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise ValueError("File exceeds 10 MB limit")
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext == "txt":
+        text = file_bytes.decode("utf-8", errors="replace")
+    elif ext == "csv":
+        decoded = file_bytes.decode("utf-8", errors="replace")
+        reader = csv.reader(io.StringIO(decoded))
+        text = "\n".join(", ".join(row) for row in reader)
+    elif ext == "pdf":
+        try:
+            import pdfplumber
+        except ImportError:
+            raise ValueError("PDF support requires pdfplumber (pip install pdfplumber)")
+        pages_text = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    pages_text.append(page_text)
+        text = "\n\n".join(pages_text)
+    elif ext == "docx":
+        try:
+            from docx import Document
+        except ImportError:
+            raise ValueError("DOCX support requires python-docx (pip install python-docx)")
+        doc = Document(io.BytesIO(file_bytes))
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    elif ext == "xlsx":
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        rows_text = []
+        for sheet in wb.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                cell_values = [str(c) for c in row if c is not None]
+                if cell_values:
+                    rows_text.append(", ".join(cell_values))
+        wb.close()
+        text = "\n".join(rows_text)
+    else:
+        raise ValueError(f"Unsupported file type: .{ext}. Supported: PDF, DOCX, XLSX, TXT, CSV")
+
+    text = text.strip()
+    if not text:
+        raise ValueError("Uploaded file contains no extractable text")
+
+    if len(text) > MAX_EXTRACTED_TEXT:
+        text = text[:MAX_EXTRACTED_TEXT]
+
+    return text
+
+
 ICP_CONFIG_KEYS = [
-    "target_offering",
-    "regions",
-    "industry_types",
-    "company_size",
-    "technology_maturity",
-    "infrastructure_readiness",
-    "digital_transformation_drivers",
-    "leadership_traits",
+    "firmographic_details",
+    "target_capability",
+    "urgency_signals",
+    "budget_signals",
+    "authority_roles",
 ]
 
 ICP_GENERATION_SYSTEM_PROMPT = """You are an expert B2B sales strategist. Given a natural language description of an ideal customer, generate a structured ICP (Ideal Customer Profile) configuration as a JSON object.
@@ -27,16 +89,19 @@ ICP_GENERATION_SYSTEM_PROMPT = """You are an expert B2B sales strategist. Given 
 Return ONLY a JSON object with exactly these keys:
 - "name": A short descriptive name for this ICP (e.g., "MidMarket US ECommerce 2026")
 - "description": A one-sentence summary of the ICP
-- "config": An object with exactly these 8 keys:
+- "config": An object with exactly these 5 keys:
 
-1. "target_offering" (array of strings): The products/services being sold
-2. "regions": {"countries": [strings], "priority_areas": [strings like states/cities]}
-3. "industry_types": [{"vertical": string, "sub_vertical": string or null}] - at least 1 entry
-4. "company_size": {"employees_min": int, "employees_max": int, "revenue_min": int, "revenue_max": int, "revenue_currency": "USD"|"EUR"|"GBP"|"INR"}
-5. "technology_maturity": {"signals": [strings], "negative_signals": [strings]}
-6. "infrastructure_readiness": {"indicators": [strings]}
-7. "digital_transformation_drivers": {"growth_triggers": [strings], "operational_pains": [strings], "competitive_pressures": [strings], "strategic_initiatives": [strings]}
-8. "leadership_traits": {"target_roles": [strings], "behavioral_traits": [strings]}
+1. "firmographic_details": {
+     "industry_types": [{"vertical": string, "sub_vertical": string or null}],
+     "geography": {"countries": [strings], "priority_areas": [strings like states/cities]},
+     "revenue_range": {"min": int, "max": int, "currency": "USD"|"EUR"|"GBP"|"INR"},
+     "employee_range": {"min": int, "max": int},
+     "low_cost_center": boolean
+   }
+2. "target_capability": {"offerings": [strings], "condition": "OR"}
+3. "urgency_signals": {"signals": [strings], "condition": "OR"}
+4. "budget_signals": {"signals": [strings], "condition": "OR"}
+5. "authority_roles": {"target_roles": [strings]}
 
 Rules:
 - All array fields must have at least 1 item
@@ -44,6 +109,8 @@ Rules:
 - Revenue should be in whole numbers (e.g., 10000000 for $10M)
 - If the user doesn't specify a region, default to "United States"
 - If the user doesn't specify a currency, default to "USD"
+- low_cost_center should be false unless specifically mentioned
+- condition should be "OR" unless the description implies all signals must match
 - Generate 3-5 items per array field based on the description
 - Return ONLY the JSON object, no markdown fences, no explanation"""
 
@@ -105,32 +172,51 @@ def _validate_icp_structure(parsed: dict) -> dict:
 
     config = parsed["config"]
 
-    # Ensure all 8 required keys exist
+    # Ensure all 5 required keys exist
     for key in ICP_CONFIG_KEYS:
         if key not in config:
             raise ValueError(f"Config missing required key: {key}")
 
-    # Coerce numeric fields in company_size to int
-    size = config.get("company_size", {})
-    for field in ["employees_min", "employees_max", "revenue_min", "revenue_max"]:
-        if field in size:
+    # Coerce numeric fields in firmographic_details
+    fd = config.get("firmographic_details", {})
+    rev = fd.get("revenue_range", {})
+    for field in ["min", "max"]:
+        if field in rev:
             try:
-                size[field] = int(size[field])
+                rev[field] = int(rev[field])
+            except (ValueError, TypeError):
+                pass
+    emp = fd.get("employee_range", {})
+    for field in ["min", "max"]:
+        if field in emp:
+            try:
+                emp[field] = int(emp[field])
             except (ValueError, TypeError):
                 pass
 
     return parsed
 
 
-def generate_icp_config(description: str) -> dict:
+def generate_icp_config(description: str, file_text: str | None = None) -> dict:
     """Call Bedrock to generate an ICP config from a natural language description."""
     client = _get_bedrock_client()
+
+    # Build user message combining file content and description
+    parts = []
+    if file_text:
+        parts.append(f"Here is the content of an uploaded document:\n\n{file_text}\n")
+    if description.strip():
+        parts.append(f"Additional description:\n{description}")
+    elif not file_text:
+        parts.append(description)
+
+    user_message = "\n\n".join(parts) if parts else description
 
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
         "system": ICP_GENERATION_SYSTEM_PROMPT,
         "messages": [
-            {"role": "user", "content": description}
+            {"role": "user", "content": user_message}
         ],
         "max_tokens": 4096,
         "temperature": 0.3,
@@ -152,6 +238,6 @@ def generate_icp_config(description: str) -> dict:
     return validated
 
 
-async def generate_icp_config_async(description: str) -> dict:
+async def generate_icp_config_async(description: str, file_text: str | None = None) -> dict:
     """Async wrapper around generate_icp_config."""
-    return await asyncio.to_thread(generate_icp_config, description)
+    return await asyncio.to_thread(generate_icp_config, description, file_text)

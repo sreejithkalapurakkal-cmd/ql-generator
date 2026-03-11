@@ -1,3 +1,11 @@
+"""5-stage pipeline orchestration with mandatory user review gates.
+
+Stage 1: Industry Discovery (automatic)
+Stage 2: Firmographic Fit Check (automatic → pause for review)
+Stage 3: Budget & Urgency Signals (flexible: serial or parallel → pause)
+Stage 4: Contact Discovery (automatic)
+Stage 5: Final Scoring & Ranking (computation)
+"""
 import asyncio
 import json
 import logging
@@ -5,47 +13,38 @@ import traceback
 from uuid import UUID
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.agent.lead_gen_agent import (
-    create_discovery_agent,
+    create_industry_discovery_agent,
+    create_firmographic_fit_agent,
+    create_signal_agent,
     create_contact_agent,
-    create_bant_agent,
     create_pipeline_callback_handler,
+    compute_final_score,
     PipelineCancelled,
 )
-from app.agent.prompt_builder import build_discovery_prompt, build_contact_prompt, build_bant_prompt
+from app.agent.prompt_builder import (
+    build_industry_discovery_prompt,
+    build_firmographic_fit_prompt,
+    build_signal_prompt,
+    build_contact_discovery_prompt,
+)
 from app.db.session import async_session
 from app.models.pipeline import PipelineRun
 from app.models.icp import ICPConfig
 from app.models.company import Company
 from app.models.contact import Contact
-from app.models.bant import BANTScore
+from app.models.company_stage import CompanyStageResult
 from app.models.pipeline_log import PipelineLog
 from app.services.tool_registry_service import get_disabled_tool_names
 
 logger = logging.getLogger(__name__)
 
 
-def _compute_weighted_bant_score(bant_data: dict, options: dict) -> int:
-    budget = bant_data.get("budget_score") or 0
-    authority = bant_data.get("authority_score") or 0
-    need = bant_data.get("need_score") or 0
-    timing = bant_data.get("timing_score") or 0
-
-    weights = options.get("bant_weights", {})
-    w_b = weights.get("budget", 3)
-    w_a = weights.get("authority", 3)
-    w_n = weights.get("need", 3)
-    w_t = weights.get("timing", 3)
-
-    weights_sum = w_b + w_a + w_n + w_t
-    if weights_sum == 0:
-        return budget + authority + need + timing
-
-    weighted_avg = (budget * w_b + authority * w_a + need * w_n + timing * w_t) / weights_sum
-    return round(weighted_avg * 4)
-
+# ──────────────────────────────────────────────────────────────────
+# Utility functions
+# ──────────────────────────────────────────────────────────────────
 
 def _emit_event(events: dict, run_id: str, event: dict):
     """Add event to the SSE event list."""
@@ -55,10 +54,9 @@ def _emit_event(events: dict, run_id: str, event: dict):
 
 def _repair_truncated_json(text: str) -> str:
     """Attempt to repair truncated JSON by closing open strings, arrays, and objects."""
-    # Track parser state
     in_string = False
     escape_next = False
-    stack = []  # stack of open brackets: '{' or '['
+    stack = []
 
     for ch in text:
         if escape_next:
@@ -80,11 +78,8 @@ def _repair_truncated_json(text: str) -> str:
             stack.pop()
 
     repaired = text
-    # If we ended inside a string, close it
     if in_string:
         repaired += '"'
-
-    # Close any remaining open brackets in reverse order
     for bracket in reversed(stack):
         repaired += '}' if bracket == '{' else ']'
 
@@ -92,14 +87,7 @@ def _repair_truncated_json(text: str) -> str:
 
 
 def _truncate_to_last_complete_item(text: str) -> str:
-    """Cut JSON text back to the last cleanly-closed array element or object value.
-
-    This finds the last '},' or '}]' pattern that plausibly ends a complete
-    companies/contacts entry, trims there, and lets _repair_truncated_json
-    close the remaining brackets.
-    """
-    # Find the last position where a complete object ended before more data
-    # Pattern: '},\n' or '}, ' — indicates a complete array element
+    """Cut JSON text back to the last cleanly-closed array element."""
     last_obj_end = -1
     for marker in ['},\n', '},\r', '}, ']:
         pos = text.rfind(marker)
@@ -107,8 +95,7 @@ def _truncate_to_last_complete_item(text: str) -> str:
             last_obj_end = pos
 
     if last_obj_end > 0:
-        return text[: last_obj_end + 1]  # include the closing '}'
-
+        return text[: last_obj_end + 1]
     return text
 
 
@@ -116,23 +103,15 @@ def parse_json_from_agent_result(result) -> dict:
     """Extract JSON from the agent's text response, repairing truncation if needed."""
     text = str(result)
 
-    # Try to find JSON block in markdown code fence
     if "```json" in text:
         start = text.index("```json") + 7
         closing = text.find("```", start)
-        if closing != -1:
-            text = text[start:closing].strip()
-        else:
-            text = text[start:].strip()
+        text = text[start:closing].strip() if closing != -1 else text[start:].strip()
     elif "```" in text:
         start = text.index("```") + 3
         closing = text.find("```", start)
-        if closing != -1:
-            text = text[start:closing].strip()
-        else:
-            text = text[start:].strip()
+        text = text[start:closing].strip() if closing != -1 else text[start:].strip()
 
-    # Try to find the largest JSON object by matching braces
     if "{" in text:
         start = text.index("{")
         depth = 0
@@ -147,20 +126,17 @@ def parse_json_from_agent_result(result) -> dict:
                     break
         text = text[start:end]
 
-    # 1) Try parsing as-is first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 2) Try repairing truncated JSON directly (close open strings/brackets)
     try:
         repaired = _repair_truncated_json(text)
         return json.loads(repaired)
     except json.JSONDecodeError:
         pass
 
-    # 3) Truncate back to the last complete array element, then repair
     try:
         truncated = _truncate_to_last_complete_item(text)
         repaired = _repair_truncated_json(truncated)
@@ -168,248 +144,137 @@ def parse_json_from_agent_result(result) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # 4) Last resort: raise with the original text for debugging
     logger.error(f"Failed to parse agent JSON (length={len(text)}). First 500 chars: {text[:500]}")
-    return json.loads(text)  # will raise the original JSONDecodeError
+    return json.loads(text)
 
 
-async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: set = None):
-    """Multi-phase pipeline execution with per-company specialized agents.
+def _normalize_score_to_100(score: float | None) -> float | None:
+    """Normalize a score to the 0-100 range.
 
-    Phase 1 — Discovery: Agent uses discover_icp_companies tool to find 50+ candidates,
-    scores them against ICP, classifies into tiers.
-
-    Phase 2 — Contact Discovery: For each company individually, a Contact Agent finds
-    decision-maker contacts and gathers research data (financials, news, tech signals).
-
-    Phase 3 — BANT Scoring: For each company individually, a BANT Agent produces
-    evidence-based scores using the pre-gathered research data.
-
-    Results are saved to DB incrementally per company for error isolation.
+    If the LLM returns a score on a 0-10 scale, multiply by 10.
+    Clamp to [0, 100].
     """
-    run_id_str = str(run_id)
+    if score is None:
+        return None
+    score = float(score)
+    if score <= 10:
+        score = score * 10
+    return min(100.0, max(0.0, score))
 
-    async with async_session() as db:
-        # Fetch pipeline run
+
+def _chunk(lst, size):
+    """Split a list into chunks of given size."""
+    for i in range(0, len(lst), size):
+        yield lst[i:i + size]
+
+
+# ──────────────────────────────────────────────────────────────────
+# Data reuse / caching
+# ──────────────────────────────────────────────────────────────────
+
+async def find_cached_company(domain: str, db) -> Company | None:
+    """Find the most recent, most enriched version of a company by domain."""
+    domain_clean = domain.lower().strip().removeprefix("www.").removeprefix("http://").removeprefix("https://").rstrip("/")
+    if not domain_clean:
+        return None
+
+    result = await db.execute(
+        select(Company)
+        .where(func.lower(Company.website).contains(domain_clean))
+        .where(Company.final_score.isnot(None))
+        .order_by(Company.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def clone_company_data(cached: Company, new_company: Company):
+    """Copy enriched data from a cached company to a new one."""
+    if cached.employee_count and not new_company.employee_count:
+        new_company.employee_count = cached.employee_count
+    if cached.revenue_estimate and not new_company.revenue_estimate:
+        new_company.revenue_estimate = cached.revenue_estimate
+    if cached.tech_stack_json and not new_company.tech_stack_json:
+        new_company.tech_stack_json = cached.tech_stack_json
+    if cached.description and not new_company.description:
+        new_company.description = cached.description
+    if cached.embedding is not None and new_company.embedding is None:
+        new_company.embedding = cached.embedding
+
+    new_company.cached_from_run_id = cached.pipeline_run_id
+    new_company.data_freshness = cached.data_freshness or cached.created_at
+
+
+# ──────────────────────────────────────────────────────────────────
+# Firmographic pre-filter (computational — no agent)
+# ──────────────────────────────────────────────────────────────────
+
+def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list, list, list]:
+    """Fast filter using data already available from Stage 1.
+
+    Returns (passed, failed_with_reasons, needs_agent).
+    Uses generous margins to avoid wrongly excluding.
+    """
+    fd = icp.get("firmographic_details", {})
+    emp_range = fd.get("employee_range", {})
+    rev_range = fd.get("revenue_range", {})
+
+    emp_min = emp_range.get("min")
+    emp_max = emp_range.get("max")
+    rev_min = rev_range.get("min")
+    rev_max = rev_range.get("max")
+
+    passed = []
+    failed = []
+    needs_agent = []
+
+    for c in companies:
+        emp = c.employee_count
+        rev = c.revenue_estimate
+
+        # If employee count known and clearly outside range (generous margins)
+        if emp and emp_min and emp_max:
+            if emp < emp_min * 0.5 or emp > emp_max * 2:
+                failed.append((c, f"Employee count {emp} outside range {emp_min}-{emp_max} (with 0.5x-2x margin)"))
+                continue
+
+        # If revenue known and clearly outside range
+        if rev and rev_min and rev_max:
+            if rev < rev_min * 0.3 or rev > rev_max * 3:
+                failed.append((c, f"Revenue ${rev:,} outside range ${rev_min:,}-${rev_max:,} (with 0.3x-3x margin)"))
+                continue
+
+        # If both known and within generous range → pass to agent for deep check
+        if emp and rev:
+            passed.append(c)
+        else:
+            needs_agent.append(c)
+
+    return passed, failed, needs_agent
+
+
+# ──────────────────────────────────────────────────────────────────
+# Shared error handling wrapper
+# ──────────────────────────────────────────────────────────────────
+
+async def _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, error, cancelled=False):
+    """Shared error handling for pipeline execution failures."""
+    try:
+        await db.rollback()
+    except Exception:
+        pass
+
+    try:
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
-        if not run:
-            logger.error(f"Pipeline run {run_id} not found")
-            return
+        if run:
+            if cancelled:
+                run.status = "cancelled"
+            else:
+                run.status = "failed"
+                run.error_log = f"{str(error)}\n{traceback.format_exc()}"
+            run.completed_at = datetime.now(timezone.utc)
 
-        # Fetch ICP config
-        icp_result = await db.execute(
-            select(ICPConfig).where(ICPConfig.id == run.icp_config_id)
-        )
-        icp_config = icp_result.scalar_one_or_none()
-        if not icp_config:
-            logger.error(f"ICP config {run.icp_config_id} not found")
-            return
-
-        icp = icp_config.config_json
-        options = run.options or {}
-        event_collector = []
-
-        # Fetch disabled tools once for the entire pipeline run
-        try:
-            disabled_tools = await get_disabled_tool_names(db)
-        except Exception:
-            disabled_tools = set()
-
-        try:
-            # Mark pipeline as running
-            run.status = "running"
-            run.current_stage = "company_discovery"
-            run.started_at = datetime.now(timezone.utc)
-            await db.commit()
-
-            _emit_event(events, run_id_str, {
-                "type": "stage_update",
-                "stage": "company_discovery",
-                "progress": 5,
-                "message": "Phase 1: Starting company discovery...",
-            })
-
-            # ════════════════════════════════════════
-            # PHASE 1: Company Discovery
-            # ════════════════════════════════════════
-            logger.info(f"[Phase 1] Creating discovery agent for run {run_id}")
-            callback_handler = create_pipeline_callback_handler(
-                events or {}, run_id_str, event_collector,
-                cancelled_runs=cancelled_runs,
-            )
-            discovery_agent = create_discovery_agent(callback_handler=callback_handler, disabled_tools=disabled_tools)
-            discovery_prompt = build_discovery_prompt(icp, options)
-
-            logger.info(f"[Phase 1] Invoking discovery agent for run {run_id}")
-            discovery_result = await asyncio.to_thread(discovery_agent, discovery_prompt)
-            discovery_text = str(discovery_result)
-            logger.info(
-                f"[Phase 1] Discovery complete. Result length: {len(discovery_text)}, "
-                f"first 500 chars: {discovery_text[:500]}"
-            )
-
-            _emit_event(events, run_id_str, {
-                "type": "stage_update",
-                "stage": "company_discovery",
-                "progress": 30,
-                "message": "Phase 1 complete. Parsing discovered companies...",
-            })
-
-            # Parse Phase 1 results
-            discovery_json = parse_json_from_agent_result(discovery_result)
-            discovered_companies = discovery_json.get("companies", [])
-            logger.info(f"[Phase 1] Parsed {len(discovered_companies)} companies from discovery")
-
-            # Log discovery summary if present
-            discovery_summary = discovery_json.get("discovery_summary")
-            if discovery_summary:
-                logger.info(f"[Phase 1] Discovery summary: {json.dumps(discovery_summary, default=str)}")
-                _emit_event(events, run_id_str, {
-                    "type": "agent_reasoning",
-                    "text": (
-                        f"Discovery complete: {discovery_summary.get('verified_match_count', 0)} verified, "
-                        f"{discovery_summary.get('potential_match_count', 0)} potential, "
-                        f"{discovery_summary.get('weak_match_count', 0)} weak matches "
-                        f"from {discovery_summary.get('total_candidates_found', '?')} candidates."
-                    ),
-                    "stage": "company_discovery",
-                })
-
-            if not discovered_companies:
-                raise ValueError("Phase 1 discovery returned no companies")
-
-            # Deduplicate by website/domain
-            seen_domains = set()
-            unique_companies = []
-            for c in discovered_companies:
-                domain = (c.get("website") or "").lower().strip()
-                if domain and domain in seen_domains:
-                    continue
-                if domain:
-                    seen_domains.add(domain)
-                unique_companies.append(c)
-            discovered_companies = unique_companies
-            logger.info(f"[Phase 1] {len(discovered_companies)} unique companies after dedup")
-
-            # ════════════════════════════════════════
-            # MULTI-STEP MODE: Pause after Phase 1
-            # ════════════════════════════════════════
-            pipeline_mode = options.get("pipeline_mode", "single_run")
-            if pipeline_mode == "multi_step":
-                logger.info(f"[Multi-step] Saving {len(discovered_companies)} discovered companies and pausing for review")
-
-                companies_saved = 0
-                for disc_company in discovered_companies:
-                    company_data = dict(disc_company)
-                    company_data.setdefault("source", "discover_icp_companies")
-                    company = Company(
-                        pipeline_run_id=run_id,
-                        name=company_data.get("name", "Unknown"),
-                        website=company_data.get("website"),
-                        industry=company_data.get("industry"),
-                        sub_industry=company_data.get("sub_industry"),
-                        city=company_data.get("city"),
-                        state_region=company_data.get("state"),
-                        country=company_data.get("country"),
-                        employee_count=company_data.get("employee_count"),
-                        revenue_estimate=company_data.get("revenue_estimate"),
-                        tech_stack_json=company_data.get("tech_signals"),
-                        description=company_data.get("description"),
-                        source=company_data.get("source"),
-                        icp_match_score=company_data.get("icp_match_score"),
-                        match_reasoning=company_data.get("match_reasoning"),
-                        qualification=company_data.get("qualification", "good_fit"),
-                        raw_data_json=company_data.get("dimension_evidence"),
-                    )
-                    db.add(company)
-                    companies_saved += 1
-
-                await db.flush()
-
-                # Persist Phase 1 agent logs
-                for seq, event_data in enumerate(event_collector):
-                    log = PipelineLog(
-                        pipeline_run_id=run_id,
-                        event_type=event_data.get("type", "unknown"),
-                        event_data=event_data,
-                        sequence_number=seq,
-                    )
-                    db.add(log)
-
-                # Update run status
-                run.status = "awaiting_review"
-                run.current_stage = "review"
-                run.companies_found = companies_saved
-                run.stage_details = {
-                    "total_discovered": companies_saved,
-                    "discovery_completed_at": datetime.now(timezone.utc).isoformat(),
-                }
-                await db.commit()
-
-                # Generate embeddings for discovered companies
-                try:
-                    from app.services.embedding_service import embed_company
-                    company_results = await db.execute(
-                        select(Company).where(Company.pipeline_run_id == run_id)
-                    )
-                    for comp in company_results.scalars().all():
-                        await embed_company(comp, db)
-                    await db.commit()
-                    logger.info(f"Embeddings generated for {companies_saved} discovered companies in run {run_id}")
-                except Exception as embed_err:
-                    logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
-
-                _emit_event(events, run_id_str, {
-                    "type": "awaiting_review",
-                    "companies_found": companies_saved,
-                })
-
-                logger.info(
-                    f"Pipeline {run_id} paused for review: {companies_saved} companies discovered"
-                )
-                return  # Pipeline pauses here
-
-            # ════════════════════════════════════════
-            # SINGLE-RUN MODE: Phase 2 & 3
-            # ════════════════════════════════════════
-            total_companies = len(discovered_companies)
-            _emit_event(events, run_id_str, {
-                "type": "stage_update",
-                "stage": "contact_discovery",
-                "progress": 35,
-                "message": f"Phase 2-3: Researching {total_companies} companies individually...",
-            })
-
-            run.current_stage = "contact_discovery"
-            await db.commit()
-
-            companies_saved = 0
-            contacts_saved = 0
-
-            for i, disc_company in enumerate(discovered_companies):
-                company_data = dict(disc_company)
-                company_data.setdefault("source", "discover_icp_companies")
-
-                company, new_contacts = await _process_company_phases_2_3(
-                    db=db,
-                    run_id=run_id,
-                    disc_company=disc_company,
-                    company_data=company_data,
-                    icp=icp,
-                    events=events,
-                    run_id_str=run_id_str,
-                    event_collector=event_collector,
-                    company_index=i,
-                    total_companies=total_companies,
-                    cancelled_runs=cancelled_runs,
-                    options=options,
-                    disabled_tools=disabled_tools,
-                )
-                companies_saved += 1
-                contacts_saved += new_contacts
-
-            # Persist agent logs
             for seq, event_data in enumerate(event_collector):
                 log = PipelineLog(
                     pipeline_run_id=run_id,
@@ -418,296 +283,52 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     sequence_number=seq,
                 )
                 db.add(log)
-
-            # Mark completed
-            run.status = "completed"
-            run.current_stage = "completed"
-            run.companies_found = companies_saved
-            run.contacts_found = contacts_saved
-            run.completed_at = datetime.now(timezone.utc)
             await db.commit()
+    except Exception as commit_err:
+        logger.error(f"Failed to persist {'cancelled' if cancelled else 'error'} status for pipeline {run_id}: {commit_err}")
 
-            # Generate embeddings for newly saved companies
-            try:
-                from app.services.embedding_service import embed_company
-                company_results = await db.execute(
-                    select(Company).where(Company.pipeline_run_id == run_id)
-                )
-                for comp in company_results.scalars().all():
-                    await embed_company(comp, db)
-                await db.commit()
-                logger.info(f"Embeddings generated for {companies_saved} companies in run {run_id}")
-            except Exception as embed_err:
-                logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
-
-            _emit_event(events, run_id_str, {
-                "type": "completed",
-                "companies_found": companies_saved,
-                "contacts_found": contacts_saved,
-            })
-
-            logger.info(
-                f"Pipeline {run_id} completed: {companies_saved} companies, {contacts_saved} contacts"
-            )
-
-        except PipelineCancelled:
-            logger.info(f"Pipeline {run_id} cancelled by user")
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-
-            try:
-                result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = "cancelled"
-                    run.completed_at = datetime.now(timezone.utc)
-
-                    for seq, event_data in enumerate(event_collector):
-                        log = PipelineLog(
-                            pipeline_run_id=run_id,
-                            event_type=event_data.get("type", "unknown"),
-                            event_data=event_data,
-                            sequence_number=seq,
-                        )
-                        db.add(log)
-
-                    await db.commit()
-            except Exception as commit_err:
-                logger.error(f"Failed to persist cancelled status for pipeline {run_id}: {commit_err}")
-
-            _emit_event(events, run_id_str, {
-                "type": "cancelled",
-                "companies_found": run.companies_found or 0 if run else 0,
-                "contacts_found": run.contacts_found or 0 if run else 0,
-            })
-
-        except Exception as e:
-            logger.error(f"Pipeline {run_id} failed: {e}\n{traceback.format_exc()}")
-
-            # Rollback any broken session state before updating status
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-
-            try:
-                # Re-fetch the run to ensure we have a clean object
-                result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = "failed"
-                    run.error_log = f"{str(e)}\n{traceback.format_exc()}"
-
-                    # Persist collected logs even on failure
-                    for seq, event_data in enumerate(event_collector):
-                        log = PipelineLog(
-                            pipeline_run_id=run_id,
-                            event_type=event_data.get("type", "unknown"),
-                            event_data=event_data,
-                            sequence_number=seq,
-                        )
-                        db.add(log)
-
-                    await db.commit()
-            except Exception as commit_err:
-                logger.error(f"Failed to persist error status for pipeline {run_id}: {commit_err}")
-
-            _emit_event(events, run_id_str, {
-                "type": "error",
-                "message": str(e),
-            })
-
-
-async def _process_company_phases_2_3(
-    db,
-    run_id: UUID,
-    disc_company: dict,
-    company_data: dict,
-    icp: dict,
-    events: dict,
-    run_id_str: str,
-    event_collector: list,
-    company_index: int,
-    total_companies: int,
-    existing_company: "Company | None" = None,
-    cancelled_runs: set = None,
-    options: dict = None,
-    disabled_tools: set[str] | None = None,
-) -> tuple:
-    """Run Phase 2 (contacts) + Phase 3 (BANT) for a single company.
-
-    If existing_company is provided (multi-step resume), uses that DB row.
-    Otherwise creates a new Company row (single-run mode).
-
-    Returns (company, contacts_saved_count).
-    """
-    company_name = company_data.get("name", "Unknown")
-    company_domain = company_data.get("website", "unknown")
-    progress = 10 + int(80 * (company_index + 1) / total_companies)
-
-    _emit_event(events, run_id_str, {
-        "type": "company_start",
-        "company_name": company_name,
-        "company_index": company_index + 1,
-        "total_companies": total_companies,
-        "progress": progress,
-    })
-
-    logger.info(
-        f"[Company {company_index+1}/{total_companies}] Starting: {company_name} ({company_domain})"
-    )
-
-    # ── Phase 2: Contact Agent ──
-    _emit_event(events, run_id_str, {
-        "type": "stage_update",
-        "stage": "contact_discovery",
-        "progress": progress,
-        "message": f"Finding contacts for {company_name} ({company_index+1}/{total_companies})...",
-    })
-
-    contacts_saved = 0
-
-    try:
-        contact_callback = create_pipeline_callback_handler(
-            events or {}, run_id_str, event_collector,
-            initial_stage="contact_discovery",
-            cancelled_runs=cancelled_runs,
-        )
-        contact_agent = create_contact_agent(callback_handler=contact_callback, disabled_tools=disabled_tools)
-        contact_prompt = build_contact_prompt(disc_company, icp)
-
-        contact_result = await asyncio.to_thread(contact_agent, contact_prompt)
-        contact_json = parse_json_from_agent_result(contact_result)
-
-        company_data["contacts"] = contact_json.get("contacts", [])
-        company_data["research_data"] = contact_json.get("research_data", {})
-
-        logger.info(
-            f"[Company {company_index+1}/{total_companies}] Contact agent found "
-            f"{len(company_data['contacts'])} contacts for {company_name}"
-        )
-
-    except PipelineCancelled:
-        raise
-    except Exception as contact_err:
-        logger.warning(
-            f"[Company {company_index+1}/{total_companies}] Contact agent failed for "
-            f"{company_name}: {contact_err}. Saving Phase 1 data only."
-        )
-        company_data["contacts"] = []
-        company_data["research_data"] = {}
-
-    # ── Save/update Company + Contacts ──
-    if existing_company:
-        company = existing_company
+    if cancelled:
+        _emit_event(events, run_id_str, {
+            "type": "cancelled",
+            "companies_found": run.companies_found or 0 if run else 0,
+            "contacts_found": run.contacts_found or 0 if run else 0,
+        })
     else:
-        company = Company(
+        _emit_event(events, run_id_str, {
+            "type": "error",
+            "message": str(error),
+        })
+
+
+async def _persist_logs(db, run_id, event_collector, offset=0):
+    """Persist event_collector to PipelineLog table."""
+    for seq, event_data in enumerate(event_collector):
+        log = PipelineLog(
             pipeline_run_id=run_id,
-            name=company_data.get("name", "Unknown"),
-            website=company_data.get("website"),
-            industry=company_data.get("industry"),
-            sub_industry=company_data.get("sub_industry"),
-            city=company_data.get("city"),
-            state_region=company_data.get("state"),
-            country=company_data.get("country"),
-            employee_count=company_data.get("employee_count"),
-            revenue_estimate=company_data.get("revenue_estimate"),
-            tech_stack_json=company_data.get("tech_signals"),
-            description=company_data.get("description"),
-            source=company_data.get("source"),
-            icp_match_score=company_data.get("icp_match_score"),
-            match_reasoning=company_data.get("match_reasoning"),
-            qualification=company_data.get("qualification", "good_fit"),
-            raw_data_json=company_data.get("dimension_evidence"),
+            event_type=event_data.get("type", "unknown"),
+            event_data=event_data,
+            sequence_number=offset + seq,
         )
-        db.add(company)
-        await db.flush()
-
-    for contact_data in company_data.get("contacts", []):
-        contact = Contact(
-            company_id=company.id,
-            full_name=contact_data.get("full_name"),
-            first_name=contact_data.get("first_name"),
-            last_name=contact_data.get("last_name"),
-            designation=contact_data.get("designation"),
-            role_category=contact_data.get("role_category"),
-            email=contact_data.get("email"),
-            phone=contact_data.get("phone"),
-            linkedin_url=contact_data.get("linkedin_url"),
-            source=contact_data.get("source"),
-            confidence=contact_data.get("confidence"),
-            enrichment_status=contact_data.get("enrichment_status", "pending"),
-        )
-        db.add(contact)
-        contacts_saved += 1
-
-    # ── Phase 3: BANT Agent ──
-    _emit_event(events, run_id_str, {
-        "type": "stage_update",
-        "stage": "scoring",
-        "progress": progress,
-        "message": f"BANT scoring {company_name} ({company_index+1}/{total_companies})...",
-    })
-
-    try:
-        bant_callback = create_pipeline_callback_handler(
-            events or {}, run_id_str, event_collector,
-            initial_stage="scoring",
-            cancelled_runs=cancelled_runs,
-        )
-        bant_agent = create_bant_agent(callback_handler=bant_callback, disabled_tools=disabled_tools)
-        bant_prompt = build_bant_prompt(company_data, icp)
-
-        bant_result = await asyncio.to_thread(bant_agent, bant_prompt)
-        bant_json = parse_json_from_agent_result(bant_result)
-
-        bant_data = bant_json.get("bant_score", {})
-        if bant_data:
-            bant = BANTScore(
-                company_id=company.id,
-                budget_score=bant_data.get("budget_score"),
-                budget_reason=bant_data.get("budget_reason"),
-                budget_sources=bant_data.get("budget_sources"),
-                authority_score=bant_data.get("authority_score"),
-                authority_reason=bant_data.get("authority_reason"),
-                authority_sources=bant_data.get("authority_sources"),
-                need_score=bant_data.get("need_score"),
-                need_reason=bant_data.get("need_reason"),
-                need_sources=bant_data.get("need_sources"),
-                timing_score=bant_data.get("timing_score"),
-                timing_reason=bant_data.get("timing_reason"),
-                timing_sources=bant_data.get("timing_sources"),
-                total_score=_compute_weighted_bant_score(bant_data, options or {}),
-                overall_summary=bant_data.get("overall_summary"),
-            )
-            db.add(bant)
-
-        logger.info(
-            f"[Company {company_index+1}/{total_companies}] BANT scoring complete for "
-            f"{company_name}: total={bant_data.get('total_score', 'N/A')}"
-        )
-
-    except PipelineCancelled:
-        raise
-    except Exception as bant_err:
-        logger.warning(
-            f"[Company {company_index+1}/{total_companies}] BANT agent failed for "
-            f"{company_name}: {bant_err}. Contacts already saved."
-        )
-
-    await db.flush()
-    return company, contacts_saved
+        db.add(log)
 
 
-async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancelled_runs: set = None):
-    """Resume a multi-step pipeline after the user has promoted companies.
+async def _get_existing_log_count(db, run_id) -> int:
+    """Count existing pipeline logs for sequence offset."""
+    result = await db.execute(
+        select(func.count(PipelineLog.id)).where(PipelineLog.pipeline_run_id == run_id)
+    )
+    return result.scalar() or 0
 
-    Runs Phase 2 (Contact Discovery) + Phase 3 (BANT Scoring) for promoted companies only.
+
+# ──────────────────────────────────────────────────────────────────
+# Main pipeline: Stages 1 + 2 → pause for review
+# ──────────────────────────────────────────────────────────────────
+
+async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: set = None):
+    """Execute Stages 1 (Industry Discovery) and 2 (Firmographic Fit).
+
+    After Stage 2 completes, the pipeline pauses for mandatory user review.
+    The user selects companies and a signal_mode, then calls promote-firmographic.
     """
     run_id_str = str(run_id)
 
@@ -715,22 +336,18 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
         if not run:
-            logger.error(f"Pipeline run {run_id} not found for resume")
+            logger.error(f"Pipeline run {run_id} not found")
             return
 
-        icp_result = await db.execute(
-            select(ICPConfig).where(ICPConfig.id == run.icp_config_id)
-        )
+        icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
         icp_config = icp_result.scalar_one_or_none()
         if not icp_config:
-            logger.error(f"ICP config {run.icp_config_id} not found for resume")
+            logger.error(f"ICP config {run.icp_config_id} not found")
             return
 
         icp = icp_config.config_json
-        options = run.options or {}
         event_collector = []
 
-        # Fetch disabled tools for the resume run
         try:
             disabled_tools = await get_disabled_tool_names(db)
         except Exception:
@@ -738,7 +355,382 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
 
         try:
             run.status = "running"
-            run.current_stage = "contact_discovery"
+            run.current_stage = "industry_discovery"
+            run.started_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            # ════════════════════════════════════════
+            # STAGE 1: Industry Discovery
+            # ════════════════════════════════════════
+            logger.info(f"[Stage 1] Starting industry discovery for run {run_id}")
+            _emit_event(events, run_id_str, {
+                "type": "stage_update",
+                "stage": "industry_discovery",
+                "progress": 5,
+                "message": "Stage 1: Starting industry discovery...",
+            })
+
+            callback_handler = create_pipeline_callback_handler(
+                events or {}, run_id_str, event_collector,
+                initial_stage="industry_discovery",
+                cancelled_runs=cancelled_runs,
+            )
+            discovery_agent = create_industry_discovery_agent(
+                callback_handler=callback_handler, disabled_tools=disabled_tools,
+            )
+            discovery_prompt = build_industry_discovery_prompt(icp)
+
+            discovery_result = await asyncio.to_thread(discovery_agent, discovery_prompt)
+            discovery_json = parse_json_from_agent_result(discovery_result)
+            discovered_raw = discovery_json.get("companies", [])
+            logger.info(f"[Stage 1] Discovered {len(discovered_raw)} companies")
+
+            if not discovered_raw:
+                raise ValueError("Stage 1 discovery returned no companies")
+
+            # Deduplicate by domain
+            seen_domains = set()
+            unique_companies = []
+            for c in discovered_raw:
+                domain = (c.get("website") or "").lower().strip()
+                if domain and domain in seen_domains:
+                    continue
+                if domain:
+                    seen_domains.add(domain)
+                unique_companies.append(c)
+
+            # Save all discovered companies to DB
+            companies_saved = 0
+            for disc in unique_companies:
+                company = Company(
+                    pipeline_run_id=run_id,
+                    name=disc.get("name", "Unknown"),
+                    website=disc.get("website"),
+                    industry=disc.get("industry"),
+                    sub_industry=disc.get("sub_industry"),
+                    city=disc.get("city"),
+                    state_region=disc.get("state") or disc.get("state_region"),
+                    country=disc.get("country"),
+                    employee_count=disc.get("employee_count"),
+                    revenue_estimate=disc.get("revenue_estimate"),
+                    description=disc.get("description"),
+                    source=disc.get("source"),
+                    current_stage="industry_discovery",
+                )
+                db.add(company)
+
+                # Check cache
+                if disc.get("website"):
+                    cached = await find_cached_company(disc["website"], db)
+                    if cached:
+                        clone_company_data(cached, company)
+
+                await db.flush()
+
+                # Create stage result
+                stage_result = CompanyStageResult(
+                    company_id=company.id,
+                    stage="industry_discovery",
+                    status="passed",
+                    reasoning=f"Discovered via {disc.get('source', 'unknown')}",
+                )
+                db.add(stage_result)
+                companies_saved += 1
+
+            await db.flush()
+
+            _emit_event(events, run_id_str, {
+                "type": "stage_update",
+                "stage": "industry_discovery",
+                "progress": 25,
+                "message": f"Stage 1 complete: {companies_saved} companies discovered. Starting firmographic fit check...",
+            })
+
+            # ════════════════════════════════════════
+            # STAGE 2: Firmographic Fit
+            # ════════════════════════════════════════
+            run.current_stage = "firmographic_fit"
+            await db.commit()
+
+            logger.info(f"[Stage 2] Starting firmographic fit for run {run_id}")
+            _emit_event(events, run_id_str, {
+                "type": "stage_update",
+                "stage": "firmographic_fit",
+                "progress": 30,
+                "message": "Stage 2: Running firmographic fit check...",
+            })
+
+            # Fetch all discovered companies
+            all_companies_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.current_stage == "industry_discovery",
+                )
+            )
+            all_companies = list(all_companies_result.scalars().all())
+
+            # Pass 1: Computational pre-filter
+            passed, failed, needs_agent = quick_firmographic_filter(all_companies, icp)
+
+            # Save failed results
+            for company, reason in failed:
+                company.current_stage = "firmographic_fit"
+                company.qualification = "disqualified"
+                company.rejection_reason = reason
+                stage_result = CompanyStageResult(
+                    company_id=company.id,
+                    stage="firmographic_fit",
+                    status="failed",
+                    reasoning=reason,
+                )
+                db.add(stage_result)
+
+            logger.info(
+                f"[Stage 2] Pre-filter: {len(passed)} passed, {len(failed)} failed, "
+                f"{len(needs_agent)} need agent verification"
+            )
+
+            # Pass 2: Agent verification in batches of 8
+            companies_to_verify = passed + needs_agent
+            companies_passed = 0
+            companies_failed_agent = 0
+
+            for batch_idx, batch in enumerate(_chunk(companies_to_verify, 8)):
+                batch_dicts = []
+                batch_map = {}
+                for c in batch:
+                    cdict = {
+                        "name": c.name,
+                        "website": c.website,
+                        "industry": c.industry,
+                        "sub_industry": c.sub_industry,
+                        "country": c.country,
+                        "employee_count": c.employee_count,
+                        "revenue_estimate": c.revenue_estimate,
+                        "description": (c.description or "")[:200],
+                    }
+                    if c.cached_from_run_id:
+                        cdict["existing_data"] = True
+                        cdict["data_freshness"] = str(c.data_freshness) if c.data_freshness else None
+                    batch_dicts.append(cdict)
+                    batch_map[(c.website or "").lower()] = c
+
+                _emit_event(events, run_id_str, {
+                    "type": "stage_update",
+                    "stage": "firmographic_fit",
+                    "progress": 35 + int(25 * (batch_idx + 1) / max(len(list(_chunk(companies_to_verify, 8))), 1)),
+                    "message": f"Stage 2: Evaluating batch {batch_idx + 1} ({len(batch)} companies)...",
+                })
+
+                try:
+                    fit_callback = create_pipeline_callback_handler(
+                        events or {}, run_id_str, event_collector,
+                        initial_stage="firmographic_fit",
+                        cancelled_runs=cancelled_runs,
+                    )
+                    fit_agent = create_firmographic_fit_agent(
+                        callback_handler=fit_callback, disabled_tools=disabled_tools,
+                    )
+                    fit_prompt = build_firmographic_fit_prompt(batch_dicts, icp)
+                    fit_result = await asyncio.to_thread(fit_agent, fit_prompt)
+                    fit_json = parse_json_from_agent_result(fit_result)
+
+                    for evaluated in fit_json.get("companies", []):
+                        domain = (evaluated.get("website") or "").lower()
+                        company = batch_map.get(domain)
+                        if not company:
+                            # Try name match as fallback
+                            for c in batch:
+                                if c.name and c.name.lower() == (evaluated.get("name") or "").lower():
+                                    company = c
+                                    break
+                        if not company:
+                            continue
+
+                        recommendation = evaluated.get("recommendation", "pass")
+                        score = _normalize_score_to_100(evaluated.get("score", 50))
+                        reasoning = evaluated.get("reasoning", "")
+
+                        company.current_stage = "firmographic_fit"
+                        company.icp_match_score = score
+
+                        # Update employee/revenue if agent found better data
+                        if evaluated.get("employee_count"):
+                            company.employee_count = evaluated["employee_count"]
+                        if evaluated.get("revenue_estimate"):
+                            company.revenue_estimate = evaluated["revenue_estimate"]
+
+                        if recommendation == "pass":
+                            company.qualification = "qualified"
+                            stage_result = CompanyStageResult(
+                                company_id=company.id,
+                                stage="firmographic_fit",
+                                status="passed",
+                                score=score,
+                                reasoning=reasoning,
+                                evidence=evaluated.get("per_criterion"),
+                            )
+                            companies_passed += 1
+                        else:
+                            company.qualification = "disqualified"
+                            company.rejection_reason = reasoning
+                            stage_result = CompanyStageResult(
+                                company_id=company.id,
+                                stage="firmographic_fit",
+                                status="failed",
+                                score=score,
+                                reasoning=reasoning,
+                                evidence=evaluated.get("per_criterion"),
+                            )
+                            companies_failed_agent += 1
+
+                        db.add(stage_result)
+
+                except PipelineCancelled:
+                    raise
+                except Exception as batch_err:
+                    logger.warning(f"[Stage 2] Batch {batch_idx + 1} agent failed: {batch_err}. Marking as needs review.")
+                    for c in batch:
+                        if c.current_stage != "firmographic_fit":
+                            c.current_stage = "firmographic_fit"
+                            c.qualification = "qualified"
+                            c.icp_match_score = 50  # Default middle score
+                            stage_result = CompanyStageResult(
+                                company_id=c.id,
+                                stage="firmographic_fit",
+                                status="passed",
+                                score=50,
+                                reasoning="Agent verification failed; defaulted to pass for user review",
+                            )
+                            db.add(stage_result)
+                            companies_passed += 1
+
+            await db.flush()
+
+            # Update company counts
+            run.companies_found = companies_saved
+
+            # ════════════════════════════════════════
+            # PAUSE: Mandatory user review
+            # ════════════════════════════════════════
+            await _persist_logs(db, run_id, event_collector)
+
+            run.status = "awaiting_review"
+            run.current_stage = "review_firmographic"
+            run.stage_details = {
+                "total_discovered": companies_saved,
+                "pre_filter_passed": len(passed),
+                "pre_filter_failed": len(failed),
+                "agent_passed": companies_passed,
+                "agent_failed": companies_failed_agent,
+            }
+            await db.commit()
+
+            # Generate embeddings
+            try:
+                from app.services.embedding_service import embed_company
+                company_results = await db.execute(
+                    select(Company).where(Company.pipeline_run_id == run_id)
+                )
+                for comp in company_results.scalars().all():
+                    if comp.embedding is None:
+                        await embed_company(comp, db)
+                await db.commit()
+            except Exception as embed_err:
+                logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
+
+            total_failed = len(failed) + companies_failed_agent
+            _emit_event(events, run_id_str, {
+                "type": "awaiting_firmographic_review",
+                "companies_passed": companies_passed,
+                "companies_failed": total_failed,
+                "total": companies_saved,
+            })
+
+            logger.info(
+                f"Pipeline {run_id} paused for firmographic review: "
+                f"{companies_passed} passed, {total_failed} failed out of {companies_saved}"
+            )
+
+        except PipelineCancelled:
+            logger.info(f"Pipeline {run_id} cancelled by user")
+            if cancelled_runs is not None:
+                cancelled_runs.discard(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+
+        except Exception as e:
+            logger.error(f"Pipeline {run_id} failed: {e}\n{traceback.format_exc()}")
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Resume after firmographic review → Stage 3 signals
+# ──────────────────────────────────────────────────────────────────
+
+async def resume_after_firmographic(
+    run_id: UUID,
+    company_ids: list[UUID],
+    signal_mode: str,
+    events: dict = None,
+    cancelled_runs: set = None,
+):
+    """Resume pipeline after firmographic review. Runs signal research (Stage 3).
+
+    signal_mode: "budget_first" | "urgency_first" | "both"
+    """
+    run_id_str = str(run_id)
+
+    async with async_session() as db:
+        result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+
+        icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
+        icp_config = icp_result.scalar_one_or_none()
+        if not icp_config:
+            return
+
+        icp = icp_config.config_json
+        event_collector = []
+
+        try:
+            disabled_tools = await get_disabled_tool_names(db)
+        except Exception:
+            disabled_tools = set()
+
+        try:
+            # Mark selected companies as promoted, others as excluded
+            all_companies_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.current_stage == "firmographic_fit",
+                    Company.qualification != "disqualified",
+                )
+            )
+            for company in all_companies_result.scalars().all():
+                if company.id in company_ids:
+                    company.promoted = True
+                    stage_result = CompanyStageResult(
+                        company_id=company.id,
+                        stage="firmographic_fit",
+                        status="promoted",
+                        user_override=True,
+                    )
+                    db.add(stage_result)
+                else:
+                    company.promoted = False
+                    stage_result = CompanyStageResult(
+                        company_id=company.id,
+                        stage="firmographic_fit",
+                        status="excluded",
+                        user_override=False,
+                        reasoning="User deselected at firmographic review",
+                    )
+                    db.add(stage_result)
+
+            run.signal_mode = signal_mode
+            run.status = "running"
             await db.commit()
 
             # Fetch promoted companies
@@ -748,98 +740,416 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
                     Company.promoted == True,
                 )
             )
-            promoted_companies = promoted_result.scalars().all()
+            promoted_companies = list(promoted_result.scalars().all())
 
             if not promoted_companies:
-                logger.warning(f"No promoted companies found for run {run_id}")
                 run.status = "completed"
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                return
+
+            log_offset = await _get_existing_log_count(db, run_id)
+
+            if signal_mode == "both":
+                # Run BOTH budget + urgency signals in one pass
+                run.current_stage = "budget_urgency_signals"
+                await db.commit()
+
+                await _run_signal_research(
+                    db, run, promoted_companies, icp, "both",
+                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                )
+
+                await _persist_logs(db, run_id, event_collector, offset=log_offset)
+                run.status = "awaiting_review"
+                run.current_stage = "review_signals"
+                await db.commit()
+
+                avg_budget = sum(c.budget_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
+                avg_urgency = sum(c.urgency_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
+
                 _emit_event(events, run_id_str, {
-                    "type": "completed",
-                    "companies_found": run.companies_found or 0,
-                    "contacts_found": 0,
+                    "type": "awaiting_signal_review",
+                    "companies_scored": len(promoted_companies),
+                    "avg_budget": round(avg_budget, 1),
+                    "avg_urgency": round(avg_urgency, 1),
                 })
+
+            else:
+                # Serial mode: run first signal type only
+                first_type = "budget_signals" if signal_mode == "budget_first" else "urgency_signals"
+                run.current_stage = first_type
+                await db.commit()
+
+                await _run_signal_research(
+                    db, run, promoted_companies, icp, first_type,
+                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                )
+
+                await _persist_logs(db, run_id, event_collector, offset=log_offset)
+                run.signal_phase = "first_signal_done"
+                run.status = "awaiting_review"
+                run.current_stage = f"review_{first_type}"
+                await db.commit()
+
+                score_attr = "budget_signal_score" if first_type == "budget_signals" else "urgency_signal_score"
+                avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
+
+                _emit_event(events, run_id_str, {
+                    "type": "awaiting_first_signal_review",
+                    "signal_type": first_type,
+                    "companies_scored": len(promoted_companies),
+                    "avg_score": round(avg_score, 1),
+                })
+
+        except PipelineCancelled:
+            if cancelled_runs is not None:
+                cancelled_runs.discard(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+        except Exception as e:
+            logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Resume after first signal review (serial mode only)
+# ──────────────────────────────────────────────────────────────────
+
+async def resume_after_first_signal(
+    run_id: UUID,
+    company_ids: list[UUID],
+    events: dict = None,
+    cancelled_runs: set = None,
+):
+    """Resume after reviewing first signal results in serial mode.
+    Runs the second signal type."""
+    run_id_str = str(run_id)
+
+    async with async_session() as db:
+        result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+
+        icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
+        icp_config = icp_result.scalar_one_or_none()
+        if not icp_config:
+            return
+
+        icp = icp_config.config_json
+        event_collector = []
+
+        try:
+            disabled_tools = await get_disabled_tool_names(db)
+        except Exception:
+            disabled_tools = set()
+
+        try:
+            # Mark selections
+            promoted_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.promoted == True,
+                )
+            )
+            for company in promoted_result.scalars().all():
+                if company.id not in company_ids:
+                    company.promoted = False
+                    first_type = "budget_signals" if run.signal_mode == "budget_first" else "urgency_signals"
+                    stage_result = CompanyStageResult(
+                        company_id=company.id,
+                        stage=first_type,
+                        status="excluded",
+                        user_override=False,
+                        reasoning=f"User deselected after {first_type.replace('_', ' ')} review",
+                    )
+                    db.add(stage_result)
+
+            # Determine second signal type
+            second_type = "urgency_signals" if run.signal_mode == "budget_first" else "budget_signals"
+
+            run.status = "running"
+            run.current_stage = second_type
+            await db.commit()
+
+            # Fetch still-promoted companies
+            promoted_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.promoted == True,
+                )
+            )
+            promoted_companies = list(promoted_result.scalars().all())
+
+            if not promoted_companies:
+                run.status = "completed"
+                run.current_stage = "completed"
+                run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                return
+
+            log_offset = await _get_existing_log_count(db, run_id)
+
+            await _run_signal_research(
+                db, run, promoted_companies, icp, second_type,
+                events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+            )
+
+            await _persist_logs(db, run_id, event_collector, offset=log_offset)
+            run.signal_phase = "second_signal_done"
+            run.status = "awaiting_review"
+            run.current_stage = f"review_{second_type}"
+            await db.commit()
+
+            score_attr = "budget_signal_score" if second_type == "budget_signals" else "urgency_signal_score"
+            avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
+
+            _emit_event(events, run_id_str, {
+                "type": "awaiting_second_signal_review",
+                "signal_type": second_type,
+                "companies_scored": len(promoted_companies),
+                "avg_score": round(avg_score, 1),
+            })
+
+        except PipelineCancelled:
+            if cancelled_runs is not None:
+                cancelled_runs.discard(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+        except Exception as e:
+            logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Resume after final signal review → Stages 4 + 5
+# ──────────────────────────────────────────────────────────────────
+
+async def resume_after_signals(
+    run_id: UUID,
+    company_ids: list[UUID],
+    events: dict = None,
+    cancelled_runs: set = None,
+):
+    """Resume after final signal review. Runs Stages 4 (contacts) + 5 (scoring)."""
+    run_id_str = str(run_id)
+
+    async with async_session() as db:
+        result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+
+        icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
+        icp_config = icp_result.scalar_one_or_none()
+        if not icp_config:
+            return
+
+        icp = icp_config.config_json
+        event_collector = []
+
+        try:
+            disabled_tools = await get_disabled_tool_names(db)
+        except Exception:
+            disabled_tools = set()
+
+        try:
+            # Mark final selections
+            promoted_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.promoted == True,
+                )
+            )
+            for company in promoted_result.scalars().all():
+                if company.id not in company_ids:
+                    company.promoted = False
+
+            run.status = "running"
+            run.current_stage = "contact_discovery"
+            await db.commit()
+
+            # Fetch final promoted companies
+            promoted_result = await db.execute(
+                select(Company).where(
+                    Company.pipeline_run_id == run_id,
+                    Company.promoted == True,
+                )
+            )
+            promoted_companies = list(promoted_result.scalars().all())
+
+            if not promoted_companies:
+                run.status = "completed"
+                run.current_stage = "completed"
+                run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             total_companies = len(promoted_companies)
+            log_offset = await _get_existing_log_count(db, run_id)
+
+            # ════════════════════════════════════════
+            # STAGE 4: Contact Discovery
+            # ════════════════════════════════════════
             _emit_event(events, run_id_str, {
                 "type": "stage_update",
                 "stage": "contact_discovery",
-                "progress": 35,
-                "message": f"Phase 2-3: Researching {total_companies} promoted companies...",
+                "progress": 60,
+                "message": f"Stage 4: Finding contacts for {total_companies} companies...",
             })
 
-            contacts_saved = 0
-
+            contacts_total = 0
             for i, company in enumerate(promoted_companies):
-                disc_company = {
-                    "name": company.name,
-                    "website": company.website,
-                    "industry": company.industry,
-                    "sub_industry": company.sub_industry,
-                    "city": company.city,
-                    "state": company.state_region,
-                    "country": company.country,
-                    "employee_count": company.employee_count,
-                    "revenue_estimate": company.revenue_estimate,
-                    "description": company.description,
-                    "tech_signals": company.tech_stack_json,
-                    "icp_match_score": company.icp_match_score,
-                    "match_reasoning": company.match_reasoning,
-                    "qualification": company.qualification,
-                    "source": company.source,
+                # Update stage_details for polling-based progress
+                run.stage_details = {
+                    **(run.stage_details or {}),
+                    "current_company_index": i + 1,
+                    "total_companies_in_stage": total_companies,
+                    "current_company_name": company.name,
+                    "contacts_found_so_far": contacts_total,
                 }
-                company_data = dict(disc_company)
+                await db.commit()
 
-                _, new_contacts = await _process_company_phases_2_3(
-                    db=db,
-                    run_id=run_id,
-                    disc_company=disc_company,
-                    company_data=company_data,
-                    icp=icp,
-                    events=events,
-                    run_id_str=run_id_str,
-                    event_collector=event_collector,
-                    company_index=i,
-                    total_companies=total_companies,
-                    existing_company=company,
-                    cancelled_runs=cancelled_runs,
-                    options=options,
-                    disabled_tools=disabled_tools,
-                )
-                contacts_saved += new_contacts
+                _emit_event(events, run_id_str, {
+                    "type": "company_start",
+                    "company_name": company.name,
+                    "company_index": i + 1,
+                    "total_companies": total_companies,
+                    "stage": "contact_discovery",
+                    "progress": 60 + int(25 * (i + 1) / total_companies),
+                })
 
-            # Persist Phase 2-3 agent logs with offset sequence numbers
-            existing_log_count_result = await db.execute(
-                select(PipelineLog).where(PipelineLog.pipeline_run_id == run_id)
-            )
-            existing_log_count = len(existing_log_count_result.scalars().all())
+                try:
+                    # Get cached contacts if any
+                    cached_contacts = None
+                    if company.cached_from_run_id:
+                        cached_result = await db.execute(
+                            select(Contact).where(Contact.company_id == company.id)
+                        )
+                        existing = cached_result.scalars().all()
+                        if existing:
+                            cached_contacts = [
+                                {
+                                    "full_name": c.full_name,
+                                    "designation": c.designation,
+                                    "email": c.email,
+                                    "linkedin_url": c.linkedin_url,
+                                    "source": c.source,
+                                }
+                                for c in existing
+                            ]
 
-            for seq, event_data in enumerate(event_collector):
-                log = PipelineLog(
-                    pipeline_run_id=run_id,
-                    event_type=event_data.get("type", "unknown"),
-                    event_data=event_data,
-                    sequence_number=existing_log_count + seq,
-                )
-                db.add(log)
+                    contact_callback = create_pipeline_callback_handler(
+                        events or {}, run_id_str, event_collector,
+                        initial_stage="contact_discovery",
+                        cancelled_runs=cancelled_runs,
+                    )
+                    contact_agent = create_contact_agent(
+                        callback_handler=contact_callback, disabled_tools=disabled_tools,
+                    )
 
-            # Mark completed
-            run.status = "completed"
-            run.current_stage = "completed"
-            run.contacts_found = contacts_saved
-            run.completed_at = datetime.now(timezone.utc)
+                    company_dict = {
+                        "name": company.name,
+                        "website": company.website,
+                        "industry": company.industry,
+                        "employee_count": company.employee_count,
+                    }
+                    contact_prompt = build_contact_discovery_prompt(company_dict, icp, cached_contacts)
 
-            # Update stage_details with promotion results
-            stage_details = run.stage_details or {}
-            stage_details["promoted_count"] = total_companies
-            stage_details["contacts_found"] = contacts_saved
-            run.stage_details = stage_details
+                    contact_result = await asyncio.to_thread(contact_agent, contact_prompt)
+                    contact_json = parse_json_from_agent_result(contact_result)
+
+                    contacts_saved = 0
+                    for cd in contact_json.get("contacts", []):
+                        contact = Contact(
+                            company_id=company.id,
+                            full_name=cd.get("full_name"),
+                            first_name=cd.get("first_name"),
+                            last_name=cd.get("last_name"),
+                            designation=cd.get("designation"),
+                            role_category=cd.get("role_category"),
+                            email=cd.get("email"),
+                            phone=cd.get("phone"),
+                            linkedin_url=cd.get("linkedin_url"),
+                            source=cd.get("source"),
+                            confidence=cd.get("confidence"),
+                            enrichment_status=cd.get("enrichment_status", "pending"),
+                        )
+                        db.add(contact)
+                        contacts_saved += 1
+
+                    company.current_stage = "contact_discovery"
+                    stage_result = CompanyStageResult(
+                        company_id=company.id,
+                        stage="contact_discovery",
+                        status="passed" if contacts_saved > 0 else "skipped",
+                        score=float(contacts_saved),
+                        reasoning=f"Found {contacts_saved} contacts",
+                    )
+                    db.add(stage_result)
+                    contacts_total += contacts_saved
+
+                    _emit_event(events, run_id_str, {
+                        "type": "company_stage_result",
+                        "company_name": company.name,
+                        "stage": "contact_discovery",
+                        "status": "passed" if contacts_saved > 0 else "skipped",
+                        "score": contacts_saved,
+                    })
+
+                except PipelineCancelled:
+                    raise
+                except Exception as err:
+                    logger.warning(f"[Stage 4] Contact discovery failed for {company.name}: {err}")
+                    company.current_stage = "contact_discovery"
+
+                await db.flush()
+
+            # ════════════════════════════════════════
+            # STAGE 5: Final Scoring & Ranking
+            # ════════════════════════════════════════
+            run.current_stage = "final_scoring"
             await db.commit()
 
-            # Generate embeddings for promoted companies that may not have them yet
+            _emit_event(events, run_id_str, {
+                "type": "stage_update",
+                "stage": "final_scoring",
+                "progress": 90,
+                "message": "Stage 5: Computing final scores and ranking...",
+            })
+
+            # Re-fetch with contacts loaded
+            from sqlalchemy.orm import selectinload
+            promoted_result = await db.execute(
+                select(Company)
+                .where(Company.pipeline_run_id == run_id, Company.promoted == True)
+                .options(selectinload(Company.contacts))
+            )
+            promoted_companies = list(promoted_result.scalars().unique().all())
+
+            for company in promoted_companies:
+                company.final_score = compute_final_score(company)
+                company.current_stage = "final_scoring"
+                company.data_freshness = datetime.now(timezone.utc)
+
+            # Rank by final score
+            ranked = sorted(promoted_companies, key=lambda c: c.final_score or 0, reverse=True)
+            for i, c in enumerate(ranked):
+                c.final_rank = i + 1
+
+            # Persist logs
+            await _persist_logs(db, run_id, event_collector, offset=log_offset)
+
+            run.status = "completed"
+            run.current_stage = "completed"
+            run.contacts_found = contacts_total
+            run.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            # Generate embeddings
             try:
                 from app.services.embedding_service import embed_company
                 for comp in promoted_companies:
@@ -849,81 +1159,155 @@ async def resume_pipeline_post_review(run_id: UUID, events: dict = None, cancell
             except Exception as embed_err:
                 logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
+            avg_final = sum(c.final_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
+
             _emit_event(events, run_id_str, {
                 "type": "completed",
-                "companies_found": run.companies_found or 0,
-                "contacts_found": contacts_saved,
+                "companies_found": len(promoted_companies),
+                "contacts_found": contacts_total,
+                "avg_final_score": round(avg_final, 1),
             })
 
             logger.info(
-                f"Pipeline {run_id} resume completed: {total_companies} promoted companies, {contacts_saved} contacts"
+                f"Pipeline {run_id} completed: {len(promoted_companies)} companies, "
+                f"{contacts_total} contacts, avg score {avg_final:.1f}"
             )
 
         except PipelineCancelled:
-            logger.info(f"Pipeline resume {run_id} cancelled by user")
             if cancelled_runs is not None:
                 cancelled_runs.discard(run_id_str)
-
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-
-            try:
-                result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = "cancelled"
-                    run.completed_at = datetime.now(timezone.utc)
-
-                    for seq, event_data in enumerate(event_collector):
-                        log = PipelineLog(
-                            pipeline_run_id=run_id,
-                            event_type=event_data.get("type", "unknown"),
-                            event_data=event_data,
-                            sequence_number=seq,
-                        )
-                        db.add(log)
-
-                    await db.commit()
-            except Exception as commit_err:
-                logger.error(f"Failed to persist cancelled status for pipeline resume {run_id}: {commit_err}")
-
-            _emit_event(events, run_id_str, {
-                "type": "cancelled",
-                "companies_found": run.companies_found or 0 if run else 0,
-                "contacts_found": run.contacts_found or 0 if run else 0,
-            })
-
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
+            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
 
-            try:
-                await db.rollback()
-            except Exception:
-                pass
 
-            try:
-                result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = "failed"
-                    run.error_log = f"{str(e)}\n{traceback.format_exc()}"
+# ──────────────────────────────────────────────────────────────────
+# Signal research helper (used by resume_after_firmographic and resume_after_first_signal)
+# ──────────────────────────────────────────────────────────────────
 
-                    for seq, event_data in enumerate(event_collector):
-                        log = PipelineLog(
-                            pipeline_run_id=run_id,
-                            event_type=event_data.get("type", "unknown"),
-                            event_data=event_data,
-                            sequence_number=seq,
-                        )
-                        db.add(log)
+async def _run_signal_research(
+    db, run, companies, icp, signal_type,
+    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+):
+    """Run signal research for a list of companies.
 
-                    await db.commit()
-            except Exception as commit_err:
-                logger.error(f"Failed to persist error status for pipeline resume {run_id}: {commit_err}")
+    signal_type: "budget_signals", "urgency_signals", or "both"
+    """
+    stage_name = {
+        "budget_signals": "Budget Signal Research",
+        "urgency_signals": "Urgency Signal Research",
+        "both": "Budget & Urgency Signal Research",
+    }.get(signal_type, signal_type)
+
+    _emit_event(events, run_id_str, {
+        "type": "stage_update",
+        "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
+        "progress": 40,
+        "message": f"Stage 3: {stage_name} for {len(companies)} companies...",
+    })
+
+    for i, company in enumerate(companies):
+        # Update stage_details for polling-based progress
+        run.stage_details = {
+            **(run.stage_details or {}),
+            "current_company_index": i + 1,
+            "total_companies_in_stage": len(companies),
+            "current_company_name": company.name,
+        }
+        await db.commit()
+
+        _emit_event(events, run_id_str, {
+            "type": "company_start",
+            "company_name": company.name,
+            "company_index": i + 1,
+            "total_companies": len(companies),
+            "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
+            "progress": 40 + int(20 * (i + 1) / len(companies)),
+        })
+
+        try:
+            signal_callback = create_pipeline_callback_handler(
+                events or {}, run_id_str, event_collector,
+                initial_stage=signal_type if signal_type != "both" else "budget_urgency_signals",
+                cancelled_runs=cancelled_runs,
+            )
+            agent = create_signal_agent(
+                callback_handler=signal_callback, disabled_tools=disabled_tools,
+            )
+
+            company_dict = {
+                "name": company.name,
+                "website": company.website,
+                "description": company.description,
+                "employee_count": company.employee_count,
+                "revenue_estimate": company.revenue_estimate,
+                "cached_from_run_id": str(company.cached_from_run_id) if company.cached_from_run_id else None,
+                "data_freshness": str(company.data_freshness) if company.data_freshness else None,
+            }
+
+            prompt = build_signal_prompt(company_dict, icp, signal_type)
+            result = await asyncio.to_thread(agent, prompt)
+            signal_json = parse_json_from_agent_result(result)
+
+            # Update scores (normalize to 0-100 scale)
+            if signal_type in ("budget_signals", "both"):
+                budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
+                company.budget_signal_score = _normalize_score_to_100(float(budget_score) if budget_score else None)
+
+            if signal_type in ("urgency_signals", "both"):
+                urgency_score = signal_json.get("urgency_signal_score") or signal_json.get("composite_score", 0)
+                company.urgency_signal_score = _normalize_score_to_100(float(urgency_score) if urgency_score else None)
+
+            # Create stage results
+            signals_data = signal_json.get("signals", [])
+
+            if signal_type in ("budget_signals", "both"):
+                budget_signals = [s for s in signals_data if s.get("type") == "budget"] if signal_type == "both" else signals_data
+                stage_result = CompanyStageResult(
+                    company_id=company.id,
+                    stage="budget_signals",
+                    status="passed",
+                    score=company.budget_signal_score,
+                    reasoning=f"Budget signal score: {company.budget_signal_score}/100",
+                    evidence=budget_signals[:10] if budget_signals else None,
+                )
+                db.add(stage_result)
+
+            if signal_type in ("urgency_signals", "both"):
+                urgency_signals = [s for s in signals_data if s.get("type") == "urgency"] if signal_type == "both" else signals_data
+                stage_result = CompanyStageResult(
+                    company_id=company.id,
+                    stage="urgency_signals",
+                    status="passed",
+                    score=company.urgency_signal_score,
+                    reasoning=f"Urgency signal score: {company.urgency_signal_score}/100",
+                    evidence=urgency_signals[:10] if urgency_signals else None,
+                )
+                db.add(stage_result)
+
+            # Update current_stage to reflect signal completion
+            if signal_type == "both":
+                company.current_stage = "budget_urgency_signals"
+            else:
+                company.current_stage = signal_type
 
             _emit_event(events, run_id_str, {
-                "type": "error",
-                "message": str(e),
+                "type": "company_stage_result",
+                "company_name": company.name,
+                "stage": signal_type,
+                "status": "passed",
+                "score": _normalize_score_to_100(signal_json.get("composite_score", 0)),
             })
+
+        except PipelineCancelled:
+            raise
+        except Exception as err:
+            logger.warning(f"[Stage 3] Signal research failed for {company.name}: {err}")
+            # Still update current_stage so the company is visible at this stage
+            if signal_type == "both":
+                company.current_stage = "budget_urgency_signals"
+            else:
+                company.current_stage = signal_type
+
+        await db.flush()

@@ -4,9 +4,11 @@ import httpx
 from strands import tool
 from app.config import get_settings
 
+EVENTREGISTRY_URL = "https://newsapi.ai/api/v1/article/getArticles"
+
 RATE_LIMIT_CODES = {429, 402, 403}
 RATE_LIMIT_MSG = (
-    "RATE_LIMITED: NewsAPI limit reached (100 calls/day on free tier). "
+    "RATE_LIMITED: NewsAPI.ai limit reached. "
     "Do NOT retry. Use tavily_search or duckduckgo_search "
     "'[company] news' as alternatives."
 )
@@ -18,11 +20,9 @@ def get_news_sentiment(
     days: int = 7,
 ) -> dict:
     """
-    Fetch recent financial news and score sentiment for each article.
-    Uses NewsAPI for headlines and FinBERT for sentiment scoring.
-    Requires NEWS_API_KEY. Free tier: 100 calls/day.
-    BEST FOR: Detecting reputational or financial risk signals,
-    positive momentum, or negative press for a company.
+    Fetch recent news articles about a company with sentiment scores.
+    Uses NewsAPI.ai (EventRegistry) — requires NEWS_API_KEY.
+    BEST FOR: Detecting recent press, announcements, funding news, or risk signals.
     USE IN STAGE: BANT Scoring (Stage 4) — Timing and Need dimensions.
 
     Args:
@@ -43,31 +43,66 @@ def get_news_sentiment(
             "articles": [],
         }
 
-    from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # EventRegistry uses YYYY-MM-DD date format (no time component)
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    payload = {
+        "apiKey": api_key,
+        "keyword": company_name,
+        "keywordSearchMode": "simple",
+        "lang": "eng",
+        "dateStart": date_from,
+        "articlesCount": 10,
+        "resultType": "articles",
+        "articlesSortBy": "date",
+        "articlesSortByAsc": False,
+        "includeArticleSentiment": True,
+        "includeArticleCategories": False,
+        "includeArticleImage": False,
+    }
 
     try:
-        resp = httpx.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": company_name,
-                "from": from_date,
-                "sortBy": "publishedAt",
-                "language": "en",
-                "pageSize": 10,
-                "apiKey": api_key,
-            },
-            timeout=15,
-        )
+        resp = httpx.post(EVENTREGISTRY_URL, json=payload, timeout=20)
         resp.raise_for_status()
         data = resp.json()
 
-        if data.get("status") != "ok":
-            return {
-                "error": data.get("message", "NewsAPI returned an error"),
-                "articles": [],
-            }
+        raw_articles = data.get("articles", {}).get("results", [])
 
-        raw_articles = data.get("articles", [])
+        articles = []
+        for article in raw_articles:
+            source = article.get("source", {})
+            source_name = source.get("title", "") if isinstance(source, dict) else str(source)
+
+            sentiment_raw = article.get("sentiment")
+            if sentiment_raw is None:
+                sentiment_label = "neutral"
+                sentiment_score = None
+            elif sentiment_raw > 0.1:
+                sentiment_label = "positive"
+                sentiment_score = round(sentiment_raw, 3)
+            elif sentiment_raw < -0.1:
+                sentiment_label = "negative"
+                sentiment_score = round(abs(sentiment_raw), 3)
+            else:
+                sentiment_label = "neutral"
+                sentiment_score = round(abs(sentiment_raw), 3)
+
+            articles.append({
+                "title": article.get("title", ""),
+                "source": source_name,
+                "published_date": article.get("dateTime", article.get("date", "")),
+                "url": article.get("url", ""),
+                "description": (article.get("body") or "")[:300],
+                "sentiment": sentiment_label,
+                "sentiment_score": sentiment_score,
+            })
+
+        return {
+            "company": company_name,
+            "days_searched": days,
+            "articles": articles,
+            "total_found": data.get("articles", {}).get("totalResults", len(articles)),
+        }
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code in RATE_LIMIT_CODES:
@@ -75,50 +110,3 @@ def get_news_sentiment(
         return {"error": str(e), "articles": []}
     except Exception as e:
         return {"error": str(e), "articles": []}
-
-    # Try FinBERT sentiment scoring
-    sentiments = _score_sentiments([a.get("title", "") for a in raw_articles])
-
-    articles = []
-    for i, article in enumerate(raw_articles):
-        entry = {
-            "title": article.get("title", ""),
-            "source": article.get("source", {}).get("name", ""),
-            "published_date": article.get("publishedAt", ""),
-            "url": article.get("url", ""),
-            "description": (article.get("description") or "")[:300],
-        }
-        if sentiments and i < len(sentiments):
-            entry["sentiment"] = sentiments[i]["label"]
-            entry["sentiment_confidence"] = sentiments[i]["score"]
-        articles.append(entry)
-
-    result = {
-        "company": company_name,
-        "days_searched": days,
-        "articles": articles,
-        "total_found": data.get("totalResults", len(articles)),
-    }
-
-    if not sentiments:
-        result["sentiment_note"] = (
-            "FinBERT not available (install transformers + torch). "
-            "Articles returned without sentiment scores."
-        )
-
-    return result
-
-
-def _score_sentiments(texts: list[str]) -> list[dict] | None:
-    """Score sentiment using FinBERT. Returns None if libraries unavailable."""
-    try:
-        from transformers import pipeline
-        sentiment_pipeline = pipeline(
-            "sentiment-analysis",
-            model="ProsusAI/finbert",
-            truncation=True,
-        )
-        results = sentiment_pipeline(texts)
-        return [{"label": r["label"], "score": round(r["score"], 3)} for r in results]
-    except Exception:
-        return None

@@ -29,10 +29,8 @@ from app.tools.linkedin_search_tool import find_linkedin_profiles
 from app.tools.team_scraper_tool import scrape_team_page
 from app.tools.google_places_tool import get_company_phone
 from app.tools.sec_tool import get_sec_filings
-from app.tools.opencorporates_tool import get_company_registry
 from app.tools.market_data_tool import get_market_data
 from app.tools.world_bank_tool import get_economic_indicators
-from app.tools.simfin_tool import get_financial_statements
 from app.tools.fmp_tool import get_investor_data
 from app.tools.news_sentiment_tool import get_news_sentiment
 
@@ -105,13 +103,11 @@ EXTERNAL RESEARCH TOOLS (live data from the web):
   • find_linkedin_profiles — LinkedIn profile search
   • scrape_team_page — Team page scraping
   • get_company_phone — Google Places phone lookup
-  • get_sec_filings — SEC EDGAR filings
-  • get_company_registry — OpenCorporates registry
-  • get_market_data — Yahoo Finance data
-  • get_economic_indicators — World Bank indicators
-  • get_financial_statements — SimFin financials
-  • get_investor_data — FMP investor data
-  • get_news_sentiment — News with sentiment analysis
+  • get_sec_filings — SEC EDGAR filings (US public companies)
+  • get_market_data — Yahoo Finance live market data
+  • get_economic_indicators — World Bank + FRED economic indicators
+  • get_investor_data — FMP investor data (requires FMP_API_KEY)
+  • get_news_sentiment — Recent news with sentiment analysis
 
 ═══════════════════════════════════════════════════════════════
 BEHAVIORAL GUIDELINES
@@ -145,12 +141,12 @@ RESPONSE PATTERNS
 ═══════════════════════════════════════════════════════════════
 
 For "show me hot leads":
-  → Use search_companies_structured with min_bant_score=16
+  → Use search_companies_structured with min_final_score=75
   → Format as a ranked list with key metrics
 
 For "tell me about [company]":
   → Use get_company_details if UUID available, else search_companies_semantic
-  → Present company profile, contacts, BANT breakdown
+  → Present company profile, contacts, signal scores, and stage results
 
 For "find companies like X":
   → Get details of X, then use search_companies_semantic with X's profile as query
@@ -189,10 +185,8 @@ COPILOT_TOOL_DISPLAY_NAMES = {
     "scrape_team_page": "Scanning team page",
     "get_company_phone": "Looking up phone number",
     "get_sec_filings": "Fetching SEC filings",
-    "get_company_registry": "Checking company registry",
     "get_market_data": "Pulling market data",
     "get_economic_indicators": "Fetching economic data",
-    "get_financial_statements": "Fetching financials",
     "get_investor_data": "Looking up investor data",
     "get_news_sentiment": "Analyzing news sentiment",
 }
@@ -317,10 +311,8 @@ def create_copilot_agent(callback_handler=None, disabled_tools: set[str] | None 
         scrape_team_page,
         get_company_phone,
         get_sec_filings,
-        get_company_registry,
         get_market_data,
         get_economic_indicators,
-        get_financial_statements,
         get_investor_data,
         get_news_sentiment,
     ]

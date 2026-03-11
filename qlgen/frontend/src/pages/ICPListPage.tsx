@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin, Input, Slider } from 'antd';
+import { Card, Button, Space, Popconfirm, message, Modal, Upload, Alert, Collapse, Descriptions, Spin, Input } from 'antd';
 import { PlusOutlined, DownloadOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
-import { ICPConfig, BANTWeights, DEFAULT_BANT_WEIGHTS } from '../types';
+import { ICPConfig } from '../types';
 
 const ICPListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -50,9 +50,6 @@ const ICPListPage: React.FC = () => {
 
   // Run pipeline modal state
   const [runModalIcpId, setRunModalIcpId] = useState<string | null>(null);
-  const [runModalMode, setRunModalMode] = useState<string>('single_run');
-  const [runModalStrictness, setRunModalStrictness] = useState<'strict' | 'moderate' | 'relaxed'>('moderate');
-  const [runModalBantWeights, setRunModalBantWeights] = useState<BANTWeights>({ ...DEFAULT_BANT_WEIGHTS });
 
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
@@ -97,21 +94,18 @@ const ICPListPage: React.FC = () => {
     fetchICPs();
   };
 
-  const handleRunPipeline = async (icpId: string, pipelineMode: string = 'single_run', strictness: 'strict' | 'moderate' | 'relaxed' = 'moderate', bantWts: BANTWeights = { ...DEFAULT_BANT_WEIGHTS }) => {
+  const handleRunPipeline = async (icpId: string) => {
     try {
-      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 25, max_contacts_per_company: 5, pipeline_mode: pipelineMode, match_strictness: strictness, bant_weights: bantWts } });
-      message.success(pipelineMode === 'multi_step' ? 'Pipeline started in review mode' : 'Pipeline started');
+      const res = await startPipeline({ icp_config_id: icpId, options: { max_contacts_per_company: 5 } });
+      message.success('Pipeline started');
       navigate(`/pipeline/${res.data.id}`);
     } catch (err: any) {
       message.error(err?.response?.data?.detail || 'Failed to start pipeline');
     }
   };
 
-  const openRunModal = (icpId: string, mode: string = 'single_run') => {
+  const openRunModal = (icpId: string) => {
     setRunModalIcpId(icpId);
-    setRunModalMode(mode);
-    setRunModalStrictness('moderate');
-    setRunModalBantWeights({ ...DEFAULT_BANT_WEIGHTS });
   };
 
   const handleFileUpload = async (file: File) => {
@@ -240,10 +234,11 @@ const ICPListPage: React.FC = () => {
         <div className="card-grid">
           {filteredICPs.slice(0, displayCount).map((icp) => {
             const cfg = icp.config as any;
-            const regions = cfg?.regions?.countries;
-            const industries = cfg?.industry_types || cfg?.industry;
-            const roles = cfg?.leadership_traits?.target_roles;
-            const size = cfg?.company_size || cfg?.size;
+            const fd = cfg?.firmographic_details || {};
+            const regions = fd?.geography?.countries || cfg?.regions?.countries;
+            const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
+            const roles = cfg?.authority_roles?.target_roles || cfg?.leadership_traits?.target_roles;
+            const empRange = fd?.employee_range;
 
             return (
               <div
@@ -270,15 +265,6 @@ const ICPListPage: React.FC = () => {
                         }}
                       >
                         Run Pipeline
-                      </div>
-                      <div
-                        className="menu-item"
-                        onClick={() => {
-                          setOpenMenuId(null);
-                          openRunModal(icp.id!, 'multi_step');
-                        }}
-                      >
-                        Run Pipeline (Review Mode)
                       </div>
                       <div
                         className="menu-item"
@@ -342,11 +328,11 @@ const ICPListPage: React.FC = () => {
                       </span>
                     </div>
                   )}
-                  {size && (
+                  {empRange && (
                     <div className="rc-icp-row">
                       <span className="rc-icp-key">Company Size</span>
                       <span className="rc-icp-val">
-                        {size.employees_min?.toLocaleString()}–{size.employees_max?.toLocaleString()} employees
+                        {empRange.min?.toLocaleString()}–{empRange.max?.toLocaleString()} employees
                       </span>
                     </div>
                   )}
@@ -401,13 +387,6 @@ const ICPListPage: React.FC = () => {
             }}>
               Edit
             </Button>
-            <Button onClick={() => {
-              const icpId = selectedICP?.id;
-              setSelectedICP(null);
-              if (icpId) openRunModal(icpId, 'multi_step');
-            }}>
-              Run (Review Mode)
-            </Button>
             <Button type="primary" onClick={() => {
               const icpId = selectedICP?.id;
               setSelectedICP(null);
@@ -420,14 +399,15 @@ const ICPListPage: React.FC = () => {
       >
         {selectedICP && (() => {
           const cfg = selectedICP.config as any;
-          const offerings = cfg?.target_offering || cfg?.offering;
-          const regions = cfg?.regions;
-          const industries = cfg?.industry_types || cfg?.industry;
-          const size = cfg?.company_size || cfg?.size;
-          const tech = cfg?.technology_maturity;
-          const infra = cfg?.infrastructure_readiness;
-          const drivers = cfg?.digital_transformation_drivers;
-          const leadership = cfg?.leadership_traits;
+          const fd = cfg?.firmographic_details || {};
+          const offerings = cfg?.target_capability?.offerings || cfg?.target_offering || cfg?.offering;
+          const regions = fd?.geography || cfg?.regions;
+          const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
+          const empRange = fd?.employee_range;
+          const revRange = fd?.revenue_range;
+          const leadership = cfg?.authority_roles || cfg?.leadership_traits;
+          const urgencySignals = cfg?.urgency_signals?.signals || [];
+          const budgetSignals = cfg?.budget_signals?.signals || [];
 
           return (
             <div>
@@ -452,37 +432,19 @@ const ICPListPage: React.FC = () => {
                   ).join(', ') || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Employees">
-                  {size?.employees_min?.toLocaleString()}–{size?.employees_max?.toLocaleString()}
+                  {empRange ? `${empRange.min?.toLocaleString()}–${empRange.max?.toLocaleString()}` : '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Revenue">
-                  {size?.revenue_currency} {size?.revenue_min?.toLocaleString()}–{size?.revenue_max?.toLocaleString()}
+                  {revRange ? `${revRange.currency || 'USD'} ${revRange.min?.toLocaleString()}–${revRange.max?.toLocaleString()}` : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Tech Signals (Positive)">
-                  {tech?.signals?.join(', ') || '—'}
+                <Descriptions.Item label="Urgency Signals" span={2}>
+                  {urgencySignals.length > 0 ? urgencySignals.join(', ') : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Tech Signals (Negative)">
-                  {tech?.negative_signals?.join(', ') || '—'}
+                <Descriptions.Item label="Budget Signals" span={2}>
+                  {budgetSignals.length > 0 ? budgetSignals.join(', ') : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Infrastructure" span={2}>
-                  {infra?.indicators?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Growth Triggers">
-                  {drivers?.growth_triggers?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Operational Pains">
-                  {drivers?.operational_pains?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Competitive Pressures">
-                  {drivers?.competitive_pressures?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Strategic Initiatives">
-                  {drivers?.strategic_initiatives?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Target Roles">
+                <Descriptions.Item label="Target Roles" span={2}>
                   {leadership?.target_roles?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Behavioral Traits">
-                  {leadership?.behavioral_traits?.join(', ') || '—'}
                 </Descriptions.Item>
               </Descriptions>
             </div>
@@ -495,7 +457,7 @@ const ICPListPage: React.FC = () => {
         title="Run Pipeline"
         open={!!runModalIcpId}
         onCancel={() => setRunModalIcpId(null)}
-        width={520}
+        width={420}
         footer={
           <Space>
             <Button onClick={() => setRunModalIcpId(null)}>Cancel</Button>
@@ -503,99 +465,28 @@ const ICPListPage: React.FC = () => {
               type="primary"
               onClick={() => {
                 if (runModalIcpId) {
-                  handleRunPipeline(runModalIcpId, runModalMode, runModalStrictness, runModalBantWeights);
+                  handleRunPipeline(runModalIcpId);
                   setRunModalIcpId(null);
                 }
               }}
             >
-              Run {runModalMode === 'multi_step' ? '(Review Mode)' : 'Pipeline'}
+              Run Pipeline
             </Button>
           </Space>
         }
       >
-        {runModalMode === 'multi_step' && (
-          <div style={{ marginBottom: 16, padding: '8px 12px', background: '#f0f9ff', borderRadius: 6, fontSize: 12, color: 'var(--g600)' }}>
-            Review Mode: The pipeline will pause after company discovery so you can select which companies to proceed with.
-          </div>
-        )}
-        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: 'var(--g800)' }}>Match Strictness</div>
-        <div style={{ display: 'flex', gap: 12 }}>
-          {([
-            { key: 'strict' as const, label: 'Strict', desc: 'Fewer, higher-confidence results. No weak matches.' },
-            { key: 'moderate' as const, label: 'Moderate', desc: 'Balanced matching with standard thresholds.' },
-            { key: 'relaxed' as const, label: 'Relaxed', desc: 'Wider net with partial matches and detailed reasoning.' },
-          ]).map((opt) => (
-            <div
-              key={opt.key}
-              onClick={() => setRunModalStrictness(opt.key)}
-              style={{
-                flex: 1,
-                padding: '12px 16px',
-                borderRadius: 8,
-                border: runModalStrictness === opt.key ? '2px solid var(--purple, #722ed1)' : '1px solid var(--g200, #e0e0e0)',
-                background: runModalStrictness === opt.key ? 'var(--purple-pale, #f9f0ff)' : '#fff',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-            >
-              <div style={{ fontWeight: 600, fontSize: 13, color: runModalStrictness === opt.key ? 'var(--purple, #722ed1)' : 'var(--g800)' }}>
-                {opt.label}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 2 }}>{opt.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, color: 'var(--g800)' }}>BANT Score Priority</div>
-          <div style={{ fontSize: 12, color: 'var(--g500)', marginBottom: 10 }}>
-            Adjust relative importance of each BANT dimension for lead ranking.
-          </div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-            {([
-              { label: 'Balanced', weights: { budget: 3, authority: 3, need: 3, timing: 3 } },
-              { label: 'Budget Focus', weights: { budget: 5, authority: 3, need: 3, timing: 2 } },
-              { label: 'Need Focus', weights: { budget: 2, authority: 3, need: 5, timing: 2 } },
-              { label: 'Timing Focus', weights: { budget: 2, authority: 2, need: 3, timing: 5 } },
-              { label: 'Authority Focus', weights: { budget: 2, authority: 5, need: 3, timing: 2 } },
-            ] as { label: string; weights: BANTWeights }[]).map((preset) => {
-              const isActive = runModalBantWeights.budget === preset.weights.budget && runModalBantWeights.authority === preset.weights.authority && runModalBantWeights.need === preset.weights.need && runModalBantWeights.timing === preset.weights.timing;
-              return (
-                <Button
-                  key={preset.label}
-                  size="small"
-                  onClick={() => setRunModalBantWeights({ ...preset.weights })}
-                  style={{
-                    borderColor: isActive ? 'var(--purple, #722ed1)' : undefined,
-                    color: isActive ? 'var(--purple, #722ed1)' : undefined,
-                    background: isActive ? 'var(--purple-pale, #f9f0ff)' : undefined,
-                    fontWeight: isActive ? 600 : 400,
-                  }}
-                >
-                  {preset.label}
-                </Button>
-              );
-            })}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px' }}>
-            {([
-              { key: 'budget' as const, label: 'Budget' },
-              { key: 'authority' as const, label: 'Authority' },
-              { key: 'need' as const, label: 'Need' },
-              { key: 'timing' as const, label: 'Timing' },
-            ]).map((dim) => (
-              <div key={dim.key}>
-                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--g700)', marginBottom: 2 }}>{dim.label}</div>
-                <Slider
-                  min={1}
-                  max={5}
-                  value={runModalBantWeights[dim.key]}
-                  onChange={(val) => setRunModalBantWeights((prev) => ({ ...prev, [dim.key]: val }))}
-                  marks={{ 1: 'Low', 3: 'Normal', 5: 'High' }}
-                />
-              </div>
-            ))}
-          </div>
+        <div style={{ padding: '8px 0', fontSize: 13, color: 'var(--g600)', lineHeight: 1.8 }}>
+          <p style={{ marginBottom: 12 }}>The pipeline runs through 5 stages:</p>
+          <ol style={{ paddingLeft: 20, margin: 0 }}>
+            <li>Industry Discovery (automatic)</li>
+            <li>Firmographic Fit Check (automatic)</li>
+            <li>Budget &amp; Urgency Signal Research</li>
+            <li>Contact Discovery (automatic)</li>
+            <li>Final Scoring &amp; Ranking</li>
+          </ol>
+          <p style={{ marginTop: 12, fontSize: 12, color: 'var(--g500)' }}>
+            You will review and select companies between stages.
+          </p>
         </div>
       </Modal>
 
@@ -629,8 +520,8 @@ const ICPListPage: React.FC = () => {
           <div>
             <div style={{ marginBottom: 20 }}>
               <p style={{ color: 'var(--g600)', fontSize: 13, margin: '0 0 12px' }}>
-                Download the template, fill in your ICP data across the 8 sheets, and upload the completed file.
-                Each sheet uses an "ICP Name" column to support multiple ICPs in a single file.
+                Download the template, fill in your ICP data, and upload the completed file.
+                The template has a simple Field/Value format matching the search criteria form.
               </p>
               <Button
                 icon={<DownloadOutlined />}
@@ -716,30 +607,34 @@ const ICPListPage: React.FC = () => {
                         {icp.description || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Offerings" span={2}>
-                        {(icp.config as any)?.target_offering?.join(', ') || '—'}
+                        {(icp.config as any)?.target_capability?.offerings?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Countries">
-                        {(icp.config as any)?.regions?.countries?.join(', ') || '—'}
+                        {(icp.config as any)?.firmographic_details?.geography?.countries?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Priority Areas">
-                        {(icp.config as any)?.regions?.priority_areas?.join(', ') || '—'}
+                        {(icp.config as any)?.firmographic_details?.geography?.priority_areas?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Industries" span={2}>
-                        {(icp.config as any)?.industry_types?.map((i: any) =>
+                        {(icp.config as any)?.firmographic_details?.industry_types?.map((i: any) =>
                           `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`
                         ).join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Employees">
-                        {(icp.config as any)?.company_size?.employees_min}–{(icp.config as any)?.company_size?.employees_max}
+                        {(icp.config as any)?.firmographic_details?.employee_range?.min?.toLocaleString()}–{(icp.config as any)?.firmographic_details?.employee_range?.max?.toLocaleString()}
                       </Descriptions.Item>
                       <Descriptions.Item label="Revenue">
-                        {(icp.config as any)?.company_size?.revenue_currency} {((icp.config as any)?.company_size?.revenue_min / 1000000).toFixed(0)}M–{((icp.config as any)?.company_size?.revenue_max / 1000000).toFixed(0)}M
+                        {(icp.config as any)?.firmographic_details?.revenue_range?.currency || 'USD'}{' '}
+                        {(icp.config as any)?.firmographic_details?.revenue_range?.min?.toLocaleString()}–{(icp.config as any)?.firmographic_details?.revenue_range?.max?.toLocaleString()}
                       </Descriptions.Item>
-                      <Descriptions.Item label="Tech Signals" span={2}>
-                        {(icp.config as any)?.technology_maturity?.signals?.join(', ') || '—'}
+                      <Descriptions.Item label="Urgency Signals" span={2}>
+                        {(icp.config as any)?.urgency_signals?.signals?.join(', ') || '—'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Budget Signals" span={2}>
+                        {(icp.config as any)?.budget_signals?.signals?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Target Roles" span={2}>
-                        {(icp.config as any)?.leadership_traits?.target_roles?.join(', ') || '—'}
+                        {(icp.config as any)?.authority_roles?.target_roles?.join(', ') || '—'}
                       </Descriptions.Item>
                     </Descriptions>
                   </div>

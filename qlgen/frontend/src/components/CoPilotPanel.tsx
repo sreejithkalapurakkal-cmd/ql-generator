@@ -24,9 +24,11 @@ const CoPilotPanel: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [activeTools, setActiveTools] = useState<string[]>([]);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const streamingContentRef = useRef('');
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -70,6 +72,7 @@ const CoPilotPanel: React.FC = () => {
     setMessages([]);
     setCurrentSessionId(null);
     setStreamingContent('');
+    streamingContentRef.current = '';
     setActiveTools([]);
     setShowSessionList(false);
     loadRecommendations();
@@ -90,6 +93,7 @@ const CoPilotPanel: React.FC = () => {
     setInputValue('');
     setIsStreaming(true);
     setStreamingContent('');
+    streamingContentRef.current = '';
     setActiveTools([]);
     setRecommendations([]);
 
@@ -102,7 +106,11 @@ const CoPilotPanel: React.FC = () => {
           setCurrentSessionId(sessionId);
         },
         onTextDelta: (content) => {
-          setStreamingContent((prev) => prev + content);
+          setStreamingContent((prev) => {
+            const next = prev + content;
+            streamingContentRef.current = next;
+            return next;
+          });
         },
         onToolUse: (_toolName, displayName) => {
           setActiveTools((prev) => [...prev, displayName]);
@@ -111,21 +119,20 @@ const CoPilotPanel: React.FC = () => {
           // Tool completed — could update UI but keep it simple
         },
         onDone: (sessionId) => {
-          setStreamingContent((prev) => {
-            if (prev) {
-              const assistantMsg: ChatMessage = {
-                id: `msg-${Date.now()}`,
-                session_id: sessionId,
-                role: 'assistant',
-                content: prev,
-              };
-              setMessages((msgs) => [...msgs, assistantMsg]);
-            }
-            return '';
-          });
+          const content = streamingContentRef.current;
+          if (content) {
+            const assistantMsg: ChatMessage = {
+              id: `msg-${Date.now()}`,
+              session_id: sessionId,
+              role: 'assistant',
+              content,
+            };
+            setMessages((msgs) => [...msgs, assistantMsg]);
+          }
+          setStreamingContent('');
+          streamingContentRef.current = '';
           setIsStreaming(false);
           setActiveTools([]);
-          // Refresh session list
           listChatSessions()
             .then((res) => setSessions(res.data))
             .catch(() => {});
@@ -186,14 +193,14 @@ const CoPilotPanel: React.FC = () => {
       {/* Floating Action Button */}
       <button
         className="copilot-fab"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => { if (isOpen) setIsFullscreen(false); setIsOpen(!isOpen); }}
         title="Co-pilot Assistant"
       >
         {isOpen ? '\u2715' : '\u2728'}
       </button>
 
       {/* Slide-out Panel */}
-      <div className={`copilot-panel ${isOpen ? 'open' : ''}`}>
+      <div className={`copilot-panel ${isOpen ? 'open' : ''} ${isFullscreen ? 'fullscreen' : ''}`}>
         {/* Header */}
         <div className="copilot-header">
           <div className="copilot-header-left">
@@ -210,7 +217,14 @@ const CoPilotPanel: React.FC = () => {
             <button className="copilot-header-btn" onClick={startNewChat} title="New chat">
               +
             </button>
-            <button className="copilot-header-btn" onClick={() => setIsOpen(false)} title="Close">
+            <button
+              className="copilot-header-btn"
+              onClick={() => setIsFullscreen((prev) => !prev)}
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? '\u25A3' : '\u25A2'}
+            </button>
+            <button className="copilot-header-btn" onClick={() => { setIsFullscreen(false); setIsOpen(false); }} title="Close">
               {'\u2715'}
             </button>
           </div>

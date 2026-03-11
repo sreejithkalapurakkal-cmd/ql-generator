@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input } from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress } from 'antd';
+import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
-import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun } from '../api/pipelineApi';
+import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
@@ -36,6 +36,29 @@ const DashboardPage: React.FC = () => {
     refreshRuns();
   }, []);
 
+  const runsList = Array.isArray(runs) ? runs : [];
+
+  // Poll for progress on running pipelines
+  const hasRunning = runsList.some((r) => r.status === 'running');
+  useEffect(() => {
+    if (!hasRunning) return;
+    const interval = setInterval(() => {
+      const runningRuns = runsList.filter((r) => r.status === 'running');
+      runningRuns.forEach((r) => {
+        getPipelineStatus(r.id).then((res) => {
+          setRuns((prev) =>
+            prev.map((existing) => (existing.id === r.id ? res.data : existing))
+          );
+          // If status changed from running, do a full refresh
+          if (res.data.status !== 'running') {
+            refreshRuns();
+          }
+        }).catch(() => {});
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [hasRunning, runsList]);
+
   const handleDeleteRun = async (runId: string) => {
     try {
       await deletePipelineRun(runId);
@@ -45,8 +68,6 @@ const DashboardPage: React.FC = () => {
       message.error('Failed to delete search result');
     }
   };
-
-  const runsList = Array.isArray(runs) ? runs : [];
   const completedRuns = runsList.filter((r) => r.status === 'completed');
   const totalCompanies = completedRuns.reduce((s, r) => s + r.companies_found, 0);
   const totalContacts = completedRuns.reduce((s, r) => s + r.contacts_found, 0);
@@ -338,6 +359,56 @@ const DashboardPage: React.FC = () => {
                     <div className="rc-stat-lbl">Contacts</div>
                   </div>
                 </div>
+
+                {/* Mini pipeline funnel for completed/review/cancelled runs */}
+                {['completed', 'awaiting_review', 'cancelled'].includes(run.status) &&
+                  run.stage_details?.total_discovered != null && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '0 12px 10px',
+                    fontSize: 11,
+                    color: 'var(--g500)',
+                    fontWeight: 500,
+                  }}>
+                    <span style={{ fontWeight: 700, color: 'var(--g700)' }}>
+                      {run.stage_details.total_discovered}
+                    </span>
+                    discovered
+                    <span style={{ color: 'var(--g300)' }}>&rsaquo;</span>
+                    <span style={{ fontWeight: 700, color: 'var(--g700)' }}>
+                      {run.stage_details.pre_filter_passed ?? '?'}
+                    </span>
+                    filtered
+                    <span style={{ color: 'var(--g300)' }}>&rsaquo;</span>
+                    <span style={{ fontWeight: 700, color: 'var(--purple)' }}>
+                      {run.stage_details.promoted_count ?? '?'}
+                    </span>
+                    promoted
+                  </div>
+                )}
+
+                {/* Progress indicator for running pipelines */}
+                {run.status === 'running' && run.stage_details?.current_company_index != null && (
+                  <div style={{ padding: '0 12px 8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: 'var(--g500)' }}>
+                        <LoadingOutlined style={{ marginRight: 4 }} />
+                        {run.stage_details.current_company_name || 'Processing...'}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--g400)' }}>
+                        {run.stage_details.current_company_index}/{run.stage_details.total_companies_in_stage}
+                      </span>
+                    </div>
+                    <Progress
+                      percent={Math.round(((run.stage_details.current_company_index || 0) / (run.stage_details.total_companies_in_stage || 1)) * 100)}
+                      size="small"
+                      showInfo={false}
+                      strokeColor="var(--purple, #722ed1)"
+                    />
+                  </div>
+                )}
 
                 {/* ICP details */}
                 {run.icp_config && (

@@ -24,27 +24,26 @@ THIN_BORDER = Border(
 )
 
 # Template field definitions: (field_label, example_value)
+# These match the frontend ICPDefinition type structure exactly.
 TEMPLATE_FIELDS = [
     ("ICP Name", "Enterprise SaaS - US"),
     ("Description", "Target mid-market SaaS companies in the US for our analytics platform"),
-    ("Target Offerings", "Cloud analytics platform, Data pipeline automation"),
+    ("Industries", "Technology / SaaS, Technology / Data & Analytics"),
     ("Countries", "United States, Canada"),
     ("Priority Areas", "San Francisco Bay Area, New York, Austin"),
-    ("Industries", "Technology / SaaS, Technology / Data & Analytics"),
     ("Employees Min", "200"),
     ("Employees Max", "5000"),
     ("Revenue Min", "20000000"),
     ("Revenue Max", "500000000"),
     ("Revenue Currency", "USD"),
-    ("Tech Signals (Positive)", "AWS, Snowflake, Kubernetes, Docker"),
-    ("Tech Signals (Negative)", "Legacy on-premise only, No cloud adoption"),
-    ("Infrastructure Indicators", "Cloud-hosted infrastructure, Microservices architecture"),
-    ("Growth Triggers", "Series B+ funding, Revenue doubling YoY"),
-    ("Operational Pains", "Manual data pipelines, Scaling bottlenecks"),
-    ("Competitive Pressures", "Competitors using AI/ML, Market consolidation"),
-    ("Strategic Initiatives", "Digital transformation, Platform modernization"),
+    ("Low Cost Center", "No"),
+    ("Target Offerings", "Cloud analytics platform, Data pipeline automation"),
+    ("Offerings Condition", "OR"),
+    ("Urgency Signals", "Recent funding round, Leadership change, Regulatory deadline"),
+    ("Urgency Condition", "OR"),
+    ("Budget Signals", "Recent fundraise >$10M, IT budget expansion, New CTO hire"),
+    ("Budget Condition", "OR"),
     ("Target Roles", "CTO, VP Engineering, Head of Data"),
-    ("Behavioral Traits", "Innovation-driven, Data-oriented decision maker"),
 ]
 
 
@@ -141,43 +140,60 @@ def parse_icp_excel(buffer: BytesIO) -> List[dict]:
     if not name:
         warnings.append("No ICP name found — please fill in the 'ICP Name' field")
 
-    # Build config
+    # Parse low_cost_center boolean
+    lcc_raw = field_map.get("low cost center", "").lower()
+    low_cost_center = lcc_raw in ("yes", "true", "1")
+
+    # Parse condition fields (default to OR)
+    offerings_condition = field_map.get("offerings condition", "OR").upper()
+    if offerings_condition not in ("AND", "OR"):
+        offerings_condition = "OR"
+    urgency_condition = field_map.get("urgency condition", "OR").upper()
+    if urgency_condition not in ("AND", "OR"):
+        urgency_condition = "OR"
+    budget_condition = field_map.get("budget condition", "OR").upper()
+    if budget_condition not in ("AND", "OR"):
+        budget_condition = "OR"
+
+    # Build config matching frontend ICPDefinition structure
     config = {
-        "target_offering": _split_csv(field_map.get("target offerings", "")),
-        "regions": {
-            "countries": _split_csv(field_map.get("countries", "")),
-            "priority_areas": _split_csv(field_map.get("priority areas", "")),
+        "firmographic_details": {
+            "industry_types": _parse_industries(field_map.get("industries", "")),
+            "geography": {
+                "countries": _split_csv(field_map.get("countries", "")),
+                "priority_areas": _split_csv(field_map.get("priority areas", "")),
+            },
+            "revenue_range": {
+                "min": _safe_int(field_map.get("revenue min"), 10000000),
+                "max": _safe_int(field_map.get("revenue max"), 500000000),
+                "currency": field_map.get("revenue currency", "USD").upper() or "USD",
+            },
+            "employee_range": {
+                "min": _safe_int(field_map.get("employees min"), 50),
+                "max": _safe_int(field_map.get("employees max"), 1500),
+            },
+            "low_cost_center": low_cost_center,
         },
-        "industry_types": _parse_industries(field_map.get("industries", "")),
-        "company_size": {
-            "employees_min": _safe_int(field_map.get("employees min"), 50),
-            "employees_max": _safe_int(field_map.get("employees max"), 1500),
-            "revenue_min": _safe_int(field_map.get("revenue min"), 10000000),
-            "revenue_max": _safe_int(field_map.get("revenue max"), 500000000),
-            "revenue_currency": field_map.get("revenue currency", "USD").upper() or "USD",
+        "target_capability": {
+            "offerings": _split_csv(field_map.get("target offerings", "")),
+            "condition": offerings_condition,
         },
-        "technology_maturity": {
-            "signals": _split_csv(field_map.get("tech signals (positive)", "")),
-            "negative_signals": _split_csv(field_map.get("tech signals (negative)", "")),
+        "urgency_signals": {
+            "signals": _split_csv(field_map.get("urgency signals", "")),
+            "condition": urgency_condition,
         },
-        "infrastructure_readiness": {
-            "indicators": _split_csv(field_map.get("infrastructure indicators", "")),
+        "budget_signals": {
+            "signals": _split_csv(field_map.get("budget signals", "")),
+            "condition": budget_condition,
         },
-        "digital_transformation_drivers": {
-            "growth_triggers": _split_csv(field_map.get("growth triggers", "")),
-            "operational_pains": _split_csv(field_map.get("operational pains", "")),
-            "competitive_pressures": _split_csv(field_map.get("competitive pressures", "")),
-            "strategic_initiatives": _split_csv(field_map.get("strategic initiatives", "")),
-        },
-        "leadership_traits": {
+        "authority_roles": {
             "target_roles": _split_csv(field_map.get("target roles", "")),
-            "behavioral_traits": _split_csv(field_map.get("behavioral traits", "")),
         },
     }
 
-    if not config["target_offering"]:
+    if not config["target_capability"]["offerings"]:
         warnings.append("No target offerings found")
-    if not config["regions"]["countries"]:
+    if not config["firmographic_details"]["geography"]["countries"]:
         warnings.append("No target regions/countries found")
 
     return [{

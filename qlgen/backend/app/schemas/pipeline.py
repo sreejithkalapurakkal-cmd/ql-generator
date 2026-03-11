@@ -4,19 +4,8 @@ from datetime import datetime
 from typing import Optional, List
 
 
-class BANTWeights(BaseModel):
-    budget: int = Field(default=3, ge=1, le=5)
-    authority: int = Field(default=3, ge=1, le=5)
-    need: int = Field(default=3, ge=1, le=5)
-    timing: int = Field(default=3, ge=1, le=5)
-
-
 class PipelineOptions(BaseModel):
-    max_companies: int = 25
     max_contacts_per_company: int = 5
-    pipeline_mode: str = "single_run"
-    match_strictness: str = "moderate"
-    bant_weights: BANTWeights = BANTWeights()
 
 
 class PipelineRunRequest(BaseModel):
@@ -38,16 +27,26 @@ class PipelineRunResponse(BaseModel):
     completed_at: Optional[datetime]
     error_log: Optional[str] = None
     estimated_duration_seconds: Optional[int] = None
-    pipeline_mode: Optional[str] = None
-    match_strictness: Optional[str] = None
-    bant_weights: Optional[dict] = None
+    signal_mode: Optional[str] = None
+    signal_phase: Optional[str] = None
     stage_details: Optional[dict] = None
 
     class Config:
         from_attributes = True
 
 
-class PromoteCompaniesRequest(BaseModel):
+class PromoteFirmographicRequest(BaseModel):
+    company_ids: List[UUID]
+    signal_mode: str = "both"  # budget_first | urgency_first | both
+
+
+class PromoteFirstSignalRequest(BaseModel):
+    """Used in serial mode after reviewing the first signal type."""
+    company_ids: List[UUID]
+
+
+class PromoteSignalsRequest(BaseModel):
+    """Used after the final signal review (all modes)."""
     company_ids: List[UUID]
 
 

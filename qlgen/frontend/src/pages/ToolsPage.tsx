@@ -210,6 +210,20 @@ const ToolsPage: React.FC = () => {
       render: (val: number) => val || <span style={{ color: '#d9d9d9' }}>0</span>,
     },
     {
+      title: 'Rate Limit',
+      dataIndex: 'rate_limit_info',
+      key: 'rate_limit_info',
+      width: 160,
+      render: (val: string | null) =>
+        val ? (
+          <Tooltip title={val}>
+            <span style={{ fontSize: 12, color: '#595959' }}>{val}</span>
+          </Tooltip>
+        ) : (
+          <span style={{ color: '#d9d9d9' }}>-</span>
+        ),
+    },
+    {
       title: 'Last Used',
       key: 'last_used',
       width: 100,

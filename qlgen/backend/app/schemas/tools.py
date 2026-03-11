@@ -17,6 +17,7 @@ class ToolRegistryResponse(BaseModel):
     last_health_check_at: Optional[datetime] = None
     last_health_message: Optional[str] = None
     notes: Optional[str] = None
+    rate_limit_info: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # Computed metrics from pipeline_logs

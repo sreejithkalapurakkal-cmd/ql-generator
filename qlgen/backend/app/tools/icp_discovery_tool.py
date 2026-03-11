@@ -298,9 +298,9 @@ def discover_icp_companies(
         'total_found' count, and 'queries_run' count
     """
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        return {"error": "duckduckgo_search not installed", "companies": [], "total_found": 0}
+        return {"error": "ddgs not installed", "companies": [], "total_found": 0}
 
     regions = regions or []
     additional_terms = additional_terms or []
@@ -317,9 +317,9 @@ def discover_icp_companies(
     directory_urls = []
 
     try:
-        from duckduckgo_search.exceptions import RatelimitException
+        from ddgs.exceptions import RatelimitException
     except ImportError:
-        RatelimitException = Exception  # Fallback for older versions
+        RatelimitException = Exception  # Fallback
 
     consecutive_failures = 0
     rate_limited = False

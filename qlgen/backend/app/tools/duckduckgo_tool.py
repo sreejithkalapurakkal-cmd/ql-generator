@@ -22,8 +22,8 @@ def duckduckgo_search(query: str, max_results: int = 10) -> list[dict]:
         list of dicts with 'title', 'href', 'body' for each result
     """
     try:
-        from duckduckgo_search import DDGS
-        from duckduckgo_search.exceptions import RatelimitException
+        from ddgs import DDGS
+        from ddgs.exceptions import RatelimitException
 
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=min(max_results, 10)))

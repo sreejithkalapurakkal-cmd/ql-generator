@@ -20,5 +20,6 @@ class ToolRegistry(Base):
     last_health_check_at = Column(DateTime(timezone=True), nullable=True)
     last_health_message = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
+    rate_limit_info = Column(String(200), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

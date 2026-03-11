@@ -23,28 +23,15 @@ class ContactResponse(BaseModel):
         from_attributes = True
 
 
-class BANTSourceCitation(BaseModel):
-    url: str
-    title: Optional[str] = None
-    tool: Optional[str] = None
-
-
-class BANTScoreResponse(BaseModel):
+class CompanyStageResultResponse(BaseModel):
     id: UUID
-    budget_score: Optional[int]
-    budget_reason: Optional[str]
-    budget_sources: Optional[List[BANTSourceCitation]] = None
-    authority_score: Optional[int]
-    authority_reason: Optional[str]
-    authority_sources: Optional[List[BANTSourceCitation]] = None
-    need_score: Optional[int]
-    need_reason: Optional[str]
-    need_sources: Optional[List[BANTSourceCitation]] = None
-    timing_score: Optional[int]
-    timing_reason: Optional[str]
-    timing_sources: Optional[List[BANTSourceCitation]] = None
-    total_score: Optional[int]
-    overall_summary: Optional[str]
+    stage: str
+    status: str
+    score: Optional[float] = None
+    reasoning: Optional[str] = None
+    evidence: Optional[Any] = None
+    user_override: Optional[bool] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -67,11 +54,22 @@ class CompanyResponse(BaseModel):
     icp_match_score: Optional[float]
     match_reasoning: Optional[str]
     contacts: List[ContactResponse] = []
-    bant_score: Optional[BANTScoreResponse] = None
     promoted: Optional[bool] = None
     description: Optional[str] = None
     raw_data_json: Optional[Any] = None
+    rejection_reason: Optional[str] = None
+    disqualification_stage: Optional[str] = None
     created_at: datetime
+
+    # v2 pipeline fields
+    current_stage: Optional[str] = None
+    budget_signal_score: Optional[float] = None
+    urgency_signal_score: Optional[float] = None
+    final_score: Optional[float] = None
+    final_rank: Optional[int] = None
+    cached_from_run_id: Optional[UUID] = None
+    data_freshness: Optional[datetime] = None
+    stage_results: List[CompanyStageResultResponse] = []
 
     class Config:
         from_attributes = True
@@ -87,4 +85,4 @@ class LeadExportRow(BaseModel):
     linkedin: Optional[str]
     email: Optional[str]
     phone: Optional[str]
-    bant_score: Optional[int]
+    final_score: Optional[float]

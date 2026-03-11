@@ -1,540 +1,512 @@
+"""Prompt builders for the 5-stage pipeline.
+
+Each builder constructs the user-facing prompt for one agent invocation,
+injecting ICP criteria, cached data, and stage-specific context.
+"""
 import json
+from datetime import datetime, timezone
 
 
-def _format_icp_sections(icp: dict) -> str:
-    """Format ICP config into readable sections for agent prompts.
+# ──────────────────────────────────────────────────────────────────
+# ICP formatting helpers
+# ──────────────────────────────────────────────────────────────────
 
-    Covers all 9 ICP dimensions: target offering, geography (with priority areas),
-    industry (with sub-verticals), company size, technology maturity (with negative
-    signals), infrastructure readiness, digital transformation drivers (4 sub-fields),
-    and leadership traits (with behavioral traits).
-    """
-    sections = []
+def _format_firmographic_section(icp: dict) -> str:
+    """Format the firmographic_details section of the ICP."""
+    fd = icp.get("firmographic_details", {})
+    lines = []
 
-    # 1. Target Offering
-    offering = icp.get("target_offering") or icp.get("offering")
-    if offering:
-        sections.append(f"TARGET OFFERING: {json.dumps(offering)}")
+    # Industry types
+    industry_types = fd.get("industry_types", [])
+    if industry_types:
+        ind_lines = ["INDUSTRY TYPES:"]
+        for item in industry_types:
+            if isinstance(item, dict):
+                v = item.get("vertical", "")
+                sv = item.get("sub_vertical", "")
+                ind_lines.append(f"  - {v} > {sv}" if sv else f"  - {v}")
+            else:
+                ind_lines.append(f"  - {item}")
+        lines.append("\n".join(ind_lines))
 
-    # 2. Geography + Priority Areas
-    regions = icp.get("regions")
-    if regions:
-        countries = regions.get("countries", [])
-        priority_areas = regions.get("priority_areas", [])
-        geo_lines = ["GEOGRAPHY:"]
-        if countries:
-            geo_lines.append(f"  Countries: {', '.join(countries)}")
-        if priority_areas:
-            geo_lines.append(f"  Priority Areas: {', '.join(priority_areas)}")
-        sections.append("\n".join(geo_lines))
+    # Geography
+    geo = fd.get("geography", {})
+    countries = geo.get("countries", [])
+    priority_areas = geo.get("priority_areas", [])
+    if countries:
+        lines.append(f"GEOGRAPHY: {', '.join(countries)}")
+    if priority_areas:
+        lines.append(f"PRIORITY AREAS: {', '.join(priority_areas)}")
 
-    # 3. Industry Types + Sub-verticals
-    industry = icp.get("industry_types") or icp.get("industry")
-    if industry:
-        if isinstance(industry, list):
-            ind_lines = ["INDUSTRY TYPES:"]
-            for item in industry:
-                if isinstance(item, dict):
-                    vertical = item.get("vertical", "")
-                    sub_vertical = item.get("sub_vertical", "")
-                    if sub_vertical:
-                        ind_lines.append(f"  - {vertical} > {sub_vertical}")
-                    elif vertical:
-                        ind_lines.append(f"  - {vertical}")
-                else:
-                    ind_lines.append(f"  - {item}")
-            sections.append("\n".join(ind_lines))
-        else:
-            sections.append(f"INDUSTRY TYPES: {json.dumps(industry)}")
+    # Revenue range
+    rev = fd.get("revenue_range", {})
+    if rev:
+        currency = rev.get("currency", "USD")
+        lines.append(f"REVENUE RANGE: ${rev.get('min', 'N/A'):,} - ${rev.get('max', 'N/A'):,} {currency}")
 
-    # 4. Company Size
-    cs = icp.get("company_size") or icp.get("size")
-    if cs:
-        emp = cs.get("employee_range") or {}
-        emp_min = emp.get("min") if emp else cs.get("employees_min", "N/A")
-        emp_max = emp.get("max") if emp else cs.get("employees_max", "N/A")
-        rev = cs.get("revenue_range") or {}
-        rev_min = rev.get("min") if rev else cs.get("revenue_min", "N/A")
-        rev_max = rev.get("max") if rev else cs.get("revenue_max", "N/A")
-        currency = cs.get("revenue_currency", "USD")
-        sections.append(f"COMPANY SIZE: {emp_min}-{emp_max} employees, ${rev_min}-${rev_max} {currency}")
+    # Employee range
+    emp = fd.get("employee_range", {})
+    if emp:
+        lines.append(f"EMPLOYEE RANGE: {emp.get('min', 'N/A')} - {emp.get('max', 'N/A')}")
 
-    # 5. Technology Maturity (positive + negative signals)
-    tm = icp.get("technology_maturity") or icp.get("tech")
-    if tm:
-        positive = tm.get("positive_signals", tm.get("signals", []))
-        negative = tm.get("negative_signals", [])
-        tech_lines = ["TECHNOLOGY MATURITY:"]
-        if positive:
-            tech_lines.append(f"  Positive: {', '.join(positive)}")
-        if negative:
-            tech_lines.append(f"  Negative (DISQUALIFIERS): {', '.join(negative)}")
-        sections.append("\n".join(tech_lines))
+    # Low cost center
+    if fd.get("low_cost_center") is not None:
+        lines.append(f"LOW-COST R&D CENTER: {'Required' if fd['low_cost_center'] else 'Not required'}")
 
-    # 6. Infrastructure Readiness
-    ir = icp.get("infrastructure_readiness")
-    if ir:
-        indicators = ir.get("indicators", [])
-        if indicators:
-            sections.append(f"INFRASTRUCTURE READINESS: {', '.join(indicators)}")
-
-    # 7. Digital Transformation Drivers (all 4 sub-fields)
-    dtd = icp.get("digital_transformation_drivers") or icp.get("drivers")
-    if dtd:
-        dt_lines = ["DIGITAL TRANSFORMATION DRIVERS:"]
-        triggers = dtd.get("growth_triggers", [])
-        pains = dtd.get("operational_pains", [])
-        pressures = dtd.get("competitive_pressures", [])
-        initiatives = dtd.get("strategic_initiatives", [])
-        if triggers:
-            dt_lines.append(f"  Growth Triggers: {', '.join(triggers)}")
-        if pains:
-            dt_lines.append(f"  Operational Pains: {', '.join(pains)}")
-        if pressures:
-            dt_lines.append(f"  Competitive Pressures: {', '.join(pressures)}")
-        if initiatives:
-            dt_lines.append(f"  Strategic Initiatives: {', '.join(initiatives)}")
-        sections.append("\n".join(dt_lines))
-
-    # 8. Leadership Traits (roles + behavioral)
-    lt = icp.get("leadership_traits") or icp.get("leadership")
-    if lt:
-        roles = lt.get("target_roles", [])
-        traits = lt.get("behavioral_traits", [])
-        lead_lines = ["LEADERSHIP TRAITS:"]
-        if roles:
-            lead_lines.append(f"  Target Roles: {', '.join(roles)}")
-        if traits:
-            lead_lines.append(f"  Behavioral Traits: {', '.join(traits)}")
-        sections.append("\n".join(lead_lines))
-
-    return "\n".join(sections)
+    return "\n".join(lines)
 
 
-def _extract_icp_keywords(icp: dict) -> dict:
-    """Extract structured keywords from all ICP dimensions for multi-tool discovery.
+def _format_capability_section(icp: dict) -> str:
+    tc = icp.get("target_capability", {})
+    offerings = tc.get("offerings", [])
+    condition = tc.get("condition", "OR")
+    if offerings:
+        return f"TARGET CAPABILITY: {' {condition} '.join(offerings)}"
+    return ""
 
-    Returns a dict with keys:
-        industry_keywords, sub_verticals, regions, priority_areas,
-        emp_min, emp_max, rev_min, rev_max, size_hint,
-        offering_terms, tech_signals, negative_signals,
-        infra_indicators, transformation_keywords,
-        target_roles, behavioral_traits
-    """
-    # Industry keywords (verticals + sub-verticals)
+
+def _format_urgency_section(icp: dict) -> str:
+    us = icp.get("urgency_signals", {})
+    signals = us.get("signals", [])
+    condition = us.get("condition", "OR")
+    if signals:
+        header = f"URGENCY SIGNALS TO LOOK FOR (match condition: {condition} — company must show {'ALL' if condition == 'AND' else 'ANY'} of these):"
+        return header + "\n" + "\n".join(f"  - {s}" for s in signals)
+    return ""
+
+
+def _format_budget_section(icp: dict) -> str:
+    bs = icp.get("budget_signals", {})
+    signals = bs.get("signals", [])
+    condition = bs.get("condition", "OR")
+    if signals:
+        header = f"BUDGET SIGNALS TO LOOK FOR (match condition: {condition} — company must show {'ALL' if condition == 'AND' else 'ANY'} of these):"
+        return header + "\n" + "\n".join(f"  - {s}" for s in signals)
+    return ""
+
+
+def _format_authority_section(icp: dict) -> str:
+    ar = icp.get("authority_roles", {})
+    roles = ar.get("target_roles", [])
+    if roles:
+        return f"TARGET ROLES: {', '.join(roles)}"
+    return ""
+
+
+def _format_full_icp(icp: dict) -> str:
+    """Format all ICP sections into a readable block."""
+    sections = [
+        _format_firmographic_section(icp),
+        _format_capability_section(icp),
+        _format_urgency_section(icp),
+        _format_budget_section(icp),
+        _format_authority_section(icp),
+    ]
+    return "\n\n".join(s for s in sections if s)
+
+
+def _extract_keywords(icp: dict) -> dict:
+    """Extract structured keywords from ICP for tool queries."""
+    fd = icp.get("firmographic_details", {})
+
     industry_keywords = []
     sub_verticals = []
-    industry = icp.get("industry_types") or icp.get("industry")
-    if industry:
-        if isinstance(industry, list):
-            for item in industry:
-                if isinstance(item, dict):
-                    v = item.get("vertical", "")
-                    sv = item.get("sub_vertical", "")
-                    if v:
-                        industry_keywords.append(v)
-                    if sv:
-                        sub_verticals.append(sv)
-                else:
-                    industry_keywords.append(str(item))
-        elif isinstance(industry, str):
-            industry_keywords.append(industry)
+    for item in fd.get("industry_types", []):
+        if isinstance(item, dict):
+            v = item.get("vertical", "")
+            sv = item.get("sub_vertical", "")
+            if v:
+                industry_keywords.append(v)
+            if sv:
+                sub_verticals.append(sv)
+        elif isinstance(item, str):
+            industry_keywords.append(item)
 
-    # Regions + priority areas
-    regions = []
-    priority_areas = []
-    r = icp.get("regions")
-    if r:
-        regions = r.get("countries", [])
-        priority_areas = r.get("priority_areas", [])
+    geo = fd.get("geography", {})
+    regions = geo.get("countries", [])
+    priority_areas = geo.get("priority_areas", [])
 
-    # Size ranges
-    emp_min = emp_max = rev_min = rev_max = None
-    size_hint = ""
-    cs = icp.get("company_size") or icp.get("size")
-    if cs:
-        emp = cs.get("employee_range") or {}
-        emp_min = emp.get("min") if emp else cs.get("employees_min")
-        emp_max = emp.get("max") if emp else cs.get("employees_max")
-        rev = cs.get("revenue_range") or {}
-        rev_min = rev.get("min") if rev else cs.get("revenue_min")
-        rev_max = rev.get("max") if rev else cs.get("revenue_max")
-        if emp_min and emp_max:
-            size_hint = f"mid-size {emp_min}-{emp_max} employees"
+    emp = fd.get("employee_range", {})
+    rev = fd.get("revenue_range", {})
 
-    # Offering terms
-    offering_terms = []
-    offering = icp.get("target_offering") or icp.get("offering")
-    if offering and isinstance(offering, list):
-        for o in offering[:5]:
-            if isinstance(o, str):
-                short = o.split("-")[0].split(",")[0].strip()[:60]
-                offering_terms.append(short)
+    tc = icp.get("target_capability", {})
+    offerings = tc.get("offerings", [])
 
-    # Technology maturity (positive + negative)
-    tech_signals = []
-    negative_signals = []
-    tm = icp.get("technology_maturity") or icp.get("tech")
-    if tm:
-        tech_signals = tm.get("positive_signals", tm.get("signals", []))
-        negative_signals = tm.get("negative_signals", [])
-
-    # Infrastructure readiness
-    infra_indicators = []
-    ir = icp.get("infrastructure_readiness")
-    if ir:
-        infra_indicators = ir.get("indicators", [])
-
-    # Digital transformation drivers (merged from all 4 sub-fields)
-    transformation_keywords = []
-    dtd = icp.get("digital_transformation_drivers") or icp.get("drivers")
-    if dtd:
-        for field in ("growth_triggers", "operational_pains", "competitive_pressures", "strategic_initiatives"):
-            transformation_keywords.extend(dtd.get(field, []))
-
-    # Leadership traits
-    target_roles = []
-    behavioral_traits = []
-    lt = icp.get("leadership_traits") or icp.get("leadership")
-    if lt:
-        target_roles = lt.get("target_roles", [])
-        behavioral_traits = lt.get("behavioral_traits", [])
+    ar = icp.get("authority_roles", {})
+    target_roles = ar.get("target_roles", ["CEO", "CTO", "COO", "VP Engineering"])
 
     return {
         "industry_keywords": industry_keywords,
         "sub_verticals": sub_verticals,
         "regions": regions,
         "priority_areas": priority_areas,
-        "emp_min": emp_min,
-        "emp_max": emp_max,
-        "rev_min": rev_min,
-        "rev_max": rev_max,
-        "size_hint": size_hint,
-        "offering_terms": offering_terms,
-        "tech_signals": tech_signals,
-        "negative_signals": negative_signals,
-        "infra_indicators": infra_indicators,
-        "transformation_keywords": transformation_keywords,
+        "emp_min": emp.get("min"),
+        "emp_max": emp.get("max"),
+        "rev_min": rev.get("min"),
+        "rev_max": rev.get("max"),
+        "offerings": offerings,
         "target_roles": target_roles,
-        "behavioral_traits": behavioral_traits,
     }
 
 
-def _group_regions_into_zones(regions: list[str]) -> list[dict]:
-    """Group countries into geographic zones for balanced multi-region search.
+# ──────────────────────────────────────────────────────────────────
+# Stage 1: Industry Discovery
+# ──────────────────────────────────────────────────────────────────
 
-    Returns a list of zone dicts with 'name' and 'countries' keys,
-    ensuring each zone has at most 4 countries for focused API calls.
+def build_industry_discovery_prompt(icp: dict) -> str:
+    """Build prompt for Stage 1 — discover ALL companies matching industry + geography."""
+    kw = _extract_keywords(icp)
+    fd = icp.get("firmographic_details", {})
+
+    industry_text = ", ".join(kw["industry_keywords"])
+    sub_vert_text = ", ".join(kw["sub_verticals"]) if kw["sub_verticals"] else "N/A"
+    regions_text = ", ".join(kw["regions"]) if kw["regions"] else "Global"
+
+    return f"""Discover ALL companies matching the following industry, vertical, and geography criteria.
+There is NO upper limit on company count — find as many as possible.
+
+INDUSTRY: {industry_text}
+SUB-VERTICALS: {sub_vert_text}
+GEOGRAPHY: {regions_text}
+
+STEP 1 — LOCAL DATABASE:
+Call search_local_companies with the industry and country filters.
+This returns companies we already know about from previous searches. Include ALL matching results.
+
+STEP 2 — TRAINING KNOWLEDGE:
+List well-known companies in {industry_text} / {sub_vert_text} in {regions_text} from your training
+knowledge. Include: major corporations, mid-market companies, notable startups, recently funded
+companies. Be exhaustive — list every company you know.
+
+STEP 3 — TOOL-BASED DISCOVERY:
+Use ALL available tools aggressively to discover additional companies:
+- apollo_company_search: PAGINATE heavily. Query variations by sub-vertical, region, keyword.
+  Fetch pages 1, 2, 3, 4+ for each query. Make 10+ calls.
+- exa_search: Run 8-12 different query angles. Vary keywords, regions, adjacent terms.
+- discover_icp_companies: Use for broad DDG-based batch discovery. 2-3 calls.
+- search_yc_companies: Check YC directory for startups in this vertical.
+- tavily_search: Search for "top {industry_text} companies" lists, directories, rankings.
+- duckduckgo_search: Search for industry directories, associations, conference exhibitor lists.
+- scrape_webpage: Scrape industry directories and "top companies" lists found by other tools.
+
+Do NOT filter by revenue, employee count, or tech stack at this stage. That happens in Stage 2.
+
+OUTPUT FORMAT — Return JSON:
+```json
+{{
+  "companies": [
+    {{
+      "name": "Company Name",
+      "website": "domain.com",
+      "industry": "Industry",
+      "sub_industry": "Sub-industry",
+      "country": "Country",
+      "city": "City",
+      "employee_count": 500,
+      "revenue_estimate": 50000000,
+      "description": "Brief description",
+      "source": "tool_name",
+      "is_from_local_db": false
+    }}
+  ],
+  "discovery_summary": {{
+    "total_found": 150,
+    "from_local_db": 12,
+    "from_training_knowledge": 30,
+    "from_tools": 108,
+    "tools_used": {{"apollo_company_search": 12, "exa_search": 10}}
+  }}
+}}
+```"""
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 2: Firmographic Fit
+# ──────────────────────────────────────────────────────────────────
+
+def build_firmographic_fit_prompt(companies: list[dict], icp: dict) -> str:
+    """Build prompt for Stage 2 agent — deep firmographic verification of a batch."""
+    fd = icp.get("firmographic_details", {})
+    emp = fd.get("employee_range", {})
+    rev = fd.get("revenue_range", {})
+    tc = icp.get("target_capability", {})
+
+    companies_json = json.dumps(companies, indent=2, default=str)
+
+    return f"""Evaluate EACH company in this batch against the firmographic criteria below.
+
+═══════════════════════════════════════════
+FIRMOGRAPHIC CRITERIA
+═══════════════════════════════════════════
+Revenue range: ${rev.get('min', 'N/A'):,} - ${rev.get('max', 'N/A'):,} {rev.get('currency', 'USD')}
+Employee range: {emp.get('min', 'N/A')} - {emp.get('max', 'N/A')}
+Target capability fit: Company should need {json.dumps(tc.get('offerings', []))}. Condition: {tc.get('condition', 'OR')}
+Low-cost R&D center: {fd.get('low_cost_center', 'Not specified')}
+
+═══════════════════════════════════════════
+COMPANIES TO EVALUATE
+═══════════════════════════════════════════
+{companies_json}
+
+═══════════════════════════════════════════
+INSTRUCTIONS
+═══════════════════════════════════════════
+If EXISTING DATA is provided for a company (from prior runs), VERIFY it is still current.
+If data is <30 days old, trust it. If >90 days old, re-verify with tools.
+
+Use tools (apollo_company_search, scrape_webpage, exa_search, duckduckgo_search) to fill
+gaps in company data — especially missing employee counts and revenue estimates.
+
+For EACH company output:
+```json
+{{
+  "companies": [
+    {{
+      "name": "Company Name",
+      "website": "domain.com",
+      "recommendation": "pass",
+      "score": 78,
+      "employee_count": 350,
+      "revenue_estimate": 45000000,
+      "per_criterion": {{
+        "revenue": {{"value": 45000000, "in_range": true, "source": "apollo"}},
+        "employees": {{"value": 350, "in_range": true, "source": "apollo"}},
+        "capability_fit": {{"match": true, "reasoning": "Develops medical devices, needs engineering services"}},
+        "low_cost_center": {{"has_center": false, "source": "scrape_webpage"}}
+      }},
+      "reasoning": "Revenue $45M and 350 employees within range. Capability fit confirmed."
+    }}
+  ]
+}}
+```"""
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 3: Signal Research (Budget / Urgency / Both)
+# ──────────────────────────────────────────────────────────────────
+
+def build_signal_prompt(company: dict, icp: dict, signal_type: str) -> str:
+    """Build prompt for Stage 3 — budget and/or urgency signal research.
+
+    Args:
+        company: Company dict with existing data
+        icp: Full ICP config
+        signal_type: "budget_signals", "urgency_signals", or "both"
     """
-    # Known region mappings — extend as needed
-    REGION_MAP = {
-        # North America
-        "USA": "americas", "US": "americas", "United States": "americas",
-        "CANADA": "americas", "Canada": "americas",
-        "Mexico": "americas", "Brazil": "americas", "Colombia": "americas",
-        "Argentina": "americas", "Chile": "americas",
-        # Europe
-        "Germany": "europe", "UK": "europe", "United Kingdom": "europe",
-        "France": "europe", "Netherlands": "europe", "Switzerland": "europe",
-        "Belgium": "europe", "Sweden": "europe", "Norway": "europe",
-        "Denmark": "europe", "Finland": "europe", "Ireland": "europe",
-        "Austria": "europe", "Spain": "europe", "Italy": "europe",
-        "Poland": "europe", "Czech Republic": "europe", "Portugal": "europe",
-        # Asia-Pacific
-        "Malaysia": "apac", "Thailand": "apac", "Vietnam": "apac",
-        "Indonesia": "apac", "Singapore": "apac", "Philippines": "apac",
-        "Japan": "apac", "South Korea": "apac", "Taiwan": "apac",
-        "India": "apac", "Australia": "apac", "New Zealand": "apac",
-        "China": "apac", "Hong Kong": "apac",
-        # Middle East & Africa
-        "UAE": "mea", "Saudi Arabia": "mea", "Israel": "mea",
-        "South Africa": "mea", "Qatar": "mea", "Kenya": "mea",
-    }
+    name = company.get("name", "Unknown")
+    domain = company.get("website", "unknown")
+    description = company.get("description", "")
+    employee_count = company.get("employee_count", "Unknown")
+    revenue = company.get("revenue_estimate", "Unknown")
 
-    ZONE_LABELS = {
-        "americas": "Americas",
-        "europe": "Europe",
-        "apac": "Asia-Pacific",
-        "mea": "Middle East & Africa",
-    }
+    # Build existing data section
+    existing_lines = []
+    if company.get("cached_from_run_id"):
+        freshness = company.get("data_freshness", "unknown")
+        existing_lines.append(f"EXISTING DATA (from previous run, last updated: {freshness}):")
+        existing_lines.append(f"  Employee count: {employee_count}")
+        existing_lines.append(f"  Revenue estimate: ${revenue:,}" if isinstance(revenue, (int, float)) else f"  Revenue estimate: {revenue}")
+        existing_lines.append(f"  Description: {description[:200]}")
+        existing_lines.append("  Your job: VERIFY this data is still current AND find any NEW information.")
+    existing_data = "\n".join(existing_lines) if existing_lines else ""
 
-    zone_countries: dict[str, list[str]] = {}
-    for country in regions:
-        zone = REGION_MAP.get(country, "other")
-        zone_countries.setdefault(zone, []).append(country)
+    # Determine which signals to research
+    sections = []
+    if signal_type in ("budget_signals", "both"):
+        budget_cfg = icp.get("budget_signals", {})
+        budget_signals = budget_cfg.get("signals", [])
+        budget_condition = budget_cfg.get("condition", "OR")
+        condition_text = f"Match condition: {budget_condition} — company must show {'ALL' if budget_condition == 'AND' else 'ANY'} of these signals."
+        sections.append(f"""BUDGET SIGNALS TO RESEARCH:
+{chr(10).join(f'  - {s}' for s in budget_signals) if budget_signals else '  - General budget capacity indicators (funding, revenue growth, tech investment)'}
+{condition_text}
 
-    zones = []
-    for zone_key, countries in zone_countries.items():
-        label = ZONE_LABELS.get(zone_key, zone_key.title())
-        zones.append({"name": label, "countries": countries})
+For EACH budget signal, actively research whether {name} shows evidence of it.
+Also look for ADDITIONAL budget signals beyond what the user listed.""")
 
-    return zones
+    if signal_type in ("urgency_signals", "both"):
+        urgency_cfg = icp.get("urgency_signals", {})
+        urgency_signals = urgency_cfg.get("signals", [])
+        urgency_condition = urgency_cfg.get("condition", "OR")
+        condition_text = f"Match condition: {urgency_condition} — company must show {'ALL' if urgency_condition == 'AND' else 'ANY'} of these signals."
+        sections.append(f"""URGENCY SIGNALS TO RESEARCH:
+{chr(10).join(f'  - {s}' for s in urgency_signals) if urgency_signals else '  - General buying urgency indicators (RFPs, new leadership, strategic shifts)'}
+{condition_text}
 
+For EACH urgency signal, actively research whether {name} shows evidence of it.
+Also look for ADDITIONAL urgency signals beyond what the user listed.""")
 
-def _build_strictness_override(strictness: str) -> str:
-    """Return prompt text overriding classification thresholds for strict/relaxed modes.
+    signal_sections = "\n\n".join(sections)
 
-    Returns empty string for moderate (default), preserving current behavior exactly.
-    """
-    if strictness == "strict":
-        return """
+    return f"""Research {"budget and urgency" if signal_type == "both" else signal_type.replace("_", " ")} signals for this company.
 
-═══════════════════════════════════════════
-OVERRIDE: STRICT MATCHING MODE
-═══════════════════════════════════════════
-You are operating in STRICT mode. Apply these REPLACEMENT thresholds (ignore the defaults above):
+COMPANY: {name}
+DOMAIN: {domain}
+EMPLOYEES: {employee_count}
+REVENUE: {f'${revenue:,}' if isinstance(revenue, (int, float)) else revenue}
+DESCRIPTION: {description[:300]}
 
-CLASSIFICATION (STRICT):
-- verified_match: icp_match_score >= 80, ALL 4 critical dimensions (offering, geography, industry, size) score 2, AND 7+ dimensions have evidence
-- potential_match: icp_match_score >= 65, ALL 4 critical dimensions score >= 1, AND 5+ dimensions have evidence
-- weak_match: ELIMINATED — do NOT return any weak_match companies. Discard them entirely.
-- DISCARD: icp_match_score < 65 OR any critical dimension scores 0
+{existing_data}
 
-BEHAVIORAL RULES (STRICT):
-- Prefer FEWER, higher-quality results over volume. Quality over quantity.
-- Spend more time on verification — use scrape_webpage on company websites to confirm dimension evidence before classifying.
-- If in doubt about a classification, demote the company to the lower tier or discard.
-- Do NOT pad results with marginal matches."""
-    elif strictness == "relaxed":
-        return """
+{signal_sections}
 
-═══════════════════════════════════════════
-OVERRIDE: RELAXED MATCHING MODE
-═══════════════════════════════════════════
-You are operating in RELAXED mode. Apply these REPLACEMENT thresholds (ignore the defaults above):
+Use AT LEAST 3-4 different tools per company. Depth is critical — runtime doesn't matter.
+If existing data is older than 90 days, refresh it with new searches.
 
-CLASSIFICATION (RELAXED):
-- verified_match: icp_match_score >= 50, ALL 4 critical dimensions (offering, geography, industry, size) score >= 1, AND 5+ dimensions have evidence
-- potential_match: icp_match_score >= 35, offering_fit >= 1, AND at least 1 other critical dimension (geography, industry, or size) scores >= 1
-- weak_match: icp_match_score >= 20, offering_fit >= 1
-- DISCARD: icp_match_score < 20 OR offering_fit = 0
-
-BEHAVIORAL RULES (RELAXED):
-- Cast a WIDER net. Include partial-match candidates that show promise on key dimensions.
-- Prioritize breadth of discovery — find more companies rather than being overly selective.
-- For EVERY company in your results, match_reasoning MUST explicitly list:
-  (a) Which ICP criteria were met (with evidence)
-  (b) Which ICP criteria were NOT met
-  (c) Percentage of dimensions with positive evidence, e.g. "6 of 9 dimensions matched (67%)"
-- This transparency is critical for relaxed mode — users need to see exactly what matched and what didn't."""
-    return ""
+OUTPUT FORMAT:
+```json
+{{
+  "name": "{name}",
+  "website": "{domain}",
+  {"budget_signal_score" if signal_type != "urgency_signals" else "urgency_signal_score"}: 72,
+  {'"urgency_signal_score": 65,' if signal_type == "both" else ""}
+  "signals": [
+    {{
+      "type": "budget",
+      "signal": "Signal name",
+      "score": 4,
+      "description": "Evidence description",
+      "source_url": "https://...",
+      "tool": "tavily_search",
+      "confidence": "high"
+    }}
+  ],
+  "composite_score": 72,
+  "confidence_level": "high"
+}}
+```"""
 
 
-def build_discovery_prompt(icp: dict, options: dict) -> str:
-    """Build prompt for Phase 1 — multi-source company discovery with 9-dimension ICP scoring."""
-    max_companies = options.get("max_companies", 25)
-    icp_text = _format_icp_sections(icp)
-    kw = _extract_icp_keywords(icp)
+# ──────────────────────────────────────────────────────────────────
+# Stage 4: Contact Discovery (rewritten)
+# ──────────────────────────────────────────────────────────────────
 
-    # Group regions into geographic zones for balanced coverage
-    zones = _group_regions_into_zones(kw["regions"])
-    num_zones = len(zones)
-
-    # Calculate per-zone targets (ensure every zone gets attention)
-    per_zone_target = max(3, max_companies // max(num_zones, 1))
-
-    # Build zone-specific Apollo call instructions
-    apollo_calls = []
-    for i, zone in enumerate(zones):
-        apollo_calls.append(
-            f"  Call {i+1} ({zone['name']}): query=primary industry, "
-            f"locations={json.dumps(zone['countries'])}, "
-            f"min_employees={kw['emp_min']}, max_employees={kw['emp_max']}"
-        )
-    # Add one extra call for sub-verticals across all regions
-    apollo_calls.append(
-        f"  Call {len(zones)+1} (sub-verticals): query=sub-vertical keywords, "
-        f"locations={json.dumps(kw['regions'][:6])}"
-    )
-
-    # Build zone-specific Exa queries
-    exa_queries = []
-    industry_short = ' '.join(kw['industry_keywords'][:2])
-    offering_short = ' '.join(kw['offering_terms'][:2]) if kw['offering_terms'] else ''
-    for zone in zones:
-        region_str = ', '.join(zone['countries'][:3])
-        if offering_short:
-            exa_queries.append(
-                f"{industry_short} companies that buy {offering_short} in {region_str}"
-            )
-        else:
-            exa_queries.append(
-                f"{industry_short} companies in {region_str} {kw['size_hint']}"
-            )
-    # Add tech/transformation queries without region filter for broader coverage
-    if kw["tech_signals"]:
-        exa_queries.append(
-            f"{industry_short} companies using {', '.join(kw['tech_signals'][:3])}"
-        )
-    if kw["sub_verticals"]:
-        exa_queries.append(
-            f"{' '.join(kw['sub_verticals'][:2])} companies {kw['size_hint']}"
-        )
-
-    # Format zone summary for the prompt
-    zone_summary = "\n".join(
-        f"  Zone {i+1}: {z['name']} — {', '.join(z['countries'])} (target: {per_zone_target}+ companies)"
-        for i, z in enumerate(zones)
-    )
-
-    return f"""Discover companies matching this Ideal Customer Profile. You MUST find at least {max_companies} qualifying companies.
-
-FULL ICP PROFILE (score against ALL dimensions):
-{icp_text}
-
-═══════════════════════════════════════════
-CRITICAL: GEOGRAPHIC DIVERSITY MANDATE
-═══════════════════════════════════════════
-The ICP targets {num_zones} geographic zones. You MUST search ALL zones and return
-results from EACH zone. Do NOT concentrate results in a single country.
-
-{zone_summary}
-
-RULE: Final results MUST include companies from at least {min(num_zones, 3)} different zones.
-If a zone returns fewer results, make ADDITIONAL calls targeting that zone specifically.
-
-═══════════════════════════════════════════
-MULTI-SOURCE DISCOVERY STRATEGY
-═══════════════════════════════════════════
-
-STEP 1 — Apollo Database Search (PRIMARY, {len(apollo_calls)} calls):
-  Make SEPARATE calls per geographic zone so every region gets coverage.
-{chr(10).join(apollo_calls)}
-
-STEP 2 — Exa Semantic Search (PRIMARY, {len(exa_queries)} calls):
-  Use exa_search with natural language queries, category="company", num_results=15.
-  IMPORTANT: Include region-specific queries for EACH geographic zone.
-  Suggested queries (adapt as needed):
-{chr(10).join(f'    - "{q}"' for q in exa_queries)}
-
-STEP 3 — Broad Web Discovery (SECONDARY, 1-2 calls):
-  Use discover_icp_companies with:
-    industry_keywords: {json.dumps(kw['industry_keywords'])}
-    regions: {json.dumps(kw['regions'][:6])}
-    company_size_hint: "{kw['size_hint']}"
-    additional_terms: {json.dumps(kw['offering_terms'][:3] + kw['tech_signals'][:2])}
-    min_employees: {kw['emp_min']}
-    max_employees: {kw['emp_max']}
-    min_revenue_usd: {kw['rev_min']}
-    max_revenue_usd: {kw['rev_max']}
-
-STEP 4 — Niche Sources (if under {max_companies} qualifying companies):
-  search_yc_companies, tavily_search, duckduckgo_search for niche verticals.
-
-STEP 5 — Gap-Fill for Under-Represented Zones:
-  After Steps 1-4, check which zones have fewer than {per_zone_target} companies.
-  Make targeted calls for those zones:
-  - Apollo with locations restricted to the under-represented zone
-  - Exa with region-specific queries (e.g., "medical device companies in Germany")
-  - duckduckgo_search with region + industry keywords
-
-STEP 6 — Selective Verification (top 10-15 candidates):
-  scrape_webpage on /about, /technology, /careers pages to verify:
-  - Tech maturity signals: {json.dumps(kw['tech_signals'][:5])}
-  - Infrastructure indicators: {json.dumps(kw['infra_indicators'][:5])}
-  - Transformation signals: {json.dumps(kw['transformation_keywords'][:5])}
-
-NEGATIVE SIGNAL CHECK:
-  Companies showing any of these score 0 on Technology Maturity: {json.dumps(kw['negative_signals'])}
-
-MINIMUM TOOL USAGE: You MUST call at least 3 different tool types (e.g. apollo + exa + discover_icp_companies).
-
-AFTER DISCOVERY: Score each company on all 9 ICP dimensions, classify by evidence strength,
-and return the JSON as specified in your system prompt.{_build_strictness_override(options.get("match_strictness", "moderate"))}"""
-
-
-def build_contact_prompt(company: dict, icp: dict) -> str:
-    """Build prompt for Phase 2 — contact discovery for a single company."""
-    lt = icp.get("leadership_traits") or icp.get("leadership")
-    target_roles = lt.get("target_roles", ["CEO", "CTO", "COO", "VP Engineering"]) if lt else ["CEO", "CTO", "COO", "VP Engineering"]
-
-    # Get industry hint for find_company_executives
-    industry = icp.get("industry_types") or icp.get("industry")
-    industry_hint = ""
-    if industry and isinstance(industry, list) and len(industry) > 0:
-        first = industry[0]
-        industry_hint = first.get("vertical", "") if isinstance(first, dict) else str(first)
+def build_contact_discovery_prompt(company: dict, icp: dict, cached_contacts: list | None = None) -> str:
+    """Build prompt for Stage 4 — contact discovery for a single company."""
+    ar = icp.get("authority_roles", {})
+    target_roles = ar.get("target_roles", ["CEO", "CTO", "COO", "VP Engineering"])
 
     name = company.get("name", "Unknown")
     domain = company.get("website", "unknown")
-    icp_score = company.get("icp_match_score", "N/A")
-    qualification = company.get("qualification", "N/A")
+    industry = company.get("industry", "")
+    employee_count = company.get("employee_count", "")
 
-    return f"""Research the following company and find decision-maker contacts.
+    # Build cached contacts section
+    cached_section = ""
+    if cached_contacts:
+        contact_lines = []
+        for c in cached_contacts:
+            contact_lines.append(
+                f"  - {c.get('full_name', 'Unknown')}: {c.get('designation', 'Unknown role')} "
+                f"(email: {c.get('email', 'N/A')}, linkedin: {c.get('linkedin_url', 'N/A')}, "
+                f"source: {c.get('source', 'unknown')})"
+            )
+        cached_section = f"""
+CACHED CONTACTS (from a previous pipeline run):
+{chr(10).join(contact_lines)}
 
-COMPANY: {name}
-DOMAIN: {domain}
-ICP MATCH SCORE: {icp_score}
-QUALIFICATION TIER: {qualification}
+Review these cached contacts:
+- Are these people likely still at this company? (>3 years in role may have moved)
+- Mark each as "needs_verification" or "likely_current"."""
 
-TARGET ROLES TO FIND: {', '.join(target_roles)}
-INDUSTRY HINT (for find_company_executives): "{industry_hint}"
+    # Industry hint for tool queries
+    industry_hint = ""
+    fd = icp.get("firmographic_details", {})
+    for item in fd.get("industry_types", []):
+        if isinstance(item, dict):
+            industry_hint = item.get("vertical", "")
+            break
 
-MANDATORY STEPS:
-1. Call research_company("{name}", "{domain}", target_roles={json.dumps(target_roles)})
-2. Call find_company_executives("{name}", "{domain}", target_roles={json.dumps(target_roles)}, industry_hint="{industry_hint}")
-3. Merge contacts from both tools (deduplicate by LinkedIn URL or full name).
-4. Include inferred_emails from find_company_executives with confidence=0.4.
-5. Collect all research_data (financials, news, tech_signals) for downstream BANT scoring.
-
-Return the JSON output as specified in your system prompt."""
-
-
-def build_bant_prompt(company_with_research: dict, icp: dict) -> str:
-    """Build prompt for Phase 3 — BANT scoring for a single company.
-
-    Args:
-        company_with_research: Company dict with contacts and research_data from Phase 2.
-        icp: The ICP config dict.
-    """
-    name = company_with_research.get("name", "Unknown")
-    domain = company_with_research.get("website", "unknown")
-
-    # Format contacts summary for context
-    contacts = company_with_research.get("contacts", [])
-    contacts_summary = []
-    for c in contacts[:5]:
-        role = c.get("designation") or c.get("role_category") or "Unknown role"
-        contact_name = c.get("full_name") or "Unknown"
-        contacts_summary.append(f"  - {contact_name}: {role}")
-    contacts_text = "\n".join(contacts_summary) if contacts_summary else "  No contacts found"
-
-    # Format research data
-    research_data = company_with_research.get("research_data", {})
-    financials = research_data.get("financials", "No financial data gathered")
-    news = research_data.get("news", "No news data gathered")
-    tech_signals = research_data.get("tech_signals", [])
-    source_urls = research_data.get("source_urls", [])
-
-    source_urls_text = ""
-    if source_urls:
-        for s in source_urls[:10]:
-            source_urls_text += f"  - [{s.get('title', 'Untitled')}]({s.get('url', '')}) (via {s.get('tool', 'unknown')})\n"
-    else:
-        source_urls_text = "  No source URLs gathered\n"
-
-    # ICP context for need scoring
-    icp_text = _format_icp_sections(icp)
-
-    return f"""Score the following company using the BANT framework. Use the pre-gathered research data first,
-and only call tools to fill significant gaps.
+    return f"""Find decision-maker contacts for this company.
 
 COMPANY: {name}
 DOMAIN: {domain}
+INDUSTRY: {industry}
+EMPLOYEES: {employee_count}
 
-IDENTIFIED CONTACTS:
-{contacts_text}
+TARGET ROLES: {', '.join(target_roles)}
+INDUSTRY HINT: "{industry_hint}"
+{cached_section}
 
-PRE-GATHERED RESEARCH DATA:
-  Financials: {financials}
-  News: {news}
-  Tech Signals: {json.dumps(tech_signals)}
+═══════════════════════════════════════════
+STEP 1: USE YOUR TRAINING KNOWLEDGE
+═══════════════════════════════════════════
+Before calling ANY tools, think about what you already know about {name}:
+- Do you know the CEO, CTO, or other executives from your training data?
+- Is this a well-known company whose leadership you can name?
+List any contacts you can identify from memory. These will be VERIFIED in the next steps.
 
-SOURCE URLs FROM PRIOR RESEARCH:
-{source_urls_text}
-ICP CONTEXT (for Need scoring):
-{icp_text}
+═══════════════════════════════════════════
+STEP 2: TOOL-BASED DISCOVERY & VERIFICATION
+═══════════════════════════════════════════
+Use ALL of these methods. Do NOT skip any:
 
-Score each BANT dimension 1-5 with evidence. Cite the source URLs above where possible.
-Only call tools if research_data has significant gaps for a dimension.
-Return the JSON output as specified in your system prompt."""
+A. PAID DATABASE (highest quality):
+   → apollo_people_search: Search with target roles [{', '.join(target_roles)}]. Paginate (page 1,2,3).
+
+B. MULTI-METHOD EXECUTIVE FINDER:
+   → find_company_executives: Uses 7 independent methods. Always call this.
+   → research_company: Gets contacts + financial/news data in one call.
+
+C. LINKEDIN INTELLIGENCE:
+   → find_linkedin_profiles: Batch LinkedIn search for target roles.
+   → For contacts from Step 1 (training knowledge), use duckduckgo_search:
+     "[Name] {name} LinkedIn" to verify they're still at the company.
+
+D. WEBSITE SCRAPING:
+   → scrape_team_page: Scan /team, /about, /leadership pages.
+   → scrape_webpage: Read specific pages (e.g., press releases naming executives).
+
+E. EMAIL & PHONE ENRICHMENT:
+   → hunter_domain_search: Find email patterns for {domain}.
+   → hunter_email_finder: Verify specific person's email.
+   → lusha_person_search: Get phone numbers (requires LinkedIn URL or email).
+
+F. JOB POSTING INTELLIGENCE:
+   → search_job_postings: Check open positions for org structure signals.
+
+G. NEWS & PRESS:
+   → tavily_search: "{name} CEO interview" or "{name} executive appointment"
+   → exa_search: Search for conference speakers, thought leaders at this company.
+
+═══════════════════════════════════════════
+STEP 3: CROSS-REFERENCE & CONFIDENCE SCORING
+═══════════════════════════════════════════
+- Contacts found by 3+ sources → confidence 0.95
+- Contacts found by 2 sources → confidence 0.80
+- Contacts found by 1 source → confidence 0.60
+- Contacts from training knowledge only (not verified) → confidence 0.40
+- Inferred emails → confidence 0.30
+
+Deduplicate by LinkedIn URL, then by (full_name + company). Merge data across sources.
+
+OUTPUT FORMAT:
+```json
+{{
+  "name": "{name}",
+  "website": "{domain}",
+  "contacts": [
+    {{
+      "full_name": "Jane Doe",
+      "first_name": "Jane",
+      "last_name": "Doe",
+      "designation": "Chief Technology Officer",
+      "role_category": "CTO",
+      "email": "jane@{domain}",
+      "phone": null,
+      "linkedin_url": "https://linkedin.com/in/janedoe",
+      "source": "apollo_people_search",
+      "confidence": 0.80,
+      "enrichment_status": "enriched"
+    }}
+  ],
+  "research_data": {{
+    "financials": "Summary of financial data found",
+    "news": "Summary of recent news",
+    "tech_signals": ["signal1", "signal2"],
+    "source_urls": [
+      {{"url": "https://...", "title": "Page title", "tool": "research_company"}}
+    ]
+  }}
+}}
+```"""

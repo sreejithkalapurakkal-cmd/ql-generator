@@ -9,35 +9,37 @@ export interface ICPConfig {
 }
 
 export interface ICPDefinition {
-  target_offering: string[];
-  regions: {
-    countries: string[];
-    priority_areas: string[];
+  firmographic_details: {
+    industry_types: { vertical: string; sub_vertical?: string | null }[];
+    geography: {
+      countries: string[];
+      priority_areas: string[];
+    };
+    revenue_range: {
+      min: number;
+      max: number;
+      currency: string;
+    };
+    employee_range: {
+      min: number;
+      max: number;
+    };
+    low_cost_center: boolean;
   };
-  industry_types: { vertical: string; sub_vertical?: string | null }[];
-  company_size: {
-    employees_min: number;
-    employees_max: number;
-    revenue_min: number;
-    revenue_max: number;
-    revenue_currency: string;
+  target_capability: {
+    offerings: string[];
+    condition: 'AND' | 'OR';
   };
-  technology_maturity: {
+  urgency_signals: {
     signals: string[];
-    negative_signals: string[];
+    condition: 'AND' | 'OR';
   };
-  infrastructure_readiness: {
-    indicators: string[];
+  budget_signals: {
+    signals: string[];
+    condition: 'AND' | 'OR';
   };
-  digital_transformation_drivers: {
-    growth_triggers: string[];
-    operational_pains: string[];
-    competitive_pressures: string[];
-    strategic_initiatives: string[];
-  };
-  leadership_traits: {
+  authority_roles: {
     target_roles: string[];
-    behavioral_traits: string[];
   };
 }
 
@@ -54,32 +56,22 @@ export interface PipelineRun {
   started_at: string | null;
   completed_at: string | null;
   error_log?: string | null;
-  estimated_duration_seconds?: number | null;
-  pipeline_mode?: string | null;
-  match_strictness?: 'strict' | 'moderate' | 'relaxed' | null;
-  bant_weights?: BANTWeights | null;
+  signal_mode?: string | null;
+  signal_phase?: string | null;
   stage_details?: {
     total_discovered?: number;
+    pre_filter_passed?: number;
+    pre_filter_failed?: number;
+    agent_passed?: number;
+    agent_failed?: number;
     promoted_count?: number;
-    promoted_company_ids?: string[];
-    discovery_completed_at?: string;
     contacts_found?: number;
+    current_company_index?: number;
+    total_companies_in_stage?: number;
+    current_company_name?: string;
+    contacts_found_so_far?: number;
   } | null;
 }
-
-export interface BANTWeights {
-  budget: number;
-  authority: number;
-  need: number;
-  timing: number;
-}
-
-export const DEFAULT_BANT_WEIGHTS: BANTWeights = {
-  budget: 3,
-  authority: 3,
-  need: 3,
-  timing: 3,
-};
 
 export interface PipelineLogEntry {
   id: string;
@@ -89,10 +81,15 @@ export interface PipelineLogEntry {
   created_at: string;
 }
 
-export interface BANTSourceCitation {
-  url: string;
-  title?: string | null;
-  tool?: string | null;
+export interface CompanyStageResult {
+  id: string;
+  stage: string;
+  status: string;
+  score: number | null;
+  reasoning: string | null;
+  evidence: unknown | null;
+  user_override: boolean | null;
+  created_at: string | null;
 }
 
 export interface Contact {
@@ -109,24 +106,6 @@ export interface Contact {
   source: string | null;
   confidence: number | null;
   enrichment_status: string | null;
-}
-
-export interface BANTScore {
-  id: string;
-  budget_score: number | null;
-  budget_reason: string | null;
-  budget_sources?: BANTSourceCitation[] | null;
-  authority_score: number | null;
-  authority_reason: string | null;
-  authority_sources?: BANTSourceCitation[] | null;
-  need_score: number | null;
-  need_reason: string | null;
-  need_sources?: BANTSourceCitation[] | null;
-  timing_score: number | null;
-  timing_reason: string | null;
-  timing_sources?: BANTSourceCitation[] | null;
-  total_score: number | null;
-  overall_summary: string | null;
 }
 
 export interface Company {
@@ -146,11 +125,38 @@ export interface Company {
   icp_match_score: number | null;
   match_reasoning: string | null;
   contacts: Contact[];
-  bant_score: BANTScore | null;
   promoted?: boolean | null;
   description?: string | null;
   raw_data_json?: Record<string, unknown> | null;
+  rejection_reason?: string | null;
+  disqualification_stage?: string | null;
   created_at: string;
+  // v2 fields
+  current_stage?: string | null;
+  budget_signal_score?: number | null;
+  urgency_signal_score?: number | null;
+  final_score?: number | null;
+  final_rank?: number | null;
+  cached_from_run_id?: string | null;
+  data_freshness?: string | null;
+  stage_results?: CompanyStageResult[];
+}
+
+export interface StageSummary {
+  stage: string;
+  total: number;
+  passed: number;
+  failed: number;
+  promoted: number;
+  excluded: number;
+  avg_score: number | null;
+}
+
+export interface StageSummaryResponse {
+  run_id: string;
+  signal_mode: string | null;
+  stages: StageSummary[];
+  cached_companies: number;
 }
 
 // Co-pilot Chat types
@@ -201,6 +207,7 @@ export interface ToolRegistryItem {
   last_health_check_at: string | null;
   last_health_message: string | null;
   notes: string | null;
+  rate_limit_info: string | null;
   created_at: string | null;
   updated_at: string | null;
   total_calls: number;
@@ -228,23 +235,15 @@ export interface ToolHealthCheckResult {
 }
 
 export const DEFAULT_ICP: ICPDefinition = {
-  target_offering: [],
-  regions: { countries: [], priority_areas: [] },
-  industry_types: [],
-  company_size: {
-    employees_min: 50,
-    employees_max: 1500,
-    revenue_min: 10000000,
-    revenue_max: 500000000,
-    revenue_currency: 'USD',
+  firmographic_details: {
+    industry_types: [],
+    geography: { countries: [], priority_areas: [] },
+    revenue_range: { min: 10000000, max: 500000000, currency: 'USD' },
+    employee_range: { min: 50, max: 1500 },
+    low_cost_center: false,
   },
-  technology_maturity: { signals: [], negative_signals: [] },
-  infrastructure_readiness: { indicators: [] },
-  digital_transformation_drivers: {
-    growth_triggers: [],
-    operational_pains: [],
-    competitive_pressures: [],
-    strategic_initiatives: [],
-  },
-  leadership_traits: { target_roles: [], behavioral_traits: [] },
+  target_capability: { offerings: [], condition: 'OR' },
+  urgency_signals: { signals: [], condition: 'OR' },
+  budget_signals: { signals: [], condition: 'OR' },
+  authority_roles: { target_roles: [] },
 };

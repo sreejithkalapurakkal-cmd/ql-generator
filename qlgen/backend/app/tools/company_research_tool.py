@@ -32,7 +32,7 @@ TEAM_PATHS = ["/team", "/about", "/about-us", "/leadership", "/our-team", "/peop
 def _ddg_search(query: str, max_results: int = 8) -> list[dict]:
     """Run a DuckDuckGo search, return results. Handles rate limiting."""
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
@@ -245,9 +245,9 @@ def research_company(
     used_emails = set()
     for profile in linkedin_profiles:
         contact = {
-            "full_name": profile["name"],
-            "designation": profile["title_searched"],
-            "linkedin_url": profile["linkedin_url"],
+            "full_name": profile.get("name", ""),
+            "designation": profile.get("title_searched", ""),
+            "linkedin_url": profile.get("linkedin_url", ""),
             "email": None,
             "source": "linkedin_search",
         }

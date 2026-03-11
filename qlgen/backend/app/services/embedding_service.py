@@ -59,19 +59,11 @@ def _build_embedding_text(company: Company) -> str:
     if company.match_reasoning:
         parts.append(f"ICP match reasoning: {company.match_reasoning}")
 
-    # BANT score details (if loaded)
-    if company.bant_score:
-        bant = company.bant_score
-        if bant.budget_reason:
-            parts.append(f"Budget: {bant.budget_reason}")
-        if bant.authority_reason:
-            parts.append(f"Authority: {bant.authority_reason}")
-        if bant.need_reason:
-            parts.append(f"Need: {bant.need_reason}")
-        if bant.timing_reason:
-            parts.append(f"Timing: {bant.timing_reason}")
-        if bant.overall_summary:
-            parts.append(f"BANT summary: {bant.overall_summary}")
+    # Stage result details (if loaded)
+    if hasattr(company, 'stage_results') and company.stage_results:
+        for sr in company.stage_results:
+            if sr.reasoning:
+                parts.append(f"{sr.stage} ({sr.status}): {sr.reasoning}")
 
     # Contact titles
     if company.contacts:
