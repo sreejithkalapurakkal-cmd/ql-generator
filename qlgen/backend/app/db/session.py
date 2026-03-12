@@ -4,7 +4,7 @@ from app.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_size=10, max_overflow=20)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 

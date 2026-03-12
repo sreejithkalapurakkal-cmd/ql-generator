@@ -150,14 +150,16 @@ stop: stop-backend stop-frontend
 
 stop-backend:
 	@if [ -f /tmp/qlgen-backend.pid ]; then \
-		kill $$(cat /tmp/qlgen-backend.pid) 2>/dev/null && rm -f /tmp/qlgen-backend.pid; \
+		kill $$(cat /tmp/qlgen-backend.pid) 2>/dev/null; \
+		rm -f /tmp/qlgen-backend.pid; \
 	fi
 	@kill $$(lsof -ti:8000) 2>/dev/null || true
 	@echo "✓ Backend stopped"
 
 stop-frontend:
 	@if [ -f /tmp/qlgen-frontend.pid ]; then \
-		kill $$(cat /tmp/qlgen-frontend.pid) 2>/dev/null && rm -f /tmp/qlgen-frontend.pid; \
+		kill $$(cat /tmp/qlgen-frontend.pid) 2>/dev/null; \
+		rm -f /tmp/qlgen-frontend.pid; \
 	fi
 	@kill $$(lsof -ti:3000) 2>/dev/null || true
 	@echo "✓ Frontend stopped"

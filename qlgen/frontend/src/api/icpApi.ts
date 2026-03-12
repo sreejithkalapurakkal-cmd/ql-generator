@@ -13,6 +13,20 @@ export const updateICP = (id: string, data: Partial<{ name: string; description:
 
 export const deleteICP = (id: string) => client.delete(`/icp/${id}`);
 
+export const generateICPWithAI = (data: { description: string }) =>
+  client.post<{ name: string; description: string | null; config: Record<string, unknown> }>('/icp/generate', data);
+
+export const generateICPFromFile = (file: File, description?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('description', description || '');
+  return client.post<{ name: string; description: string | null; config: Record<string, unknown> }>(
+    '/icp/generate-from-file',
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  );
+};
+
 export const getICPTemplateURL = () => {
   const base = client.defaults.baseURL || '/api/v1';
   return `${base}/icp/template/download`;

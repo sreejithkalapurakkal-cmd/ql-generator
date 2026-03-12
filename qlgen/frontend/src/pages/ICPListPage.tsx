@@ -48,6 +48,9 @@ const ICPListPage: React.FC = () => {
     return () => observer.disconnect();
   }, [filteredICPs.length]);
 
+  // Run pipeline modal state
+  const [runModalIcpId, setRunModalIcpId] = useState<string | null>(null);
+
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
   const [importStep, setImportStep] = useState<'upload' | 'review'>('upload');
@@ -93,12 +96,16 @@ const ICPListPage: React.FC = () => {
 
   const handleRunPipeline = async (icpId: string) => {
     try {
-      const res = await startPipeline({ icp_config_id: icpId, options: { max_companies: 15, max_contacts_per_company: 5 } });
+      const res = await startPipeline({ icp_config_id: icpId, options: { max_contacts_per_company: 5 } });
       message.success('Pipeline started');
       navigate(`/pipeline/${res.data.id}`);
     } catch (err: any) {
       message.error(err?.response?.data?.detail || 'Failed to start pipeline');
     }
+  };
+
+  const openRunModal = (icpId: string) => {
+    setRunModalIcpId(icpId);
   };
 
   const handleFileUpload = async (file: File) => {
@@ -148,7 +155,7 @@ const ICPListPage: React.FC = () => {
         const res = await createICP({ name: icp.name, description: icp.description, config: icp.config });
         successCount++;
         try {
-          await startPipeline({ icp_config_id: res.data.id!, options: { max_companies: 15, max_contacts_per_company: 5 } });
+          await startPipeline({ icp_config_id: res.data.id!, options: { max_companies: 25, max_contacts_per_company: 5 } });
         } catch {
           message.warning(`ICP "${icp.name}" saved but pipeline failed to start`);
         }
@@ -227,10 +234,11 @@ const ICPListPage: React.FC = () => {
         <div className="card-grid">
           {filteredICPs.slice(0, displayCount).map((icp) => {
             const cfg = icp.config as any;
-            const regions = cfg?.regions?.countries;
-            const industries = cfg?.industry_types || cfg?.industry;
-            const roles = cfg?.leadership_traits?.target_roles;
-            const size = cfg?.company_size || cfg?.size;
+            const fd = cfg?.firmographic_details || {};
+            const regions = fd?.geography?.countries || cfg?.regions?.countries;
+            const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
+            const roles = cfg?.authority_roles?.target_roles || cfg?.leadership_traits?.target_roles;
+            const empRange = fd?.employee_range;
 
             return (
               <div
@@ -253,7 +261,7 @@ const ICPListPage: React.FC = () => {
                         className="menu-item"
                         onClick={() => {
                           setOpenMenuId(null);
-                          handleRunPipeline(icp.id!);
+                          openRunModal(icp.id!);
                         }}
                       >
                         Run Pipeline
@@ -320,11 +328,11 @@ const ICPListPage: React.FC = () => {
                       </span>
                     </div>
                   )}
-                  {size && (
+                  {empRange && (
                     <div className="rc-icp-row">
                       <span className="rc-icp-key">Company Size</span>
                       <span className="rc-icp-val">
-                        {size.employees_min?.toLocaleString()}–{size.employees_max?.toLocaleString()} employees
+                        {empRange.min?.toLocaleString()}–{empRange.max?.toLocaleString()} employees
                       </span>
                     </div>
                   )}
@@ -382,7 +390,7 @@ const ICPListPage: React.FC = () => {
             <Button type="primary" onClick={() => {
               const icpId = selectedICP?.id;
               setSelectedICP(null);
-              if (icpId) handleRunPipeline(icpId);
+              if (icpId) openRunModal(icpId);
             }}>
               Run Pipeline
             </Button>
@@ -391,14 +399,15 @@ const ICPListPage: React.FC = () => {
       >
         {selectedICP && (() => {
           const cfg = selectedICP.config as any;
-          const offerings = cfg?.target_offering || cfg?.offering;
-          const regions = cfg?.regions;
-          const industries = cfg?.industry_types || cfg?.industry;
-          const size = cfg?.company_size || cfg?.size;
-          const tech = cfg?.technology_maturity;
-          const infra = cfg?.infrastructure_readiness;
-          const drivers = cfg?.digital_transformation_drivers;
-          const leadership = cfg?.leadership_traits;
+          const fd = cfg?.firmographic_details || {};
+          const offerings = cfg?.target_capability?.offerings || cfg?.target_offering || cfg?.offering;
+          const regions = fd?.geography || cfg?.regions;
+          const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
+          const empRange = fd?.employee_range;
+          const revRange = fd?.revenue_range;
+          const leadership = cfg?.authority_roles || cfg?.leadership_traits;
+          const urgencySignals = cfg?.urgency_signals?.signals || [];
+          const budgetSignals = cfg?.budget_signals?.signals || [];
 
           return (
             <div>
@@ -423,42 +432,62 @@ const ICPListPage: React.FC = () => {
                   ).join(', ') || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Employees">
-                  {size?.employees_min?.toLocaleString()}–{size?.employees_max?.toLocaleString()}
+                  {empRange ? `${empRange.min?.toLocaleString()}–${empRange.max?.toLocaleString()}` : '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Revenue">
-                  {size?.revenue_currency} {size?.revenue_min?.toLocaleString()}–{size?.revenue_max?.toLocaleString()}
+                  {revRange ? `${revRange.currency || 'USD'} ${revRange.min?.toLocaleString()}–${revRange.max?.toLocaleString()}` : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Tech Signals (Positive)">
-                  {tech?.signals?.join(', ') || '—'}
+                <Descriptions.Item label="Urgency Signals" span={2}>
+                  {urgencySignals.length > 0 ? urgencySignals.join(', ') : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Tech Signals (Negative)">
-                  {tech?.negative_signals?.join(', ') || '—'}
+                <Descriptions.Item label="Budget Signals" span={2}>
+                  {budgetSignals.length > 0 ? budgetSignals.join(', ') : '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Infrastructure" span={2}>
-                  {infra?.indicators?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Growth Triggers">
-                  {drivers?.growth_triggers?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Operational Pains">
-                  {drivers?.operational_pains?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Competitive Pressures">
-                  {drivers?.competitive_pressures?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Strategic Initiatives">
-                  {drivers?.strategic_initiatives?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Target Roles">
+                <Descriptions.Item label="Target Roles" span={2}>
                   {leadership?.target_roles?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Behavioral Traits">
-                  {leadership?.behavioral_traits?.join(', ') || '—'}
                 </Descriptions.Item>
               </Descriptions>
             </div>
           );
         })()}
+      </Modal>
+
+      {/* Run Pipeline Modal */}
+      <Modal
+        title="Run Pipeline"
+        open={!!runModalIcpId}
+        onCancel={() => setRunModalIcpId(null)}
+        width={420}
+        footer={
+          <Space>
+            <Button onClick={() => setRunModalIcpId(null)}>Cancel</Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                if (runModalIcpId) {
+                  handleRunPipeline(runModalIcpId);
+                  setRunModalIcpId(null);
+                }
+              }}
+            >
+              Run Pipeline
+            </Button>
+          </Space>
+        }
+      >
+        <div style={{ padding: '8px 0', fontSize: 13, color: 'var(--g600)', lineHeight: 1.8 }}>
+          <p style={{ marginBottom: 12 }}>The pipeline runs through 5 stages:</p>
+          <ol style={{ paddingLeft: 20, margin: 0 }}>
+            <li>Industry Discovery (automatic)</li>
+            <li>Firmographic Fit Check (automatic)</li>
+            <li>Budget &amp; Urgency Signal Research</li>
+            <li>Contact Discovery (automatic)</li>
+            <li>Final Scoring &amp; Ranking</li>
+          </ol>
+          <p style={{ marginTop: 12, fontSize: 12, color: 'var(--g500)' }}>
+            You will review and select companies between stages.
+          </p>
+        </div>
       </Modal>
 
       {/* Import from Excel Modal */}
@@ -491,8 +520,8 @@ const ICPListPage: React.FC = () => {
           <div>
             <div style={{ marginBottom: 20 }}>
               <p style={{ color: 'var(--g600)', fontSize: 13, margin: '0 0 12px' }}>
-                Download the template, fill in your ICP data across the 8 sheets, and upload the completed file.
-                Each sheet uses an "ICP Name" column to support multiple ICPs in a single file.
+                Download the template, fill in your ICP data, and upload the completed file.
+                The template has a simple Field/Value format matching the search criteria form.
               </p>
               <Button
                 icon={<DownloadOutlined />}
@@ -578,30 +607,34 @@ const ICPListPage: React.FC = () => {
                         {icp.description || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Offerings" span={2}>
-                        {(icp.config as any)?.target_offering?.join(', ') || '—'}
+                        {(icp.config as any)?.target_capability?.offerings?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Countries">
-                        {(icp.config as any)?.regions?.countries?.join(', ') || '—'}
+                        {(icp.config as any)?.firmographic_details?.geography?.countries?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Priority Areas">
-                        {(icp.config as any)?.regions?.priority_areas?.join(', ') || '—'}
+                        {(icp.config as any)?.firmographic_details?.geography?.priority_areas?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Industries" span={2}>
-                        {(icp.config as any)?.industry_types?.map((i: any) =>
+                        {(icp.config as any)?.firmographic_details?.industry_types?.map((i: any) =>
                           `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`
                         ).join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Employees">
-                        {(icp.config as any)?.company_size?.employees_min}–{(icp.config as any)?.company_size?.employees_max}
+                        {(icp.config as any)?.firmographic_details?.employee_range?.min?.toLocaleString()}–{(icp.config as any)?.firmographic_details?.employee_range?.max?.toLocaleString()}
                       </Descriptions.Item>
                       <Descriptions.Item label="Revenue">
-                        {(icp.config as any)?.company_size?.revenue_currency} {((icp.config as any)?.company_size?.revenue_min / 1000000).toFixed(0)}M–{((icp.config as any)?.company_size?.revenue_max / 1000000).toFixed(0)}M
+                        {(icp.config as any)?.firmographic_details?.revenue_range?.currency || 'USD'}{' '}
+                        {(icp.config as any)?.firmographic_details?.revenue_range?.min?.toLocaleString()}–{(icp.config as any)?.firmographic_details?.revenue_range?.max?.toLocaleString()}
                       </Descriptions.Item>
-                      <Descriptions.Item label="Tech Signals" span={2}>
-                        {(icp.config as any)?.technology_maturity?.signals?.join(', ') || '—'}
+                      <Descriptions.Item label="Urgency Signals" span={2}>
+                        {(icp.config as any)?.urgency_signals?.signals?.join(', ') || '—'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Budget Signals" span={2}>
+                        {(icp.config as any)?.budget_signals?.signals?.join(', ') || '—'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Target Roles" span={2}>
-                        {(icp.config as any)?.leadership_traits?.target_roles?.join(', ') || '—'}
+                        {(icp.config as any)?.authority_roles?.target_roles?.join(', ') || '—'}
                       </Descriptions.Item>
                     </Descriptions>
                   </div>

@@ -1,6 +1,6 @@
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,8 +9,9 @@ from typing import List
 
 from app.db.session import get_db
 from app.models.icp import ICPConfig
-from app.schemas.icp import ICPConfigCreate, ICPConfigUpdate, ICPConfigResponse
+from app.schemas.icp import ICPConfigCreate, ICPConfigUpdate, ICPConfigResponse, ICPGenerateRequest, ICPGenerateResponse
 from app.services.icp_import_service import generate_icp_template, parse_icp_excel
+from app.services.icp_generation_service import generate_icp_config_async, extract_text_from_file
 
 router = APIRouter(prefix="/icp", tags=["ICP Configuration"])
 
@@ -36,6 +37,57 @@ async def parse_icp_upload(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(e)}")
     return results
+
+
+@router.post("/generate", response_model=ICPGenerateResponse)
+async def generate_icp(request: ICPGenerateRequest):
+    if not request.description or len(request.description.strip()) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Description must be at least 20 characters long",
+        )
+    try:
+        result = await generate_icp_config_async(request.description.strip())
+        return ICPGenerateResponse(
+            name=result.get("name", "AI Generated ICP"),
+            description=result.get("description"),
+            config=result["config"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse AI response: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
+
+
+@router.post("/generate-from-file", response_model=ICPGenerateResponse)
+async def generate_icp_from_file(
+    file: UploadFile = File(...),
+    description: str = Form(""),
+):
+    """Generate ICP config from an uploaded file (PDF, DOCX, XLSX, TXT, CSV) and optional description."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    contents = await file.read()
+    try:
+        file_text = extract_text_from_file(contents, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not file_text and not description.strip():
+        raise HTTPException(status_code=400, detail="File contains no text and no description provided")
+
+    try:
+        result = await generate_icp_config_async(description.strip(), file_text=file_text)
+        return ICPGenerateResponse(
+            name=result.get("name", "AI Generated ICP"),
+            description=result.get("description"),
+            config=result["config"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse AI response: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
 
 
 @router.post("", response_model=ICPConfigResponse)

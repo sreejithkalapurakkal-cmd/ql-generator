@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input } from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress } from 'antd';
+import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
-import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun } from '../api/pipelineApi';
+import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus } from '../api/pipelineApi';
 import { PipelineRun } from '../types';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
@@ -36,6 +36,29 @@ const DashboardPage: React.FC = () => {
     refreshRuns();
   }, []);
 
+  const runsList = Array.isArray(runs) ? runs : [];
+
+  // Poll for progress on running pipelines
+  const hasRunning = runsList.some((r) => r.status === 'running');
+  useEffect(() => {
+    if (!hasRunning) return;
+    const interval = setInterval(() => {
+      const runningRuns = runsList.filter((r) => r.status === 'running');
+      runningRuns.forEach((r) => {
+        getPipelineStatus(r.id).then((res) => {
+          setRuns((prev) =>
+            prev.map((existing) => (existing.id === r.id ? res.data : existing))
+          );
+          // If status changed from running, do a full refresh
+          if (res.data.status !== 'running') {
+            refreshRuns();
+          }
+        }).catch(() => {});
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [hasRunning, runsList]);
+
   const handleDeleteRun = async (runId: string) => {
     try {
       await deletePipelineRun(runId);
@@ -45,8 +68,6 @@ const DashboardPage: React.FC = () => {
       message.error('Failed to delete search result');
     }
   };
-
-  const runsList = Array.isArray(runs) ? runs : [];
   const completedRuns = runsList.filter((r) => r.status === 'completed');
   const totalCompanies = completedRuns.reduce((s, r) => s + r.companies_found, 0);
   const totalContacts = completedRuns.reduce((s, r) => s + r.contacts_found, 0);
@@ -91,6 +112,8 @@ const DashboardPage: React.FC = () => {
     running: 'processing',
     completed: 'success',
     failed: 'error',
+    awaiting_review: 'warning',
+    cancelled: 'default',
   };
 
   const openStatsModal = async (tile: TileKey) => {
@@ -136,6 +159,9 @@ const DashboardPage: React.FC = () => {
           render: (_: unknown, r: PipelineRun) => r.status === 'completed' ? (
             <a onClick={() => { setStatsModalOpen(false); navigate(`/leads/${r.id}`); }}
               style={{ color: 'var(--purple)', cursor: 'pointer', fontSize: 12 }}>View →</a>
+          ) : r.status === 'awaiting_review' ? (
+            <a onClick={() => { setStatsModalOpen(false); navigate(`/pipeline/${r.id}`); }}
+              style={{ color: 'var(--orange)', cursor: 'pointer', fontSize: 12 }}>Review →</a>
           ) : null,
         },
       ];
@@ -250,7 +276,7 @@ const DashboardPage: React.FC = () => {
               style={{ maxWidth: 320, width: 280 }}
             />
             <div style={{ display: 'flex', gap: 6 }}>
-              {(['all', 'completed', 'running', 'failed'] as const).map((status) => (
+              {(['all', 'completed', 'running', 'cancelled', 'failed'] as const).map((status) => (
                 <div
                   key={status}
                   onClick={() => setStatusFilter(status)}
@@ -294,7 +320,11 @@ const DashboardPage: React.FC = () => {
                 style={run.status === 'failed' ? { cursor: 'default' } : {}}
                 onClick={() => {
                   if (run.status === 'completed') navigate(`/leads/${run.id}`);
-                  else if (run.status === 'running') navigate(`/pipeline/${run.id}`);
+                  else if (run.status === 'running' || run.status === 'awaiting_review') navigate(`/pipeline/${run.id}`);
+                  else if (run.status === 'cancelled') {
+                    if (run.companies_found > 0) navigate(`/leads/${run.id}`);
+                    else navigate(`/pipeline/${run.id}`);
+                  }
                 }}
               >
                 {/* Header: name + status badge */}
@@ -330,22 +360,72 @@ const DashboardPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Mini pipeline funnel for completed/review/cancelled runs */}
+                {['completed', 'awaiting_review', 'cancelled'].includes(run.status) &&
+                  run.stage_details?.total_discovered != null && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '0 12px 10px',
+                    fontSize: 11,
+                    color: 'var(--g500)',
+                    fontWeight: 500,
+                  }}>
+                    <span style={{ fontWeight: 700, color: 'var(--g700)' }}>
+                      {run.stage_details.total_discovered}
+                    </span>
+                    discovered
+                    <span style={{ color: 'var(--g300)' }}>&rsaquo;</span>
+                    <span style={{ fontWeight: 700, color: 'var(--g700)' }}>
+                      {run.stage_details.pre_filter_passed ?? '?'}
+                    </span>
+                    filtered
+                    <span style={{ color: 'var(--g300)' }}>&rsaquo;</span>
+                    <span style={{ fontWeight: 700, color: 'var(--purple)' }}>
+                      {run.stage_details.promoted_count ?? '?'}
+                    </span>
+                    promoted
+                  </div>
+                )}
+
+                {/* Progress indicator for running pipelines */}
+                {run.status === 'running' && run.stage_details?.current_company_index != null && (
+                  <div style={{ padding: '0 12px 8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: 'var(--g500)' }}>
+                        <LoadingOutlined style={{ marginRight: 4 }} />
+                        {run.stage_details.current_company_name || 'Processing...'}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--g400)' }}>
+                        {run.stage_details.current_company_index}/{run.stage_details.total_companies_in_stage}
+                      </span>
+                    </div>
+                    <Progress
+                      percent={Math.round(((run.stage_details.current_company_index || 0) / (run.stage_details.total_companies_in_stage || 1)) * 100)}
+                      size="small"
+                      showInfo={false}
+                      strokeColor="var(--purple, #722ed1)"
+                    />
+                  </div>
+                )}
+
                 {/* ICP details */}
                 {run.icp_config && (
                   <div className="rc-icp-block">
-                    {run.icp_config.regions?.countries && run.icp_config.regions.countries.length > 0 && (
+                    {run.icp_config.firmographic_details?.geography?.countries && run.icp_config.firmographic_details.geography.countries.length > 0 && (
                       <div className="rc-icp-row">
                         <span className="rc-icp-key">📍 Regions</span>
                         <span className="rc-icp-val">
-                          {run.icp_config.regions.countries.slice(0, 3).join(', ')}
+                          {run.icp_config.firmographic_details.geography.countries.slice(0, 3).join(', ')}
                         </span>
                       </div>
                     )}
-                    {run.icp_config.industry_types && run.icp_config.industry_types.length > 0 && (
+                    {run.icp_config.firmographic_details?.industry_types && run.icp_config.firmographic_details.industry_types.length > 0 && (
                       <div className="rc-icp-row">
                         <span className="rc-icp-key">🏭 Industries</span>
                         <span className="rc-icp-val">
-                          {run.icp_config.industry_types.map(i => i.vertical).slice(0, 3).join(', ')}
+                          {run.icp_config.firmographic_details.industry_types.map((i: { vertical: string }) => i.vertical).slice(0, 3).join(', ')}
                         </span>
                       </div>
                     )}
@@ -373,7 +453,7 @@ const DashboardPage: React.FC = () => {
                     >
                       ✏ Edit Search
                     </Button>
-                    {(run.status === 'completed' || run.status === 'failed') && (
+                    {(run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') && (
                       <Popconfirm
                         title="Delete this search result?"
                         description="This will permanently remove all companies, contacts, and scores from this run."
@@ -400,6 +480,14 @@ const DashboardPage: React.FC = () => {
                   )}
                   {run.status === 'running' && (
                     <span className="rc-view-link" style={{ color: 'var(--orange)' }}>View Progress →</span>
+                  )}
+                  {run.status === 'awaiting_review' && (
+                    <span className="rc-view-link" style={{ color: 'var(--orange)' }}>Review Companies →</span>
+                  )}
+                  {run.status === 'cancelled' && (
+                    <span className="rc-view-link" style={{ color: 'var(--g500)' }}>
+                      {run.companies_found > 0 ? 'View Partial Results →' : 'Cancelled'}
+                    </span>
                   )}
                 </div>
               </div>
@@ -452,6 +540,7 @@ const DashboardPage: React.FC = () => {
               <Tag color="success">{completedRuns.length} Completed</Tag>
               <Tag color="processing">{runsList.filter(r => r.status === 'running').length} Running</Tag>
               <Tag color="error">{runsList.filter(r => r.status === 'failed').length} Failed</Tag>
+              <Tag>{runsList.filter(r => r.status === 'cancelled').length} Cancelled</Tag>
               <Tag>{runsList.filter(r => r.status === 'pending').length} Pending</Tag>
             </div>
             <Table

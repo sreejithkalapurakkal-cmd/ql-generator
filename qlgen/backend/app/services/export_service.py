@@ -15,7 +15,7 @@ async def _fetch_companies(run_id: UUID, db: AsyncSession):
     result = await db.execute(
         select(Company)
         .where(Company.pipeline_run_id == run_id)
-        .options(selectinload(Company.contacts), selectinload(Company.bant_score))
+        .options(selectinload(Company.contacts))
         .order_by(Company.name)
     )
     return result.scalars().unique().all()
@@ -31,7 +31,7 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
     headers = [
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
-        "Phone", "BANT Score",
+        "Phone", "Final Score",
     ]
 
     header_fill = PatternFill(start_color="1F4E79", fill_type="solid")
@@ -46,7 +46,7 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
     row_num = 2
     serial = 1
     for company in companies:
-        bant_total = company.bant_score.total_score if company.bant_score else None
+        score_display = company.final_score if company.final_score is not None else "N/A"
         city_str = ", ".join(filter(None, [company.city, company.state_region, company.country]))
 
         if company.contacts:
@@ -60,7 +60,7 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
                 ws.cell(row=row_num, column=7, value=contact.linkedin_url)
                 ws.cell(row=row_num, column=8, value=contact.email)
                 ws.cell(row=row_num, column=9, value=contact.phone)
-                ws.cell(row=row_num, column=10, value=bant_total or "N/A")
+                ws.cell(row=row_num, column=10, value=score_display)
                 serial += 1
                 row_num += 1
         else:
@@ -68,7 +68,7 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
             ws.cell(row=row_num, column=2, value=company.name)
             ws.cell(row=row_num, column=3, value=company.website)
             ws.cell(row=row_num, column=4, value=city_str)
-            ws.cell(row=row_num, column=10, value=bant_total or "N/A")
+            ws.cell(row=row_num, column=10, value=score_display)
             serial += 1
             row_num += 1
 
@@ -97,12 +97,12 @@ async def generate_csv(run_id: UUID, db: AsyncSession) -> BytesIO:
     writer.writerow([
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
-        "Phone", "BANT Score",
+        "Phone", "Final Score",
     ])
 
     serial = 1
     for company in companies:
-        bant_total = company.bant_score.total_score if company.bant_score else "N/A"
+        score_display = company.final_score if company.final_score is not None else "N/A"
         city_str = ", ".join(filter(None, [company.city, company.state_region, company.country]))
 
         if company.contacts:
@@ -110,13 +110,13 @@ async def generate_csv(run_id: UUID, db: AsyncSession) -> BytesIO:
                 writer.writerow([
                     serial, company.name, company.website, city_str,
                     contact.full_name, contact.designation, contact.linkedin_url,
-                    contact.email, contact.phone, bant_total,
+                    contact.email, contact.phone, score_display,
                 ])
                 serial += 1
         else:
             writer.writerow([
                 serial, company.name, company.website, city_str,
-                "", "", "", "", "", bant_total,
+                "", "", "", "", "", score_display,
             ])
             serial += 1
 

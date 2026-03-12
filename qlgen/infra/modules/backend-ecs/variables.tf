@@ -43,3 +43,8 @@ variable "api_keys_secret_arn" {
 variable "db_password_secret_arn" {
   type = string
 }
+
+variable "cors_allowed_origins" {
+  type        = string
+  description = "Comma-separated list of allowed CORS origins"
+}

@@ -167,6 +167,7 @@ resource "aws_ecs_task_definition" "backend" {
     }]
 
     environment = [
+      { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
       { name = "AWS_REGION", value = var.aws_region },
       { name = "BEDROCK_MODEL_ID", value = "us.anthropic.claude-sonnet-4-20250514-v1:0" },
       { name = "DATABASE_URL", value = "postgresql+asyncpg://${var.db_username}:${var.db_password}@${var.db_endpoint}/qlgen" },
