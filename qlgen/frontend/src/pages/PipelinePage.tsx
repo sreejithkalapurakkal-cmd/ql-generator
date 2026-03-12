@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
   Card, Steps, Result, Button, Typography, Tag, Timeline, Badge, Table,
-  Checkbox, message, Collapse, Tooltip, Popconfirm, Radio, Space, Drawer,
+  Checkbox, message, Collapse, Tooltip, Popconfirm, Radio, Space, Drawer, Tabs,
 } from 'antd';
 import type { RadioChangeEvent } from 'antd';
 import {
@@ -87,6 +87,439 @@ const DimensionTags: React.FC<{ rawData: Record<string, unknown> | null | undefi
         <div style={{ fontSize: 11, color: 'var(--g500)', marginTop: 4 }}>
           {matchedCount} of {rendered.length} dimensions matched
         </div>
+      )}
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════
+// Live Company Dashboard (shown in Companies tab during running)
+// ════════════════════════════════════════════════════════════════
+
+const STAGE_LABELS: Record<string, string> = {
+  industry_discovery: 'Industry Discovery',
+  firmographic_fit: 'Firmographic Fit',
+  budget_signals: 'Budget Signals',
+  urgency_signals: 'Urgency Signals',
+  contact_discovery: 'Contact Discovery',
+  final_scoring: 'Final Scoring',
+};
+
+// Stages that process companies one-by-one (emit company_start SSE events)
+const PER_COMPANY_STAGES = new Set(['budget_signals', 'urgency_signals', 'contact_discovery']);
+
+interface LiveCompanyDashboardProps {
+  companies: Company[];
+  currentCompany: { name: string; index: number; total: number; stage: string } | null;
+  stageFilter: string;
+  onStageFilterChange: (stage: string) => void;
+}
+
+const LiveCompanyDashboard: React.FC<LiveCompanyDashboardProps> = ({
+  companies,
+  currentCompany,
+  stageFilter,
+  onStageFilterChange,
+}) => {
+  // Derive which stages have data
+  const stagesWithData = React.useMemo(() => {
+    const seen = new Set<string>();
+    companies.forEach((c) => {
+      (c.stage_results || []).forEach((sr) => seen.add(sr.stage));
+    });
+    // Always include industry_discovery if there are any companies
+    if (companies.length > 0) seen.add('industry_discovery');
+    const order = ['industry_discovery', 'firmographic_fit', 'budget_signals', 'urgency_signals', 'contact_discovery', 'final_scoring'];
+    return order.filter((s) => seen.has(s));
+  }, [companies]);
+
+  // ── "All Companies" view ──────────────────────────────────────
+  const allViewColumns = React.useMemo(() => {
+    const hasICP = companies.some((c) => c.icp_match_score != null);
+    const hasBudget = companies.some((c) => c.budget_signal_score != null);
+    const hasUrgency = companies.some((c) => c.urgency_signal_score != null);
+    const hasContacts = companies.some((c) => c.contacts && c.contacts.length > 0);
+
+    const cols: object[] = [
+      {
+        title: 'Company',
+        dataIndex: 'name',
+        width: 180,
+        render: (name: string, record: Company) => (
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{name}</div>
+            {record.website && (
+              <a
+                href={record.website.startsWith('http') ? record.website : `https://${record.website}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: 11, color: 'var(--purple)' }}
+              >
+                {record.website}
+              </a>
+            )}
+          </div>
+        ),
+      },
+      {
+        title: 'Stage',
+        dataIndex: 'current_stage',
+        width: 140,
+        render: (stage: string | null) => {
+          if (!stage) return <Tag style={{ fontSize: 11 }}>Discovered</Tag>;
+          const color = stageColors[stage] || '#8c8c8c';
+          return (
+            <Tag style={{ fontSize: 11, color, borderColor: color, background: `${color}18` }}>
+              {STAGE_LABELS[stage] || stage.replace(/_/g, ' ')}
+            </Tag>
+          );
+        },
+      },
+    ];
+
+    if (hasICP) {
+      cols.push({
+        title: 'ICP Score',
+        dataIndex: 'icp_match_score',
+        width: 90,
+        sorter: (a: Company, b: Company) => (a.icp_match_score || 0) - (b.icp_match_score || 0),
+        render: (score: number | null) => {
+          if (score == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+          const color = score >= 70 ? '#52c41a' : score >= 50 ? '#faad14' : '#ff4d4f';
+          return <span style={{ fontWeight: 700, color }}>{Math.round(score)}</span>;
+        },
+      });
+    }
+
+    if (hasBudget) {
+      cols.push({
+        title: 'Budget',
+        dataIndex: 'budget_signal_score',
+        width: 80,
+        render: (score: number | null) => {
+          if (score == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+          const color = score >= 70 ? '#52c41a' : score >= 50 ? '#faad14' : '#ff4d4f';
+          return <span style={{ fontWeight: 600, color }}>{Math.round(score)}</span>;
+        },
+      });
+    }
+
+    if (hasUrgency) {
+      cols.push({
+        title: 'Urgency',
+        dataIndex: 'urgency_signal_score',
+        width: 80,
+        render: (score: number | null) => {
+          if (score == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+          const color = score >= 70 ? '#52c41a' : score >= 50 ? '#faad14' : '#ff4d4f';
+          return <span style={{ fontWeight: 600, color }}>{Math.round(score)}</span>;
+        },
+      });
+    }
+
+    if (hasContacts) {
+      cols.push({
+        title: 'Contacts',
+        key: 'contacts_count',
+        width: 80,
+        render: (_: unknown, record: Company) => {
+          const count = record.contacts?.length || 0;
+          return count > 0 ? <Tag color="green" style={{ fontSize: 11 }}>{count}</Tag> : <span style={{ color: 'var(--g300)' }}>—</span>;
+        },
+      });
+    }
+
+    cols.push({
+      title: 'Status',
+      key: 'status',
+      width: 120,
+      render: (_: unknown, record: Company) => {
+        const isInProgress = currentCompany?.name === record.name;
+        if (isInProgress) {
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--purple)' }}>
+              <LoadingOutlined style={{ fontSize: 12 }} />
+              <span style={{ fontSize: 12, fontWeight: 600 }}>In Progress</span>
+            </div>
+          );
+        }
+        const latestResult = (record.stage_results || []).slice().reverse()[0];
+        if (!latestResult) {
+          return <Tag style={{ fontSize: 11, color: 'var(--g400)', borderColor: 'var(--g200)' }}>Pending</Tag>;
+        }
+        if (latestResult.status === 'passed') {
+          return <Tag color="success" style={{ fontSize: 11 }}>Passed</Tag>;
+        }
+        if (latestResult.status === 'failed') {
+          return <Tag color="error" style={{ fontSize: 11 }}>Failed</Tag>;
+        }
+        return <Tag style={{ fontSize: 11 }}>{latestResult.status}</Tag>;
+      },
+    });
+
+    return cols;
+  }, [companies, currentCompany]);
+
+  // ── "By Stage" view ───────────────────────────────────────────
+  const renderByStage = () => {
+    const selectedStage = stageFilter;
+    const isPerCompany = PER_COMPANY_STAGES.has(selectedStage);
+
+    // Partition companies
+    const inProgress: Company[] = [];
+    const processed: Company[] = [];
+    const pending: Company[] = [];
+
+    companies.forEach((c) => {
+      const isActiveCompany = isPerCompany && currentCompany?.name === c.name;
+      const hasResult = (c.stage_results || []).some((sr) => sr.stage === selectedStage);
+
+      if (isActiveCompany) {
+        inProgress.push(c);
+      } else if (hasResult) {
+        processed.push(c);
+      } else {
+        pending.push(c);
+      }
+    });
+
+    const stageLabel = STAGE_LABELS[selectedStage] || selectedStage.replace(/_/g, ' ');
+
+    // Score column for the selected stage
+    const getStageScore = (c: Company): number | null => {
+      const sr = (c.stage_results || []).find((r) => r.stage === selectedStage);
+      return sr?.score ?? null;
+    };
+    const getStageStatus = (c: Company): string | null => {
+      const sr = (c.stage_results || []).find((r) => r.stage === selectedStage);
+      return sr?.status ?? null;
+    };
+    const getStageReasoning = (c: Company): string | null => {
+      const sr = (c.stage_results || []).find((r) => r.stage === selectedStage);
+      return sr?.reasoning ?? null;
+    };
+
+    const priorScoreCols = () => {
+      const cols: object[] = [];
+      if (selectedStage !== 'industry_discovery') {
+        cols.push({
+          title: 'ICP Score',
+          key: 'icp',
+          width: 90,
+          render: (_: unknown, record: Company) => {
+            const s = record.icp_match_score;
+            if (s == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+            const color = s >= 70 ? '#52c41a' : s >= 50 ? '#faad14' : '#ff4d4f';
+            return <span style={{ fontWeight: 600, color }}>{Math.round(s)}</span>;
+          },
+        });
+      }
+      if (['urgency_signals', 'contact_discovery', 'final_scoring'].includes(selectedStage)) {
+        cols.push({
+          title: 'Budget',
+          key: 'budget',
+          width: 80,
+          render: (_: unknown, record: Company) => {
+            const s = record.budget_signal_score;
+            if (s == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+            const color = s >= 70 ? '#52c41a' : s >= 50 ? '#faad14' : '#ff4d4f';
+            return <span style={{ fontWeight: 600, color }}>{Math.round(s)}</span>;
+          },
+        });
+      }
+      if (['contact_discovery', 'final_scoring'].includes(selectedStage)) {
+        cols.push({
+          title: 'Urgency',
+          key: 'urgency',
+          width: 80,
+          render: (_: unknown, record: Company) => {
+            const s = record.urgency_signal_score;
+            if (s == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+            const color = s >= 70 ? '#52c41a' : s >= 50 ? '#faad14' : '#ff4d4f';
+            return <span style={{ fontWeight: 600, color }}>{Math.round(s)}</span>;
+          },
+        });
+      }
+      return cols;
+    };
+
+    const baseCompanyCol = {
+      title: 'Company',
+      dataIndex: 'name',
+      width: 160,
+      render: (name: string, record: Company) => (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{name}</div>
+          {record.website && (
+            <a
+              href={record.website.startsWith('http') ? record.website : `https://${record.website}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 11, color: 'var(--purple)' }}
+            >
+              {record.website}
+            </a>
+          )}
+        </div>
+      ),
+    };
+
+    const stageScoreCol = {
+      title: `${stageLabel} Score`,
+      key: 'stage_score',
+      width: 120,
+      render: (_: unknown, record: Company) => {
+        const score = getStageScore(record);
+        const status = getStageStatus(record);
+        const reasoning = getStageReasoning(record);
+        if (score == null) return <span style={{ color: 'var(--g300)' }}>—</span>;
+        const color = score >= 70 ? '#52c41a' : score >= 50 ? '#faad14' : '#ff4d4f';
+        return (
+          <Tooltip title={reasoning || undefined}>
+            <span>
+              <span style={{ fontWeight: 700, color }}>{Math.round(score)}</span>
+              {' '}
+              {status === 'passed'
+                ? <Tag color="success" style={{ fontSize: 10 }}>Passed</Tag>
+                : <Tag color="error" style={{ fontSize: 10 }}>Failed</Tag>}
+            </span>
+          </Tooltip>
+        );
+      },
+    };
+
+    const collapseItems = [];
+
+    // In Progress section (only for per-company stages)
+    if (isPerCompany && inProgress.length > 0) {
+      collapseItems.push({
+        key: 'in-progress',
+        label: (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <LoadingOutlined style={{ color: 'var(--purple)' }} />
+            <span style={{ fontWeight: 600, color: 'var(--purple)' }}>In Progress (1)</span>
+          </div>
+        ),
+        children: (
+          <Table
+            columns={[baseCompanyCol, ...priorScoreCols()]}
+            dataSource={inProgress}
+            rowKey="id"
+            pagination={false}
+            size="small"
+            showHeader={true}
+          />
+        ),
+      });
+    }
+
+    // Processed section
+    collapseItems.push({
+      key: 'processed',
+      label: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <CheckCircleOutlined style={{ color: '#52c41a' }} />
+          <span style={{ fontWeight: 600 }}>Processed ({processed.length})</span>
+        </div>
+      ),
+      children: processed.length > 0 ? (
+        <Table
+          columns={[baseCompanyCol, ...priorScoreCols(), stageScoreCol]}
+          dataSource={processed}
+          rowKey="id"
+          pagination={false}
+          size="small"
+        />
+      ) : (
+        <div style={{ padding: '16px 0', color: 'var(--g400)', textAlign: 'center', fontSize: 13 }}>
+          No companies have completed this stage yet.
+        </div>
+      ),
+    });
+
+    // Pending section
+    if (pending.length > 0) {
+      collapseItems.push({
+        key: 'pending',
+        label: (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ClockCircleOutlined style={{ color: 'var(--g400)' }} />
+            <span style={{ fontWeight: 600, color: 'var(--g500)' }}>Pending ({pending.length})</span>
+          </div>
+        ),
+        children: (
+          <Table
+            columns={[baseCompanyCol, ...priorScoreCols()]}
+            dataSource={pending}
+            rowKey="id"
+            pagination={false}
+            size="small"
+            rowClassName={() => 'pending-company-row'}
+          />
+        ),
+      });
+    }
+
+    return (
+      <Collapse
+        defaultActiveKey={isPerCompany ? ['in-progress', 'processed'] : ['processed']}
+        items={collapseItems}
+        size="small"
+        style={{ background: 'transparent' }}
+      />
+    );
+  };
+
+  if (companies.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--g400)' }}>
+        Waiting for companies to be discovered...
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Stage filter strip */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        <Tag
+          color={stageFilter === 'all' ? 'purple' : undefined}
+          style={{ cursor: 'pointer', fontWeight: stageFilter === 'all' ? 600 : 400 }}
+          onClick={() => onStageFilterChange('all')}
+        >
+          All ({companies.length})
+        </Tag>
+        {stagesWithData.map((stage) => (
+          <Tag
+            key={stage}
+            color={stageFilter === stage ? 'purple' : undefined}
+            style={{
+              cursor: 'pointer',
+              fontWeight: stageFilter === stage ? 600 : 400,
+              borderColor: stageFilter === stage ? undefined : stageColors[stage],
+              color: stageFilter === stage ? undefined : stageColors[stage],
+            }}
+            onClick={() => onStageFilterChange(stage)}
+          >
+            {STAGE_LABELS[stage] || stage.replace(/_/g, ' ')}
+          </Tag>
+        ))}
+      </div>
+
+      {stageFilter === 'all' ? (
+        <Table
+          columns={allViewColumns as Parameters<typeof Table>[0]['columns']}
+          dataSource={companies}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          scroll={{ x: 500 }}
+          rowClassName={(record) =>
+            currentCompany?.name === record.name ? 'live-company-active-row' : ''
+          }
+        />
+      ) : (
+        renderByStage()
       )}
     </div>
   );
@@ -336,6 +769,11 @@ const PipelinePage: React.FC = () => {
   const isResizingRef = useRef(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(300);
+
+  // Live companies tab
+  const [liveCompanies, setLiveCompanies] = useState<Company[]>([]);
+  const [rightTab, setRightTab] = useState<'log' | 'companies'>('log');
+  const [stageFilter, setStageFilter] = useState<string>('all');
 
   // Stage history drawer
   const [viewingStageHistory, setViewingStageHistory] = useState<string | null>(null);
@@ -767,6 +1205,25 @@ const PipelinePage: React.FC = () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [runId, connectSSE, loadCompaniesForReview]);
+
+  // ════════════════════════════════════════
+  // Live companies polling (while running)
+  // ════════════════════════════════════════
+
+  useEffect(() => {
+    if (!runId || run?.status !== 'running') return;
+    const fetchCompanies = async () => {
+      try {
+        const res = await getCompaniesByStage(runId);
+        setLiveCompanies(res.data as Company[]);
+      } catch {
+        // Silently ignore polling errors
+      }
+    };
+    fetchCompanies();
+    const pollInterval = setInterval(fetchCompanies, 6000);
+    return () => clearInterval(pollInterval);
+  }, [runId, run?.status]);
 
   // ════════════════════════════════════════
   // Action Handlers
@@ -2028,13 +2485,22 @@ const PipelinePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Panel - Live Log */}
+        {/* Right Panel - Tabbed (Activity Log + Companies) */}
         <div className="prog-right">
-          <div className="prog-right-header">
-            <span className="log-title">AI Agent Reasoning</span>
+          <div className="prog-right-header" style={{ padding: 0, borderBottom: '1px solid var(--g200)' }}>
+            <Tabs
+              size="small"
+              activeKey={rightTab}
+              onChange={(k) => setRightTab(k as 'log' | 'companies')}
+              style={{ padding: '0 16px' }}
+              items={[
+                { key: 'log', label: 'Activity Log' },
+                { key: 'companies', label: `Companies (${liveCompanies.length})` },
+              ]}
+            />
           </div>
 
-          {/* Live Progress Summary */}
+          {/* Live Progress Summary — shown in both tabs */}
           {progressSummary.length > 0 && (
             <div style={{
               padding: '10px 20px',
@@ -2069,32 +2535,45 @@ const PipelinePage: React.FC = () => {
             </div>
           )}
 
-          <div className="prog-log-area" ref={logContainerRef}>
-            {mergedActivityLog.map((entry) => {
-              const timeStr = entry.timestamp.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-              });
+          {rightTab === 'log' && (
+            <div className="prog-log-area" ref={logContainerRef}>
+              {mergedActivityLog.map((entry) => {
+                const timeStr = entry.timestamp.toLocaleTimeString('en-US', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                  hour12: false,
+                });
 
-              const { tagClass, tagText } = getLogTagInfo(entry);
-              const logMsg = getLogMessage(entry);
+                const { tagClass, tagText } = getLogTagInfo(entry);
+                const logMsg = getLogMessage(entry);
 
-              return (
-                <div key={entry.id} className="log-entry">
-                  <div className="log-time">{timeStr}</div>
-                  <div className={`log-tag ${tagClass}`}>{tagText}</div>
-                  <div className="log-msg">{logMsg}</div>
+                return (
+                  <div key={entry.id} className="log-entry">
+                    <div className="log-time">{timeStr}</div>
+                    <div className={`log-tag ${tagClass}`}>{tagText}</div>
+                    <div className="log-msg">{logMsg}</div>
+                  </div>
+                );
+              })}
+              {mergedActivityLog.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--g400)' }}>
+                  Waiting for activity...
                 </div>
-              );
-            })}
-            {mergedActivityLog.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--g400)' }}>
-                Waiting for activity...
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
+
+          {rightTab === 'companies' && (
+            <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
+              <LiveCompanyDashboard
+                companies={liveCompanies}
+                currentCompany={currentCompany}
+                stageFilter={stageFilter}
+                onStageFilterChange={setStageFilter}
+              />
+            </div>
+          )}
         </div>
       </div>
     );

@@ -349,7 +349,9 @@ def create_pipeline_callback_handler(
 
 STAGE1_INDUSTRY_DISCOVERY_PROMPT = """You are a company discovery specialist. Your goal is to find the MAXIMUM number of companies
 matching the industry, vertical, and geography criteria. There is NO upper limit — find as
-many as possible. Quality and quantity both matter.
+many as possible. Aim for at least 500 companies in the initial discovery phase sticking to
+the basic search criteria of industry vertical and geography. Quality and quantity both matter.
+Do multiple iterations of search to find enough data.
 
 STEP 1 — LOCAL DATABASE:
 Call search_local_companies with the industry and country filters. This returns companies

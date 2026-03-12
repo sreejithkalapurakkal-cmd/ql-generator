@@ -187,7 +187,7 @@ const SignalDetailPanel: React.FC<{ company: Company }> = ({ company }) => {
                   {result.reasoning}
                 </div>
               )}
-              {result.evidence && (
+              {result.evidence != null && (
                 <div style={{ marginBottom: 10 }}>
                   <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, display: 'block' }}>
                     Evidence
@@ -477,7 +477,7 @@ const EvidenceDisplay: React.FC<{ evidence: unknown }> = ({ evidence }) => {
                 {matched ? 'Match' : 'No Match'}
               </Tag>
             </div>
-            {criterion.reasoning && (
+            {!!criterion.reasoning && (
               <Text style={{ color: 'var(--g600)', fontSize: 12 }}>{String(criterion.reasoning)}</Text>
             )}
           </div>
@@ -677,7 +677,7 @@ const StageCompanyList: React.FC<{ companies: Company[]; stageKey: string }> = (
       children: (
         <div>
           {/* Reasoning */}
-          {relevantResult?.reasoning && (
+          {!!relevantResult?.reasoning && (
             <div style={{
               background: 'var(--g50, #fafafa)', padding: '10px 14px',
               borderRadius: 6, fontSize: 12, color: 'var(--g700)',
@@ -690,7 +690,7 @@ const StageCompanyList: React.FC<{ companies: Company[]; stageKey: string }> = (
           )}
 
           {/* Evidence */}
-          {relevantResult?.evidence && (
+          {relevantResult?.evidence != null && (
             <div style={{ marginBottom: 10 }}>
               <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, display: 'block' }}>Evidence</Text>
               <EvidenceDisplay evidence={relevantResult.evidence} />

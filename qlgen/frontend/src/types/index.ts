@@ -58,6 +58,9 @@ export interface PipelineRun {
   error_log?: string | null;
   signal_mode?: string | null;
   signal_phase?: string | null;
+  pipeline_mode?: string | null;
+  match_strictness?: string | null;
+  estimated_duration_seconds?: number | null;
   stage_details?: {
     total_discovered?: number;
     pre_filter_passed?: number;
@@ -140,6 +143,7 @@ export interface Company {
   cached_from_run_id?: string | null;
   data_freshness?: string | null;
   stage_results?: CompanyStageResult[];
+  bant_score?: { total_score?: number } | null;
 }
 
 export interface StageSummary {

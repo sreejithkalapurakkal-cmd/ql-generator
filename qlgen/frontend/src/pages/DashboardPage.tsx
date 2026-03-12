@@ -413,19 +413,19 @@ const DashboardPage: React.FC = () => {
                 {/* ICP details */}
                 {run.icp_config && (
                   <div className="rc-icp-block">
-                    {run.icp_config.regions?.countries && run.icp_config.regions.countries.length > 0 && (
+                    {run.icp_config.firmographic_details?.geography?.countries && run.icp_config.firmographic_details.geography.countries.length > 0 && (
                       <div className="rc-icp-row">
                         <span className="rc-icp-key">📍 Regions</span>
                         <span className="rc-icp-val">
-                          {run.icp_config.regions.countries.slice(0, 3).join(', ')}
+                          {run.icp_config.firmographic_details.geography.countries.slice(0, 3).join(', ')}
                         </span>
                       </div>
                     )}
-                    {run.icp_config.industry_types && run.icp_config.industry_types.length > 0 && (
+                    {run.icp_config.firmographic_details?.industry_types && run.icp_config.firmographic_details.industry_types.length > 0 && (
                       <div className="rc-icp-row">
                         <span className="rc-icp-key">🏭 Industries</span>
                         <span className="rc-icp-val">
-                          {run.icp_config.industry_types.map(i => i.vertical).slice(0, 3).join(', ')}
+                          {run.icp_config.firmographic_details.industry_types.map((i: { vertical: string }) => i.vertical).slice(0, 3).join(', ')}
                         </span>
                       </div>
                     )}

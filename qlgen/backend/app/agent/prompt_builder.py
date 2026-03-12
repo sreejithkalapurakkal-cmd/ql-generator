@@ -163,7 +163,8 @@ def build_industry_discovery_prompt(icp: dict) -> str:
     regions_text = ", ".join(kw["regions"]) if kw["regions"] else "Global"
 
     return f"""Discover ALL companies matching the following industry, vertical, and geography criteria.
-There is NO upper limit on company count — find as many as possible.
+There is NO upper limit on company count — find as many as possible. Aim for atleast 500 companies
+without breaking the search criteria.
 
 INDUSTRY: {industry_text}
 SUB-VERTICALS: {sub_vert_text}

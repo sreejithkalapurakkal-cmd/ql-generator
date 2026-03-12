@@ -3,7 +3,7 @@ import { PipelineRun, PipelineLogEntry } from '../types';
 
 export const startPipeline = (data: {
   icp_config_id: string;
-  options?: { max_contacts_per_company?: number };
+  options?: { max_companies?: number; max_contacts_per_company?: number };
 }) => client.post<PipelineRun>('/pipeline/run', data);
 
 export const getPipelineStatus = (runId: string) =>
