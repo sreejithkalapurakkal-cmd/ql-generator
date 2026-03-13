@@ -1,4 +1,5 @@
 import client, { API_BASE } from './client';
+import { getAccessToken } from '../context/AuthContext';
 import { Company, StageSummaryResponse } from '../types';
 
 export const getLeadCompanies = (runId: string, params?: {
@@ -14,5 +15,7 @@ export const getDisqualifiedCompanies = (runId: string) =>
 export const getStageSummary = (runId: string) =>
   client.get<StageSummaryResponse>(`/leads/${runId}/stage-summary`);
 
-export const getExportUrl = (runId: string, format: 'xlsx' | 'csv' = 'xlsx') =>
-  `${API_BASE}/leads/${runId}/export?format=${format}`;
+export const getExportUrl = (runId: string, format: 'xlsx' | 'csv' = 'xlsx') => {
+  const token = getAccessToken();
+  return `${API_BASE}/leads/${runId}/export?format=${format}&token=${token}`;
+};

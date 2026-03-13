@@ -1,10 +1,14 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { Avatar, Dropdown, type MenuProps } from 'antd';
+import { UserOutlined, LogoutOutlined, TeamOutlined } from '@ant-design/icons';
+import { useAuth } from '../../context/AuthContext';
 
 
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, logout } = useAuth();
 
   const menuItems = [
     { key: '/welcome', icon: '✦', label: 'Home' },
@@ -13,11 +17,55 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { key: '/tools', icon: '⚙', label: 'Tools' },
   ];
 
+  // Add Users link for super_admin
+  if (user?.role === 'super_admin') {
+    menuItems.push({ key: '/admin/users', icon: '👥', label: 'Users' });
+  }
+
   // Don't highlight "Saved Searches" when on ICP form pages (new or edit)
   const isICPFormPage = location.pathname === '/icp/new' || location.pathname.match(/^\/icp\/[^/]+\/edit$/);
   const selectedKey = isICPFormPage
     ? null
     : menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/welcome');
+  };
+
+  const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      label: (
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ fontWeight: 500 }}>{user?.name || user?.email}</div>
+          <div style={{ fontSize: 12, color: '#888' }}>{user?.email}</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+            {user?.role === 'super_admin' ? 'Super Admin' : 'User'}
+          </div>
+        </div>
+      ),
+      disabled: true,
+    },
+    { type: 'divider' },
+    ...(user?.role === 'super_admin'
+      ? [
+          {
+            key: 'users',
+            icon: <TeamOutlined />,
+            label: 'Manage Users',
+            onClick: () => navigate('/admin/users'),
+          },
+          { type: 'divider' as const },
+        ]
+      : []),
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: 'Sign out',
+      onClick: handleLogout,
+    },
+  ];
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', overflowX: 'hidden' }}>
@@ -42,7 +90,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             ))}
           </div>
 
-          <div className="gnav-right">
+          <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div className="gnav-brand">
               <img
                 src="images/gadgeon.svg"
@@ -50,6 +98,15 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 style={{ height: '24px' }}
               />
             </div>
+            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+              <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {user?.picture_url ? (
+                  <Avatar size={32} src={user.picture_url} />
+                ) : (
+                  <Avatar size={32} icon={<UserOutlined />} style={{ background: '#5C2D8F' }} />
+                )}
+              </div>
+            </Dropdown>
           </div>
         </div>
       </nav>

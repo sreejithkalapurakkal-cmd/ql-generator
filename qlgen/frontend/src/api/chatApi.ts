@@ -1,4 +1,5 @@
 import client, { API_BASE } from './client';
+import { getAccessToken } from '../context/AuthContext';
 import type { ChatSession, ChatMessage, PageContext, RecommendationItem } from '../types';
 
 export function listChatSessions() {
@@ -41,9 +42,15 @@ export async function sendChatMessageStream(
   };
 
   try {
+    const token = getAccessToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const response = await fetch(`${API_BASE}/chat/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
+      credentials: 'include',
       body: JSON.stringify(body),
     });
 

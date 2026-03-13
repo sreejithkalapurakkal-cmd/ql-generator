@@ -39,6 +39,7 @@ import {
 } from '../api/pipelineApi';
 import { PipelineRun, PipelineLogEntry, Company } from '../types';
 import { API_BASE } from '../api/client';
+import { getAccessToken } from '../context/AuthContext';
 
 const { Text, Paragraph } = Typography;
 
@@ -514,7 +515,7 @@ const LiveCompanyDashboard: React.FC<LiveCompanyDashboardProps> = ({
           pagination={false}
           size="small"
           scroll={{ x: 500 }}
-          rowClassName={(record) =>
+          rowClassName={(record: any) =>
             currentCompany?.name === record.name ? 'live-company-active-row' : ''
           }
         />
@@ -875,7 +876,8 @@ const PipelinePage: React.FC = () => {
   // ════════════════════════════════════════
 
   const connectSSE = useCallback((targetRunId: string) => {
-    const es = new EventSource(`${API_BASE}/pipeline/${targetRunId}/stream`);
+    const token = getAccessToken();
+    const es = new EventSource(`${API_BASE}/pipeline/${targetRunId}/stream?token=${token}`);
     eventSourceRef.current = es;
 
     es.addEventListener('stage_update', (event) => {

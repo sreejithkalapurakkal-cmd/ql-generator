@@ -1,4 +1,5 @@
 import client from './client';
+import { getAccessToken } from '../context/AuthContext';
 import { ICPConfig } from '../types';
 
 export const createICP = (data: { name: string; description?: string; config: Record<string, unknown> }) =>
@@ -29,7 +30,8 @@ export const generateICPFromFile = (file: File, description?: string) => {
 
 export const getICPTemplateURL = () => {
   const base = client.defaults.baseURL || '/api/v1';
-  return `${base}/icp/template/download`;
+  const token = getAccessToken();
+  return `${base}/icp/template/download?token=${token}`;
 };
 
 export interface ParsedICP {

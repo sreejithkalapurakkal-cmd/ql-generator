@@ -5,7 +5,7 @@ import queue
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_db, async_session
 from app.models.chat_session import ChatSession
 from app.models.chat_message import ChatMessage
+from app.models.user import User
 from app.schemas.chat import (
     ChatMessageRequest,
     ChatMessageResponse,
@@ -23,6 +24,7 @@ from app.schemas.chat import (
     RecommendationItem,
 )
 from app.agent.copilot_agent import create_copilot_agent, create_copilot_callback_handler
+from app.auth.dependencies import get_current_user, decode_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -67,12 +69,29 @@ def _build_agent_prompt(
 
 
 @router.post("/send")
-async def send_chat_message(request: ChatMessageRequest):
+async def send_chat_message(request: ChatMessageRequest, http_request: Request):
     """Send a message and receive a streaming SSE response from the co-pilot agent."""
+    # Validate auth before entering generator
+    auth_header = http_request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = auth_header.split(" ", 1)[1]
+    payload = decode_token(token)
+    user_id_str = payload.get("sub")
+    if not user_id_str or payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     async def event_generator():
         try:
             async with async_session() as db:
+                # Verify user exists
+                from uuid import UUID as _UUID
+                user_result = await db.execute(select(User).where(User.id == _UUID(user_id_str)))
+                user = user_result.scalar_one_or_none()
+                if not user or not user.is_active:
+                    yield f"event: error\ndata: {json.dumps({'message': 'Unauthorized'})}\n\n"
+                    return
+
                 # Get or create session
                 session_id = request.session_id
                 if session_id:
@@ -90,6 +109,7 @@ async def send_chat_message(request: ChatMessageRequest):
                     chat_session = ChatSession(
                         title=request.message[:100],
                         page_context=request.page_context.model_dump() if request.page_context else None,
+                        user_id=user.id,
                     )
                     db.add(chat_session)
                     await db.flush()
@@ -229,7 +249,7 @@ async def send_chat_message(request: ChatMessageRequest):
 
 
 @router.get("/sessions")
-async def list_chat_sessions(db: AsyncSession = Depends(get_db)):
+async def list_chat_sessions(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """List all active chat sessions, most recent first."""
     result = await db.execute(
         select(ChatSession)
@@ -269,7 +289,7 @@ async def list_chat_sessions(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db)):
+async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """Get all messages for a chat session."""
     result = await db.execute(
         select(ChatSession).where(
@@ -302,7 +322,7 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """Soft-delete a chat session."""
     result = await db.execute(
         select(ChatSession).where(ChatSession.id == session_id)
@@ -317,7 +337,7 @@ async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db
 
 
 @router.post("/recommendations")
-async def get_recommendations(request: RecommendationsRequest):
+async def get_recommendations(request: RecommendationsRequest, _user: User = Depends(get_current_user)):
     """Get context-aware recommendation cards based on current page."""
     page_type = request.page_context.page_type if request.page_context else None
 
@@ -410,7 +430,7 @@ async def get_recommendations(request: RecommendationsRequest):
 
 
 @router.post("/embed-backfill")
-async def embed_backfill():
+async def embed_backfill(_user: User = Depends(get_current_user)):
     """Generate embeddings for all companies that don't have one yet."""
     from app.services.embedding_service import embed_all_companies
 
