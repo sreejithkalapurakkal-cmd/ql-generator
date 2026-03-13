@@ -247,23 +247,6 @@ const ICPConfigPage: React.FC = () => {
             tagInput={tagInput}
             setTagInput={setTagInput}
           />
-          <TagInputField
-            label="Priority Areas (States, Cities)"
-            field="priority_areas"
-            values={config.firmographic_details.geography.priority_areas}
-            onChange={(v) =>
-              setConfig((prev) => ({
-                ...prev,
-                firmographic_details: {
-                  ...prev.firmographic_details,
-                  geography: { ...prev.firmographic_details.geography, priority_areas: v },
-                },
-              }))
-            }
-            placeholder="e.g., California, New York"
-            tagInput={tagInput}
-            setTagInput={setTagInput}
-          />
 
           {/* Employee Range */}
           <Form.Item label="Employee Count Range">
@@ -585,9 +568,6 @@ const ICPConfigPage: React.FC = () => {
             </Descriptions.Item>
             <Descriptions.Item label="Countries">
               {config.firmographic_details.geography.countries.join(', ') || '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Priority Areas">
-              {config.firmographic_details.geography.priority_areas.join(', ') || '-'}
             </Descriptions.Item>
             <Descriptions.Item label="Employees">
               {config.firmographic_details.employee_range.min.toLocaleString()}

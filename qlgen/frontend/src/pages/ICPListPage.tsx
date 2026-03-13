@@ -231,143 +231,143 @@ const ICPListPage: React.FC = () => {
         </Card>
       ) : (
         <>
-        <div className="card-grid">
-          {filteredICPs.slice(0, displayCount).map((icp) => {
-            const cfg = icp.config as any;
-            const fd = cfg?.firmographic_details || {};
-            const regions = fd?.geography?.countries || cfg?.regions?.countries;
-            const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
-            const roles = cfg?.authority_roles?.target_roles || cfg?.leadership_traits?.target_roles;
-            const empRange = fd?.employee_range;
+          <div className="card-grid">
+            {filteredICPs.slice(0, displayCount).map((icp) => {
+              const cfg = icp.config as any;
+              const fd = cfg?.firmographic_details || {};
+              const regions = fd?.geography?.countries || cfg?.regions?.countries;
+              const industries = fd?.industry_types || cfg?.industry_types || cfg?.industry;
+              const roles = cfg?.authority_roles?.target_roles || cfg?.leadership_traits?.target_roles;
+              const empRange = fd?.employee_range;
 
-            return (
-              <div
-                key={icp.id}
-                className="run-card"
-                onClick={() => setSelectedICP(icp)}
-              >
-                {/* Header: name + ... menu */}
-                <div className="rc-header">
-                  <div className="rc-title">{icp.name}</div>
-                  <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className="menu-toggle"
-                      onClick={(e) => toggleMenu(e, icp.id!)}
-                    >
-                      ⋯
-                    </button>
-                    <div className={`dropdown-menu ${openMenuId === icp.id ? 'open' : ''}`}>
-                      <div
-                        className="menu-item"
-                        onClick={() => {
-                          setOpenMenuId(null);
-                          openRunModal(icp.id!);
-                        }}
+              return (
+                <div
+                  key={icp.id}
+                  className="run-card"
+                  onClick={() => setSelectedICP(icp)}
+                >
+                  {/* Header: name + ... menu */}
+                  <div className="rc-header">
+                    <div className="rc-title">{icp.name}</div>
+                    <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="menu-toggle"
+                        onClick={(e) => toggleMenu(e, icp.id!)}
                       >
-                        Run Pipeline
+                        ⋯
+                      </button>
+                      <div className={`dropdown-menu ${openMenuId === icp.id ? 'open' : ''}`}>
+                        <div
+                          className="menu-item"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            openRunModal(icp.id!);
+                          }}
+                        >
+                          Run Pipeline
+                        </div>
+                        <div
+                          className="menu-item"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            navigate(`/icp/${icp.id}/edit`);
+                          }}
+                        >
+                          Edit
+                        </div>
+                        <div className="menu-divider"></div>
+                        <Popconfirm
+                          title="Delete this ICP?"
+                          onConfirm={() => {
+                            setOpenMenuId(null);
+                            handleDelete(icp.id!);
+                          }}
+                          onCancel={() => setOpenMenuId(null)}
+                        >
+                          <div className="menu-item danger">Delete</div>
+                        </Popconfirm>
                       </div>
-                      <div
-                        className="menu-item"
-                        onClick={() => {
-                          setOpenMenuId(null);
-                          navigate(`/icp/${icp.id}/edit`);
-                        }}
-                      >
-                        Edit
-                      </div>
-                      <div className="menu-divider"></div>
-                      <Popconfirm
-                        title="Delete this ICP?"
-                        onConfirm={() => {
-                          setOpenMenuId(null);
-                          handleDelete(icp.id!);
-                        }}
-                        onCancel={() => setOpenMenuId(null)}
-                      >
-                        <div className="menu-item danger">Delete</div>
-                      </Popconfirm>
                     </div>
                   </div>
-                </div>
 
-                {/* Date + description */}
-                <div className="rc-meta">
-                  <span className="rc-date">
-                    {icp.created_at ? new Date(icp.created_at).toLocaleDateString() : 'N/A'}
-                  </span>
-                  {icp.description && (
-                    <span className="rc-offering" title={icp.description}>
-                      {icp.description}
+                  {/* Date + description */}
+                  <div className="rc-meta">
+                    <span className="rc-date">
+                      {icp.created_at ? new Date(icp.created_at).toLocaleDateString() : 'N/A'}
                     </span>
-                  )}
-                </div>
+                    {icp.description && (
+                      <span className="rc-offering" title={icp.description}>
+                        {icp.description}
+                      </span>
+                    )}
+                  </div>
 
-                {/* ICP detail rows */}
-                <div className="rc-icp-block">
-                  {regions && regions.length > 0 && (
-                    <div className="rc-icp-row">
-                      <span className="rc-icp-key">Regions</span>
-                      <span className="rc-icp-val">
-                        {regions.slice(0, 3).join(', ')}
-                      </span>
-                    </div>
-                  )}
-                  {industries && industries.length > 0 && (
-                    <div className="rc-icp-row">
-                      <span className="rc-icp-key">Industries</span>
-                      <span className="rc-icp-val">
-                        {industries.map((i: any) => i.vertical).slice(0, 3).join(', ')}
-                      </span>
-                    </div>
-                  )}
-                  {roles && roles.length > 0 && (
-                    <div className="rc-icp-row">
-                      <span className="rc-icp-key">Target Roles</span>
-                      <span className="rc-icp-val">
-                        {roles.slice(0, 3).join(', ')}
-                      </span>
-                    </div>
-                  )}
-                  {empRange && (
-                    <div className="rc-icp-row">
-                      <span className="rc-icp-key">Company Size</span>
-                      <span className="rc-icp-val">
-                        {empRange.min?.toLocaleString()}–{empRange.max?.toLocaleString()} employees
-                      </span>
-                    </div>
-                  )}
-                </div>
+                  {/* ICP detail rows */}
+                  <div className="rc-icp-block">
+                    {regions && regions.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">Regions</span>
+                        <span className="rc-icp-val">
+                          {regions.slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {industries && industries.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">Industries</span>
+                        <span className="rc-icp-val">
+                          {industries.map((i: any) => i.vertical).slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {roles && roles.length > 0 && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">Target Roles</span>
+                        <span className="rc-icp-val">
+                          {roles.slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {empRange && (
+                      <div className="rc-icp-row">
+                        <span className="rc-icp-key">Company Size</span>
+                        <span className="rc-icp-val">
+                          {empRange.min?.toLocaleString()}–{empRange.max?.toLocaleString()} employees
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
-                {/* Footer */}
-                <div className="rc-footer" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    size="small"
-                    className="rc-edit-btn"
-                    onClick={() => navigate(`/icp/${icp.id}/edit`)}
-                  >
-                    Edit
-                  </Button>
-                  <span
-                    className="rc-view-link"
-                    onClick={() => setSelectedICP(icp)}
-                  >
-                    View Details →
-                  </span>
+                  {/* Footer */}
+                  <div className="rc-footer" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      size="small"
+                      className="rc-edit-btn"
+                      onClick={() => navigate(`/icp/${icp.id}/edit`)}
+                    >
+                      Edit
+                    </Button>
+                    <span
+                      className="rc-view-link"
+                      onClick={() => setSelectedICP(icp)}
+                    >
+                      View Details →
+                    </span>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-        <div ref={sentinelRef} style={{ height: 1 }} />
-        {displayCount < filteredICPs.length ? (
-          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 13 }}>
-            Loading more...
+              );
+            })}
           </div>
-        ) : filteredICPs.length > 12 ? (
-          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 12 }}>
-            Showing all {filteredICPs.length} items
-          </div>
-        ) : null}
+          <div ref={sentinelRef} style={{ height: 1 }} />
+          {displayCount < filteredICPs.length ? (
+            <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 13 }}>
+              Loading more...
+            </div>
+          ) : filteredICPs.length > 12 ? (
+            <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--g400)', fontSize: 12 }}>
+              Showing all {filteredICPs.length} items
+            </div>
+          ) : null}
         </>
       )}
 
@@ -420,11 +420,8 @@ const ICPListPage: React.FC = () => {
                 <Descriptions.Item label="Offerings" span={2}>
                   {(Array.isArray(offerings) ? offerings.join(', ') : offerings) || '—'}
                 </Descriptions.Item>
-                <Descriptions.Item label="Countries">
+                <Descriptions.Item label="Countries" span={2}>
                   {regions?.countries?.join(', ') || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Priority Areas">
-                  {regions?.priority_areas?.join(', ') || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Industries" span={2}>
                   {industries?.map((i: any) =>

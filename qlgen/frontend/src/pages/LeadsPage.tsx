@@ -154,7 +154,7 @@ const SignalDetailPanel: React.FC<{ company: Company }> = ({ company }) => {
         const display = getStageDisplay(result.stage);
         const statusColor = result.status === 'passed' ? 'green' :
           result.status === 'failed' ? 'red' :
-          result.status === 'skipped' ? 'default' : 'blue';
+            result.status === 'skipped' ? 'default' : 'blue';
 
         return {
           key: result.id,
@@ -341,11 +341,8 @@ const ICPConfigPanel: React.FC<{ config: Record<string, unknown> }> = ({ config 
       <Descriptions.Item label="Target Offerings" span={2}>
         {cfg?.target_offering?.join(', ') || cfg?.target_capability?.offerings?.join(', ') || '-'}
       </Descriptions.Item>
-      <Descriptions.Item label="Countries">
+      <Descriptions.Item label="Countries" span={2}>
         {cfg?.regions?.countries?.join(', ') || cfg?.firmographic_details?.geography?.countries?.join(', ') || '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="Priority Areas">
-        {cfg?.regions?.priority_areas?.join(', ') || cfg?.firmographic_details?.geography?.priority_areas?.join(', ') || '-'}
       </Descriptions.Item>
       <Descriptions.Item label="Industries" span={2}>
         {(cfg?.industry_types || cfg?.firmographic_details?.industry_types)?.map((i: any) =>
@@ -649,13 +646,13 @@ const StageCompanyList: React.FC<{ companies: Company[]; stageKey: string }> = (
     const relevantResult = stageResults.find((sr) => sr.stage === stageKey);
     const statusTag = relevantResult
       ? (() => {
-          const color = relevantResult.status === 'passed' ? 'green'
-            : relevantResult.status === 'failed' ? 'red'
+        const color = relevantResult.status === 'passed' ? 'green'
+          : relevantResult.status === 'failed' ? 'red'
             : relevantResult.status === 'promoted' ? 'blue'
-            : relevantResult.status === 'excluded' ? 'default'
-            : 'gold';
-          return <Tag color={color} style={{ fontSize: 11 }}>{relevantResult.status}</Tag>;
-        })()
+              : relevantResult.status === 'excluded' ? 'default'
+                : 'gold';
+        return <Tag color={color} style={{ fontSize: 11 }}>{relevantResult.status}</Tag>;
+      })()
       : <Tag style={{ fontSize: 11 }}>unknown</Tag>;
 
     return {
