@@ -132,6 +132,7 @@ export interface Company {
   country: string | null;
   employee_count: number | null;
   revenue_estimate: number | null;
+  asset_value: number | null;
   tech_stack_json: Record<string, unknown> | null;
   source: string | null;
   qualification: string | null;

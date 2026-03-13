@@ -245,6 +245,15 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
         : `$${revenue.toLocaleString()}`)
     : null;
 
+  const assetValue = company.asset_value;
+  const assetStr = assetValue
+    ? (assetValue >= 1_000_000_000
+      ? `$${(assetValue / 1_000_000_000).toFixed(1)}B`
+      : assetValue >= 1_000_000
+        ? `$${(assetValue / 1_000_000).toFixed(0)}M`
+        : `$${assetValue.toLocaleString()}`)
+    : null;
+
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: 'var(--g800)' }}>Company Insights</div>
@@ -283,6 +292,12 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
           <div>
             <Text type="secondary" style={{ fontSize: 11 }}>Revenue Est.</Text>
             <div style={{ fontWeight: 600, fontSize: 14 }}>{revenueStr}</div>
+          </div>
+        )}
+        {assetStr && (
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>Asset Value</Text>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{assetStr}</div>
           </div>
         )}
         {company.employee_count != null && (
@@ -1195,6 +1210,8 @@ const LeadsPage: React.FC = () => {
     website: string | null;
     industry: string | null;
     country: string | null;
+    revenue_estimate: number | null;
+    asset_value: number | null;
     final_score: number | null | undefined;
     final_rank: number | null | undefined;
     budget_signal_score: number | null | undefined;
@@ -1220,6 +1237,8 @@ const LeadsPage: React.FC = () => {
           website: company.website,
           industry: company.industry,
           country: company.country,
+          revenue_estimate: company.revenue_estimate,
+          asset_value: company.asset_value,
           final_score: company.final_score,
           final_rank: company.final_rank,
           budget_signal_score: company.budget_signal_score,
@@ -1243,6 +1262,8 @@ const LeadsPage: React.FC = () => {
         website: company.website,
         industry: company.industry,
         country: company.country,
+        revenue_estimate: company.revenue_estimate,
+        asset_value: company.asset_value,
         final_score: company.final_score,
         final_rank: company.final_rank,
         budget_signal_score: company.budget_signal_score,
@@ -1310,6 +1331,30 @@ const LeadsPage: React.FC = () => {
       dataIndex: 'country',
       width: 90,
       render: (v: string | null) => v || '-',
+    },
+    {
+      title: 'Revenue',
+      dataIndex: 'revenue_estimate',
+      width: 100,
+      sorter: (a: typeof flatRows[0], b: typeof flatRows[0]) => (a.revenue_estimate || 0) - (b.revenue_estimate || 0),
+      render: (revenue: number | null) => {
+        if (!revenue) return '-';
+        if (revenue >= 1_000_000_000) return `$${(revenue / 1_000_000_000).toFixed(1)}B`;
+        if (revenue >= 1_000_000) return `$${(revenue / 1_000_000).toFixed(0)}M`;
+        return `$${revenue.toLocaleString()}`;
+      },
+    },
+    {
+      title: 'Asset Value',
+      dataIndex: 'asset_value',
+      width: 110,
+      sorter: (a: typeof flatRows[0], b: typeof flatRows[0]) => (a.asset_value || 0) - (b.asset_value || 0),
+      render: (assetValue: number | null) => {
+        if (!assetValue) return '-';
+        if (assetValue >= 1_000_000_000) return `$${(assetValue / 1_000_000_000).toFixed(1)}B`;
+        if (assetValue >= 1_000_000) return `$${(assetValue / 1_000_000).toFixed(0)}M`;
+        return `$${assetValue.toLocaleString()}`;
+      },
     },
     {
       title: 'Final Score',

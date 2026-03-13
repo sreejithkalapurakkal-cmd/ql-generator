@@ -46,6 +46,7 @@ def _build_company_response(company: Company) -> CompanyResponse:
         industry=company.industry, sub_industry=company.sub_industry,
         city=company.city, state_region=company.state_region, country=company.country,
         employee_count=company.employee_count, revenue_estimate=company.revenue_estimate,
+        asset_value=company.asset_value,
         tech_stack_json=company.tech_stack_json, source=company.source,
         qualification=company.qualification, icp_match_score=company.icp_match_score,
         match_reasoning=company.match_reasoning, contacts=contacts,

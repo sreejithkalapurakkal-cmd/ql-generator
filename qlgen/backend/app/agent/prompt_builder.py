@@ -200,6 +200,7 @@ OUTPUT FORMAT — Return JSON:
       "city": "City",
       "employee_count": 500,
       "revenue_estimate": 50000000,
+      "asset_value": 75000000,
       "description": "Brief description",
       "source": "tool_name",
       "is_from_local_db": false
