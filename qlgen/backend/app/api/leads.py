@@ -10,8 +10,10 @@ from app.db.session import get_db
 from app.models.company import Company
 from app.models.company_stage import CompanyStageResult
 from app.models.pipeline import PipelineRun
+from app.models.user import User
 from app.schemas.company import CompanyResponse, CompanyStageResultResponse, ContactResponse
 from app.services.export_service import generate_xlsx, generate_csv
+from app.auth.dependencies import get_current_user, get_user_from_token_param
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -68,6 +70,7 @@ async def get_lead_companies(
     stage_filter: Optional[str] = Query(None),
     sort_by: Optional[str] = Query("final_score"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = run_result.scalar_one_or_none()
@@ -115,6 +118,7 @@ async def get_lead_companies(
 async def get_disqualified_companies(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = run_result.scalar_one_or_none()
@@ -139,6 +143,7 @@ async def get_disqualified_companies(
 async def get_stage_summary(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Per-stage funnel summary with counts and averages."""
     run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
@@ -203,6 +208,7 @@ async def export_leads(
     run_id: UUID,
     format: str = Query("xlsx"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_user_from_token_param),
 ):
     run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = run_result.scalar_one_or_none()

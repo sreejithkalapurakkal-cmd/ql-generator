@@ -1,6 +1,6 @@
 import asyncio
 import json
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.pipeline import PipelineRun
 from app.models.company import Company
 from app.models.icp import ICPConfig
+from app.models.user import User
 from app.schemas.pipeline import (
     PipelineRunRequest, PipelineRunResponse, PipelineLogResponse,
     PromoteFirmographicRequest, PromoteFirstSignalRequest, PromoteSignalsRequest,
@@ -22,6 +23,7 @@ from app.services.pipeline_service import (
     resume_after_first_signal,
     resume_after_signals,
 )
+from app.auth.dependencies import get_current_user, get_user_from_token_param
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
@@ -58,6 +60,7 @@ async def start_pipeline(
     request: PipelineRunRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(ICPConfig).where(ICPConfig.id == request.icp_config_id))
     icp = result.scalar_one_or_none()
@@ -69,6 +72,7 @@ async def start_pipeline(
         status="pending",
         current_stage="pending",
         options=request.options.model_dump(),
+        user_id=user.id,
     )
     db.add(run)
     await db.commit()
@@ -84,7 +88,7 @@ async def start_pipeline(
 
 
 @router.get("/history/list", response_model=List[PipelineRunResponse])
-async def list_pipeline_runs(db: AsyncSession = Depends(get_db)):
+async def list_pipeline_runs(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
@@ -96,7 +100,7 @@ async def list_pipeline_runs(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/stats/by-icp")
-async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db)):
+async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
@@ -132,7 +136,7 @@ async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{run_id}", response_model=PipelineRunResponse)
-async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
@@ -145,7 +149,7 @@ async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{run_id}")
-async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db)):
+async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
@@ -162,7 +166,7 @@ async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{run_id}/cancel")
-async def cancel_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
+async def cancel_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
@@ -183,6 +187,7 @@ async def promote_firmographic(
     request: PromoteFirmographicRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Stage 2 review: select companies and signal mode, start signal research."""
     result = await db.execute(
@@ -217,6 +222,7 @@ async def promote_first_signal(
     request: PromoteFirstSignalRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Serial mode: review after 1st signal → start 2nd signal research."""
     result = await db.execute(
@@ -248,6 +254,7 @@ async def promote_signals(
     request: PromoteSignalsRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Final signal review → start Stages 4+5 (contact discovery + scoring)."""
     result = await db.execute(
@@ -282,6 +289,7 @@ async def get_companies_by_stage(
     run_id: UUID,
     stage: str = None,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Get companies for a pipeline run, optionally filtered by stage.
 
@@ -363,7 +371,7 @@ async def get_companies_by_stage(
 # ──────────────────────────────────────────────────────────────────
 
 @router.get("/{run_id}/logs", response_model=List[PipelineLogResponse])
-async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     from app.models.pipeline_log import PipelineLog
     result = await db.execute(
         select(PipelineLog)
@@ -382,7 +390,7 @@ async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{run_id}/stream")
-async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
+async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_user_from_token_param)):
     run_id_str = str(run_id)
 
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))

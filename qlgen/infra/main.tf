@@ -37,6 +37,8 @@ module "backend_ecs" {
   api_keys_secret_arn    = module.secrets.api_keys_secret_arn
   db_password_secret_arn = module.secrets.db_password_secret_arn
   cors_allowed_origins   = var.cors_allowed_origins
+  google_client_secret   = var.google_client_secret
+  jwt_secret_key         = var.jwt_secret_key
 }
 
 module "frontend_cdn" {

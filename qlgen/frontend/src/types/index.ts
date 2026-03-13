@@ -1,3 +1,14 @@
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  picture_url: string | null;
+  role: string;
+  is_active: boolean;
+  created_at: string | null;
+  last_login_at: string | null;
+}
+
 export interface ICPConfig {
   id?: string;
   name: string;

@@ -178,6 +178,14 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "LUSHA_BASE_URL", value = "https://api.lusha.com" },
       { name = "CLAY_BASE_URL", value = "https://api.clay.com" },
       { name = "TAVILY_BASE_URL", value = "https://api.tavily.com" },
+      { name = "GOOGLE_CLIENT_ID", value = "1096888171910-q1a8ihfqvdbqopbj1d3c1unnhphc6sma.apps.googleusercontent.com" },
+      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+      { name = "GOOGLE_REDIRECT_URI", value = "https://qlgen.gadgeon.com/auth/callback" },
+      { name = "ALLOWED_EMAIL_DOMAIN", value = "gadgeon.com" },
+      { name = "JWT_SECRET_KEY", value = var.jwt_secret_key },
+      { name = "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", value = "30" },
+      { name = "JWT_REFRESH_TOKEN_EXPIRE_DAYS", value = "7" },
+      { name = "COOKIE_SECURE", value = "true" },
     ]
 
     secrets = [

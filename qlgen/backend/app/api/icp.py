@@ -1,6 +1,6 @@
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,15 +9,17 @@ from typing import List
 
 from app.db.session import get_db
 from app.models.icp import ICPConfig
+from app.models.user import User
 from app.schemas.icp import ICPConfigCreate, ICPConfigUpdate, ICPConfigResponse, ICPGenerateRequest, ICPGenerateResponse
 from app.services.icp_import_service import generate_icp_template, parse_icp_excel
 from app.services.icp_generation_service import generate_icp_config_async, extract_text_from_file
+from app.auth.dependencies import get_current_user, get_user_from_token_param
 
 router = APIRouter(prefix="/icp", tags=["ICP Configuration"])
 
 
 @router.get("/template/download")
-async def download_icp_template():
+async def download_icp_template(_user: User = Depends(get_user_from_token_param)):
     buffer = generate_icp_template()
     return StreamingResponse(
         buffer,
@@ -27,7 +29,7 @@ async def download_icp_template():
 
 
 @router.post("/import/parse")
-async def parse_icp_upload(file: UploadFile = File(...)):
+async def parse_icp_upload(file: UploadFile = File(...), _user: User = Depends(get_current_user)):
     if not file.filename or not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
     contents = await file.read()
@@ -40,7 +42,7 @@ async def parse_icp_upload(file: UploadFile = File(...)):
 
 
 @router.post("/generate", response_model=ICPGenerateResponse)
-async def generate_icp(request: ICPGenerateRequest):
+async def generate_icp(request: ICPGenerateRequest, _user: User = Depends(get_current_user)):
     if not request.description or len(request.description.strip()) < 20:
         raise HTTPException(
             status_code=400,
@@ -63,6 +65,7 @@ async def generate_icp(request: ICPGenerateRequest):
 async def generate_icp_from_file(
     file: UploadFile = File(...),
     description: str = Form(""),
+    _user: User = Depends(get_current_user),
 ):
     """Generate ICP config from an uploaded file (PDF, DOCX, XLSX, TXT, CSV) and optional description."""
     if not file.filename:
@@ -91,11 +94,12 @@ async def generate_icp_from_file(
 
 
 @router.post("", response_model=ICPConfigResponse)
-async def create_icp(request: ICPConfigCreate, db: AsyncSession = Depends(get_db)):
+async def create_icp(request: ICPConfigCreate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     icp = ICPConfig(
         name=request.name,
         description=request.description,
         config_json=request.config,
+        user_id=user.id,
     )
     db.add(icp)
     await db.commit()
@@ -112,7 +116,7 @@ async def create_icp(request: ICPConfigCreate, db: AsyncSession = Depends(get_db
 
 
 @router.get("", response_model=List[ICPConfigResponse])
-async def list_icps(db: AsyncSession = Depends(get_db)):
+async def list_icps(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(
         select(ICPConfig).where(ICPConfig.is_active == True).order_by(ICPConfig.created_at.desc())
     )
@@ -132,7 +136,7 @@ async def list_icps(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{icp_id}", response_model=ICPConfigResponse)
-async def get_icp(icp_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_icp(icp_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(select(ICPConfig).where(ICPConfig.id == icp_id))
     icp = result.scalar_one_or_none()
     if not icp:
@@ -149,7 +153,7 @@ async def get_icp(icp_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{icp_id}", response_model=ICPConfigResponse)
-async def update_icp(icp_id: UUID, request: ICPConfigUpdate, db: AsyncSession = Depends(get_db)):
+async def update_icp(icp_id: UUID, request: ICPConfigUpdate, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(select(ICPConfig).where(ICPConfig.id == icp_id))
     icp = result.scalar_one_or_none()
     if not icp:
@@ -176,7 +180,7 @@ async def update_icp(icp_id: UUID, request: ICPConfigUpdate, db: AsyncSession = 
 
 
 @router.delete("/{icp_id}")
-async def delete_icp(icp_id: UUID, db: AsyncSession = Depends(get_db)):
+async def delete_icp(icp_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     result = await db.execute(select(ICPConfig).where(ICPConfig.id == icp_id))
     icp = result.scalar_one_or_none()
     if not icp:

@@ -68,3 +68,15 @@ variable "cors_allowed_origins" {
   type    = string
   default = "https://qlgen.gadgeon.com"
 }
+
+variable "google_client_secret" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "jwt_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}

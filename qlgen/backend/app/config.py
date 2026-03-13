@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
 
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/auth/callback"
+    ALLOWED_EMAIL_DOMAIN: str = "gadgeon.com"
+
+    # JWT
+    JWT_SECRET_KEY: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    COOKIE_SECURE: bool = False
+
     class Config:
         env_file = ".env", "../.env", "backend/.env"
         env_file_encoding = "utf-8"

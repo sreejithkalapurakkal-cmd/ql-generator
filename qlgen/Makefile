@@ -20,7 +20,8 @@ FRONTEND_LOG := /tmp/qlgen-frontend.log
         dev dev-backend dev-frontend \
         stop stop-backend stop-frontend \
         status logs logs-backend logs-frontend \
-        clean clean-backend clean-frontend
+        clean clean-backend clean-frontend \
+        seed-admin
 
 # ─── Default ───────────────────────────────────────────────────────────────────
 
@@ -193,6 +194,10 @@ status:
 	@echo ""
 
 # ─── Clean ─────────────────────────────────────────────────────────────────────
+
+seed-admin:
+	@if [ -z "$(EMAIL)" ]; then echo "✗ Usage: make seed-admin EMAIL=user@example.com"; exit 1; fi
+	cd $(BACKEND_DIR) && $(PYTHON) -m app.scripts.seed_admin $(EMAIL)
 
 clean: clean-backend clean-frontend
 
