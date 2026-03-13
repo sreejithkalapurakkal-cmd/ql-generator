@@ -82,24 +82,6 @@ const SignalScoreBar: React.FC<{ score: number | null | undefined; label: string
 };
 
 // ---------------------------------------------------------------------------
-// Cache indicator
-// ---------------------------------------------------------------------------
-
-const CacheIndicator: React.FC<{ company: Company }> = ({ company }) => {
-  if (!company.cached_from_run_id) return null;
-  const freshness = company.data_freshness || 'cached';
-  const color = freshness === 'fresh' ? 'green' : freshness === 'stale' ? 'orange' : 'blue';
-  return (
-    <Tooltip title={`Cached from previous run. Freshness: ${freshness}`}>
-      <Tag color={color} style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', marginLeft: 4 }}>
-        <DatabaseOutlined style={{ marginRight: 2 }} />
-        {freshness}
-      </Tag>
-    </Tooltip>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // Signal Detail Panel (replaces BANTDetailPanel)
 // ---------------------------------------------------------------------------
 
@@ -1313,13 +1295,8 @@ const LeadsPage: React.FC = () => {
       title: 'Company',
       dataIndex: 'company_name',
       width: 180,
-      render: (name: string, record: any) => (
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <Text style={{ fontWeight: 600, fontSize: 13 }}>{name}</Text>
-          {record.company?.cached_from_run_id && (
-            <CacheIndicator company={record.company} />
-          )}
-        </div>
+      render: (name: string) => (
+        <Text style={{ fontWeight: 600, fontSize: 13 }}>{name}</Text>
       ),
     },
     {

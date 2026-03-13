@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import logging
+from datetime import datetime
 
 import boto3
 
@@ -86,14 +87,16 @@ ICP_CONFIG_KEYS = [
 
 ICP_GENERATION_SYSTEM_PROMPT = """You are an expert B2B sales strategist. Given a natural language description of an ideal customer, generate a structured ICP (Ideal Customer Profile) configuration as a JSON object.
 
+IMPORTANT: The current year is {current_year}. Use this year in the ICP name, not any other year.
+
 Return ONLY a JSON object with exactly these keys:
-- "name": A short descriptive name for this ICP (e.g., "MidMarket US ECommerce 2026")
+- "name": A short descriptive name for this ICP (e.g., "MidMarket US ECommerce {current_year}")
 - "description": A one-sentence summary of the ICP
 - "config": An object with exactly these 5 keys:
 
 1. "firmographic_details": {
      "industry_types": [{"vertical": string, "sub_vertical": string or null}],
-     "geography": {"countries": [strings], "priority_areas": [strings like states/cities]},
+     "geography": {"countries": [strings]},
      "revenue_range": {"min": int, "max": int, "currency": "USD"|"EUR"|"GBP"|"INR"},
      "employee_range": {"min": int, "max": int},
      "low_cost_center": boolean
@@ -212,9 +215,13 @@ def generate_icp_config(description: str, file_text: str | None = None) -> dict:
 
     user_message = "\n\n".join(parts) if parts else description
 
+    # Inject current year into the system prompt
+    current_year = datetime.now().year
+    system_prompt = ICP_GENERATION_SYSTEM_PROMPT.replace("{current_year}", str(current_year))
+
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "system": ICP_GENERATION_SYSTEM_PROMPT,
+        "system": system_prompt,
         "messages": [
             {"role": "user", "content": user_message}
         ],

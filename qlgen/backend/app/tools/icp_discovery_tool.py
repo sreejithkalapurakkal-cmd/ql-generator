@@ -205,6 +205,10 @@ def _generate_queries(
                 queries.append(f"{kw} companies in {region}")
 
     # Pattern 2: Funding-stage proxies (Series A/B = $10M-$50M range)
+    from datetime import datetime
+    current_year = datetime.now().year
+    last_year = current_year - 1
+    
     for kw in industry_keywords[:3]:
         if max_revenue and max_revenue <= 50_000_000:
             queries.append(f"{kw} startup Series A funding")
@@ -214,7 +218,7 @@ def _generate_queries(
             queries.append(f"{kw} startup 100 employees")
             queries.append(f"{kw} company growth stage")
         else:
-            queries.append(f"{kw} companies funding round 2024 2025")
+            queries.append(f"{kw} companies funding round {last_year} {current_year}")
 
     # Pattern 3: Employee count in query
     if min_employees and max_employees:
