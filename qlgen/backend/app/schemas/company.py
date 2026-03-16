@@ -48,6 +48,7 @@ class CompanyResponse(BaseModel):
     country: Optional[str]
     employee_count: Optional[int]
     revenue_estimate: Optional[int]
+    asset_value: Optional[int] = None
     tech_stack_json: Optional[Any] = None
     source: Optional[str]
     qualification: Optional[str]

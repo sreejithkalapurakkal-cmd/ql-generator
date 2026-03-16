@@ -82,24 +82,6 @@ const SignalScoreBar: React.FC<{ score: number | null | undefined; label: string
 };
 
 // ---------------------------------------------------------------------------
-// Cache indicator
-// ---------------------------------------------------------------------------
-
-const CacheIndicator: React.FC<{ company: Company }> = ({ company }) => {
-  if (!company.cached_from_run_id) return null;
-  const freshness = company.data_freshness || 'cached';
-  const color = freshness === 'fresh' ? 'green' : freshness === 'stale' ? 'orange' : 'blue';
-  return (
-    <Tooltip title={`Cached from previous run. Freshness: ${freshness}`}>
-      <Tag color={color} style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', marginLeft: 4 }}>
-        <DatabaseOutlined style={{ marginRight: 2 }} />
-        {freshness}
-      </Tag>
-    </Tooltip>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // Signal Detail Panel (replaces BANTDetailPanel)
 // ---------------------------------------------------------------------------
 
@@ -154,7 +136,7 @@ const SignalDetailPanel: React.FC<{ company: Company }> = ({ company }) => {
         const display = getStageDisplay(result.stage);
         const statusColor = result.status === 'passed' ? 'green' :
           result.status === 'failed' ? 'red' :
-          result.status === 'skipped' ? 'default' : 'blue';
+            result.status === 'skipped' ? 'default' : 'blue';
 
         return {
           key: result.id,
@@ -263,6 +245,15 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
         : `$${revenue.toLocaleString()}`)
     : null;
 
+  const assetValue = company.asset_value;
+  const assetStr = assetValue
+    ? (assetValue >= 1_000_000_000
+      ? `$${(assetValue / 1_000_000_000).toFixed(1)}B`
+      : assetValue >= 1_000_000
+        ? `$${(assetValue / 1_000_000).toFixed(0)}M`
+        : `$${assetValue.toLocaleString()}`)
+    : null;
+
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: 'var(--g800)' }}>Company Insights</div>
@@ -303,6 +294,12 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
             <div style={{ fontWeight: 600, fontSize: 14 }}>{revenueStr}</div>
           </div>
         )}
+        {assetStr && (
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>Asset Value</Text>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{assetStr}</div>
+          </div>
+        )}
         {company.employee_count != null && (
           <div>
             <Text type="secondary" style={{ fontSize: 11 }}>Employees</Text>
@@ -341,11 +338,8 @@ const ICPConfigPanel: React.FC<{ config: Record<string, unknown> }> = ({ config 
       <Descriptions.Item label="Target Offerings" span={2}>
         {cfg?.target_offering?.join(', ') || cfg?.target_capability?.offerings?.join(', ') || '-'}
       </Descriptions.Item>
-      <Descriptions.Item label="Countries">
+      <Descriptions.Item label="Countries" span={2}>
         {cfg?.regions?.countries?.join(', ') || cfg?.firmographic_details?.geography?.countries?.join(', ') || '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="Priority Areas">
-        {cfg?.regions?.priority_areas?.join(', ') || cfg?.firmographic_details?.geography?.priority_areas?.join(', ') || '-'}
       </Descriptions.Item>
       <Descriptions.Item label="Industries" span={2}>
         {(cfg?.industry_types || cfg?.firmographic_details?.industry_types)?.map((i: any) =>
@@ -649,13 +643,13 @@ const StageCompanyList: React.FC<{ companies: Company[]; stageKey: string }> = (
     const relevantResult = stageResults.find((sr) => sr.stage === stageKey);
     const statusTag = relevantResult
       ? (() => {
-          const color = relevantResult.status === 'passed' ? 'green'
-            : relevantResult.status === 'failed' ? 'red'
+        const color = relevantResult.status === 'passed' ? 'green'
+          : relevantResult.status === 'failed' ? 'red'
             : relevantResult.status === 'promoted' ? 'blue'
-            : relevantResult.status === 'excluded' ? 'default'
-            : 'gold';
-          return <Tag color={color} style={{ fontSize: 11 }}>{relevantResult.status}</Tag>;
-        })()
+              : relevantResult.status === 'excluded' ? 'default'
+                : 'gold';
+        return <Tag color={color} style={{ fontSize: 11 }}>{relevantResult.status}</Tag>;
+      })()
       : <Tag style={{ fontSize: 11 }}>unknown</Tag>;
 
     return {
@@ -1216,6 +1210,8 @@ const LeadsPage: React.FC = () => {
     website: string | null;
     industry: string | null;
     country: string | null;
+    revenue_estimate: number | null;
+    asset_value: number | null;
     final_score: number | null | undefined;
     final_rank: number | null | undefined;
     budget_signal_score: number | null | undefined;
@@ -1241,6 +1237,8 @@ const LeadsPage: React.FC = () => {
           website: company.website,
           industry: company.industry,
           country: company.country,
+          revenue_estimate: company.revenue_estimate,
+          asset_value: company.asset_value,
           final_score: company.final_score,
           final_rank: company.final_rank,
           budget_signal_score: company.budget_signal_score,
@@ -1264,6 +1262,8 @@ const LeadsPage: React.FC = () => {
         website: company.website,
         industry: company.industry,
         country: company.country,
+        revenue_estimate: company.revenue_estimate,
+        asset_value: company.asset_value,
         final_score: company.final_score,
         final_rank: company.final_rank,
         budget_signal_score: company.budget_signal_score,
@@ -1316,13 +1316,8 @@ const LeadsPage: React.FC = () => {
       title: 'Company',
       dataIndex: 'company_name',
       width: 180,
-      render: (name: string, record: any) => (
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <Text style={{ fontWeight: 600, fontSize: 13 }}>{name}</Text>
-          {record.company?.cached_from_run_id && (
-            <CacheIndicator company={record.company} />
-          )}
-        </div>
+      render: (name: string) => (
+        <Text style={{ fontWeight: 600, fontSize: 13 }}>{name}</Text>
       ),
     },
     {
@@ -1336,6 +1331,30 @@ const LeadsPage: React.FC = () => {
       dataIndex: 'country',
       width: 90,
       render: (v: string | null) => v || '-',
+    },
+    {
+      title: 'Revenue',
+      dataIndex: 'revenue_estimate',
+      width: 100,
+      sorter: (a: typeof flatRows[0], b: typeof flatRows[0]) => (a.revenue_estimate || 0) - (b.revenue_estimate || 0),
+      render: (revenue: number | null) => {
+        if (!revenue) return '-';
+        if (revenue >= 1_000_000_000) return `$${(revenue / 1_000_000_000).toFixed(1)}B`;
+        if (revenue >= 1_000_000) return `$${(revenue / 1_000_000).toFixed(0)}M`;
+        return `$${revenue.toLocaleString()}`;
+      },
+    },
+    {
+      title: 'Asset Value',
+      dataIndex: 'asset_value',
+      width: 110,
+      sorter: (a: typeof flatRows[0], b: typeof flatRows[0]) => (a.asset_value || 0) - (b.asset_value || 0),
+      render: (assetValue: number | null) => {
+        if (!assetValue) return '-';
+        if (assetValue >= 1_000_000_000) return `$${(assetValue / 1_000_000_000).toFixed(1)}B`;
+        if (assetValue >= 1_000_000) return `$${(assetValue / 1_000_000).toFixed(0)}M`;
+        return `$${assetValue.toLocaleString()}`;
+      },
     },
     {
       title: 'Final Score',

@@ -104,7 +104,9 @@ async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db), _user: U
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
-        .where(PipelineRun.status == "completed")
+        .where(
+            (PipelineRun.companies_found > 0) | (PipelineRun.contacts_found > 0)
+        )
     )
     runs = result.scalars().all()
 

@@ -50,14 +50,14 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { type: 'divider' },
     ...(user?.role === 'super_admin'
       ? [
-          {
-            key: 'users',
-            icon: <TeamOutlined />,
-            label: 'Manage Users',
-            onClick: () => navigate('/admin/users'),
-          },
-          { type: 'divider' as const },
-        ]
+        {
+          key: 'users',
+          icon: <TeamOutlined />,
+          label: 'Manage Users',
+          onClick: () => navigate('/admin/users'),
+        },
+        { type: 'divider' as const },
+      ]
       : []),
     {
       key: 'logout',
@@ -91,13 +91,6 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </div>
 
           <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div className="gnav-brand">
-              <img
-                src="images/gadgeon.svg"
-                alt="Gadgeon"
-                style={{ height: '24px' }}
-              />
-            </div>
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {user?.picture_url ? (
@@ -107,6 +100,13 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 )}
               </div>
             </Dropdown>
+            <div className="gnav-brand">
+              <img
+                src="images/gadgeon.svg"
+                alt="Gadgeon"
+                style={{ height: '24px' }}
+              />
+            </div>
           </div>
         </div>
       </nav>

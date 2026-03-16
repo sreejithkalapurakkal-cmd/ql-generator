@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://qlgen:qlgen_pass@db:5432/qlgen
       DATABASE_URL_SYNC: postgresql://qlgen:qlgen_pass@db:5432/qlgen
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     depends_on:
       db:
         condition: service_healthy
@@ -42,6 +43,7 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000/api/v1
       VITE_BACKEND_PROXY_URL: http://backend:8000
+      VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
     depends_on:
       - backend
     volumes:

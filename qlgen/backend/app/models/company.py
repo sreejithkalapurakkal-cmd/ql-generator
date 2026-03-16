@@ -21,6 +21,7 @@ class Company(Base):
     country = Column(String(255))
     employee_count = Column(Integer)
     revenue_estimate = Column(BigInteger)
+    asset_value = Column(BigInteger, nullable=True)
     tech_stack_json = Column(JSONB)
     description = Column(Text)
     source = Column(String(100))

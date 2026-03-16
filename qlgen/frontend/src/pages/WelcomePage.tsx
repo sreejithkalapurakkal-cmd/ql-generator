@@ -56,14 +56,14 @@ const WelcomePage: React.FC = () => {
     { type: 'divider' },
     ...(user?.role === 'super_admin'
       ? [
-          {
-            key: 'users',
-            icon: <TeamOutlined />,
-            label: 'Manage Users',
-            onClick: () => navigate('/admin/users'),
-          },
-          { type: 'divider' as const },
-        ]
+        {
+          key: 'users',
+          icon: <TeamOutlined />,
+          label: 'Manage Users',
+          onClick: () => navigate('/admin/users'),
+        },
+        { type: 'divider' as const },
+      ]
       : []),
     {
       key: 'logout',
@@ -107,7 +107,17 @@ const WelcomePage: React.FC = () => {
           )}
 
           <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {!isAuthenticated && (
+            {isAuthenticated ? (
+              <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {user?.picture_url ? (
+                    <Avatar size={32} src={user.picture_url} />
+                  ) : (
+                    <Avatar size={32} icon={<UserOutlined />} style={{ background: '#5C2D8F' }} />
+                  )}
+                </div>
+              </Dropdown>
+            ) : (
               <button
                 onClick={handleGoogleLogin}
                 style={{
@@ -134,17 +144,6 @@ const WelcomePage: React.FC = () => {
             <div className="gnav-brand">
               <img src="images/gadgeon.svg" alt="Gadgeon" style={{ height: '24px' }} />
             </div>
-            {isAuthenticated && (
-              <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
-                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {user?.picture_url ? (
-                    <Avatar size={32} src={user.picture_url} />
-                  ) : (
-                    <Avatar size={32} icon={<UserOutlined />} style={{ background: '#5C2D8F' }} />
-                  )}
-                </div>
-              </Dropdown>
-            )}
           </div>
         </div>
       </nav>

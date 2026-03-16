@@ -260,9 +260,12 @@ def _method_website_leadership(company_name: str, domain: str) -> list[dict]:
 
 def _method_press_releases(company_name: str) -> list[dict]:
     """Find executive names in press releases and news articles."""
+    from datetime import datetime
+    current_year = datetime.now().year
+    last_year = current_year - 1
     contacts = []
     queries = [
-        f'"{company_name}" CEO interview 2024 2025',
+        f'"{company_name}" CEO interview {last_year} {current_year}',
         f'"{company_name}" press release contact named',
         f'"{company_name}" founder announcement',
     ]
@@ -339,10 +342,13 @@ def _method_email_inference(known_contacts: list[dict], domain: str) -> list[dic
 
 def _method_conference_speakers(company_name: str, industry: str = "") -> list[dict]:
     """Find executives who have spoken at industry conferences."""
+    from datetime import datetime
+    current_year = datetime.now().year
+    last_year = current_year - 1
     contacts = []
     industry_term = industry or "medtech medical device"
     results = _ddg(
-        f'"{company_name}" "{industry_term}" conference speaker presentation 2024 2025',
+        f'"{company_name}" "{industry_term}" conference speaker presentation {last_year} {current_year}',
         max_results=5,
     )
     for r in results:

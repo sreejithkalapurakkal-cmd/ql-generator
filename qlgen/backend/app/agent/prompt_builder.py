@@ -32,11 +32,8 @@ def _format_firmographic_section(icp: dict) -> str:
     # Geography
     geo = fd.get("geography", {})
     countries = geo.get("countries", [])
-    priority_areas = geo.get("priority_areas", [])
     if countries:
         lines.append(f"GEOGRAPHY: {', '.join(countries)}")
-    if priority_areas:
-        lines.append(f"PRIORITY AREAS: {', '.join(priority_areas)}")
 
     # Revenue range
     rev = fd.get("revenue_range", {})
@@ -124,7 +121,6 @@ def _extract_keywords(icp: dict) -> dict:
 
     geo = fd.get("geography", {})
     regions = geo.get("countries", [])
-    priority_areas = geo.get("priority_areas", [])
 
     emp = fd.get("employee_range", {})
     rev = fd.get("revenue_range", {})
@@ -139,7 +135,6 @@ def _extract_keywords(icp: dict) -> dict:
         "industry_keywords": industry_keywords,
         "sub_verticals": sub_verticals,
         "regions": regions,
-        "priority_areas": priority_areas,
         "emp_min": emp.get("min"),
         "emp_max": emp.get("max"),
         "rev_min": rev.get("min"),
@@ -205,6 +200,7 @@ OUTPUT FORMAT — Return JSON:
       "city": "City",
       "employee_count": 500,
       "revenue_estimate": 50000000,
+      "asset_value": 75000000,
       "description": "Brief description",
       "source": "tool_name",
       "is_from_local_db": false

@@ -194,6 +194,8 @@ def clone_company_data(cached: Company, new_company: Company):
         new_company.employee_count = cached.employee_count
     if cached.revenue_estimate and not new_company.revenue_estimate:
         new_company.revenue_estimate = cached.revenue_estimate
+    if cached.asset_value and not new_company.asset_value:
+        new_company.asset_value = cached.asset_value
     if cached.tech_stack_json and not new_company.tech_stack_json:
         new_company.tech_stack_json = cached.tech_stack_json
     if cached.description and not new_company.description:
@@ -413,6 +415,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     country=disc.get("country"),
                     employee_count=disc.get("employee_count"),
                     revenue_estimate=disc.get("revenue_estimate"),
+                    asset_value=disc.get("asset_value"),
                     description=disc.get("description"),
                     source=disc.get("source"),
                     current_stage="industry_discovery",
@@ -554,11 +557,13 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                         company.current_stage = "firmographic_fit"
                         company.icp_match_score = score
 
-                        # Update employee/revenue if agent found better data
+                        # Update employee/revenue/asset_value if agent found better data
                         if evaluated.get("employee_count"):
                             company.employee_count = evaluated["employee_count"]
                         if evaluated.get("revenue_estimate"):
                             company.revenue_estimate = evaluated["revenue_estimate"]
+                        if evaluated.get("asset_value"):
+                            company.asset_value = evaluated["asset_value"]
 
                         if recommendation == "pass":
                             company.qualification = "qualified"

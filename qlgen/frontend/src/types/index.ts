@@ -24,7 +24,6 @@ export interface ICPDefinition {
     industry_types: { vertical: string; sub_vertical?: string | null }[];
     geography: {
       countries: string[];
-      priority_areas: string[];
     };
     revenue_range: {
       min: number;
@@ -133,6 +132,7 @@ export interface Company {
   country: string | null;
   employee_count: number | null;
   revenue_estimate: number | null;
+  asset_value: number | null;
   tech_stack_json: Record<string, unknown> | null;
   source: string | null;
   qualification: string | null;
@@ -252,7 +252,7 @@ export interface ToolHealthCheckResult {
 export const DEFAULT_ICP: ICPDefinition = {
   firmographic_details: {
     industry_types: [],
-    geography: { countries: [], priority_areas: [] },
+    geography: { countries: [] },
     revenue_range: { min: 10000000, max: 500000000, currency: 'USD' },
     employee_range: { min: 50, max: 1500 },
     low_cost_center: false,

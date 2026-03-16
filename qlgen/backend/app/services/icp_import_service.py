@@ -30,7 +30,6 @@ TEMPLATE_FIELDS = [
     ("Description", "Target mid-market SaaS companies in the US for our analytics platform"),
     ("Industries", "Technology / SaaS, Technology / Data & Analytics"),
     ("Countries", "United States, Canada"),
-    ("Priority Areas", "San Francisco Bay Area, New York, Austin"),
     ("Employees Min", "200"),
     ("Employees Max", "5000"),
     ("Revenue Min", "20000000"),
@@ -161,7 +160,6 @@ def parse_icp_excel(buffer: BytesIO) -> List[dict]:
             "industry_types": _parse_industries(field_map.get("industries", "")),
             "geography": {
                 "countries": _split_csv(field_map.get("countries", "")),
-                "priority_areas": _split_csv(field_map.get("priority areas", "")),
             },
             "revenue_range": {
                 "min": _safe_int(field_map.get("revenue min"), 10000000),
