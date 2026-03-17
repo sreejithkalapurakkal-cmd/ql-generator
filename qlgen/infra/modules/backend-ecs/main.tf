@@ -91,11 +91,13 @@ resource "aws_iam_role_policy" "bedrock_invoke" {
       Effect = "Allow"
       Action = [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream"
       ]
       Resource = [
-        "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-sonnet-4-20250514",
-        "arn:aws:bedrock:${var.aws_region}:*:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4*",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4*"
       ]
     }]
   })
@@ -165,6 +167,7 @@ resource "aws_ecs_task_definition" "backend" {
     }]
 
     environment = [
+      { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
       { name = "AWS_REGION", value = var.aws_region },
       { name = "BEDROCK_MODEL_ID", value = "us.anthropic.claude-sonnet-4-20250514-v1:0" },
       { name = "DATABASE_URL", value = "postgresql+asyncpg://${var.db_username}:${var.db_password}@${var.db_endpoint}/qlgen" },
@@ -175,6 +178,14 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "LUSHA_BASE_URL", value = "https://api.lusha.com" },
       { name = "CLAY_BASE_URL", value = "https://api.clay.com" },
       { name = "TAVILY_BASE_URL", value = "https://api.tavily.com" },
+      { name = "GOOGLE_CLIENT_ID", value = "1096888171910-q1a8ihfqvdbqopbj1d3c1unnhphc6sma.apps.googleusercontent.com" },
+      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+      { name = "GOOGLE_REDIRECT_URI", value = "https://qlgen.gadgeon.com/auth/callback" },
+      { name = "ALLOWED_EMAIL_DOMAIN", value = "gadgeon.com" },
+      { name = "JWT_SECRET_KEY", value = var.jwt_secret_key },
+      { name = "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", value = "30" },
+      { name = "JWT_REFRESH_TOKEN_EXPIRE_DAYS", value = "7" },
+      { name = "COOKIE_SECURE", value = "true" },
     ]
 
     secrets = [

@@ -2,10 +2,13 @@ import httpx
 from strands import tool
 from app.config import get_settings
 
-settings = get_settings()
-
-HUNTER_API_KEY = settings.HUNTER_API_KEY
-HUNTER_BASE_URL = settings.HUNTER_BASE_URL
+RATE_LIMIT_CODES = {429, 402, 403}
+RATE_LIMIT_MSG = (
+    "RATE_LIMITED: Hunter API quota exceeded. Do NOT retry this tool. "
+    "Switch immediately to free alternatives: use duckduckgo_search to find "
+    "email addresses (search '[name] [company] email' or '[company] contact'), "
+    "and scrape_webpage on the company's contact or team page."
+)
 
 
 @tool
@@ -23,13 +26,18 @@ def hunter_domain_search(domain: str, limit: int = 10) -> dict:
         dict with 'data' containing 'emails' list with value, type, confidence, first_name,
         last_name, position, department, linkedin
     """
-    url = f"{HUNTER_BASE_URL}/domain-search"
-    params = {"domain": domain, "api_key": HUNTER_API_KEY, "limit": limit}
+    settings = get_settings()
+    url = f"{settings.HUNTER_BASE_URL}/domain-search"
+    params = {"domain": domain, "api_key": settings.HUNTER_API_KEY, "limit": limit}
 
     try:
         response = httpx.get(url, params=params, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "data": {"emails": []}}
+        return {"error": str(e), "data": {"emails": []}}
     except Exception as e:
         return {"error": str(e), "data": {"emails": []}}
 
@@ -49,17 +57,22 @@ def hunter_email_finder(domain: str, first_name: str, last_name: str) -> dict:
     Returns:
         dict with email, confidence score, and sources
     """
-    url = f"{HUNTER_BASE_URL}/email-finder"
+    settings = get_settings()
+    url = f"{settings.HUNTER_BASE_URL}/email-finder"
     params = {
         "domain": domain,
         "first_name": first_name,
         "last_name": last_name,
-        "api_key": HUNTER_API_KEY,
+        "api_key": settings.HUNTER_API_KEY,
     }
 
     try:
         response = httpx.get(url, params=params, timeout=30)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "data": {}}
+        return {"error": str(e), "data": {}}
     except Exception as e:
         return {"error": str(e), "data": {}}

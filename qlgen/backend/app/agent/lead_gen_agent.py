@@ -1,3 +1,11 @@
+"""Lead generation agents for the 5-stage pipeline.
+
+Stage 1: Industry Discovery Agent
+Stage 2: Firmographic Fit Agent (computational pre-filter + agent verification)
+Stage 3: Signal Research Agent (budget / urgency / both)
+Stage 4: Contact Discovery Agent (rewritten with training knowledge + all tools)
+Stage 5: Final Scoring (computation only — no agent)
+"""
 import json
 import logging
 
@@ -11,56 +19,98 @@ from app.tools.duckduckgo_tool import duckduckgo_search
 from app.tools.hunter_tool import hunter_domain_search, hunter_email_finder
 from app.tools.lusha_tool import lusha_person_search
 from app.tools.web_scraper_tool import scrape_webpage
+from app.tools.yc_tool import search_yc_companies
+from app.tools.linkedin_search_tool import find_linkedin_profiles
+from app.tools.team_scraper_tool import scrape_team_page
+from app.tools.sec_tool import get_sec_filings
+from app.tools.market_data_tool import get_market_data
+from app.tools.world_bank_tool import get_economic_indicators
+from app.tools.news_sentiment_tool import get_news_sentiment
+from app.tools.icp_discovery_tool import discover_icp_companies
+from app.tools.company_research_tool import research_company
+from app.tools.find_executives_tool import find_company_executives
+from app.tools.job_search_tool import search_job_postings
+from app.tools.copilot_db_tools import search_local_companies
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-# Friendly display names for each tool
+
+class PipelineCancelled(Exception):
+    """Raised when a pipeline run is cancelled by the user."""
+    pass
+
+
+# ──────────────────────────────────────────────────────────────────
+# Display name mappings
+# ──────────────────────────────────────────────────────────────────
+
 TOOL_DISPLAY_NAMES = {
-    "apollo_company_search": "Searching Apollo for companies",
+    "apollo_company_search": "Searching company database",
     "apollo_people_search": "Searching Apollo for contacts",
-    "exa_search": "Running semantic search via Exa.ai",
-    "tavily_search": "Searching recent news via Tavily",
-    "duckduckgo_search": "Searching DuckDuckGo",
-    "hunter_domain_search": "Finding contacts via Hunter.io",
-    "hunter_email_finder": "Finding email via Hunter.io",
-    "lusha_person_search": "Enriching contact via Lusha",
-    "scrape_webpage": "Scraping webpage",
-}
-
-# Map tools to their primary pipeline stage
-TOOL_STAGE_MAP = {
-    "scrape_webpage": None,  # context-dependent
+    "exa_search": "Searching business intelligence sources",
+    "tavily_search": "Checking recent news & press releases",
+    "duckduckgo_search": "Searching the web",
+    "hunter_domain_search": "Discovering contacts at company",
+    "hunter_email_finder": "Verifying email address",
+    "lusha_person_search": "Looking up phone number",
+    "scrape_webpage": "Reading company website",
+    "search_yc_companies": "Searching Y Combinator directory",
+    "find_linkedin_profiles": "Finding LinkedIn profiles",
+    "scrape_team_page": "Scanning company team page",
+    "get_sec_filings": "Fetching SEC EDGAR filings",
+    "get_market_data": "Pulling market data",
+    "get_economic_indicators": "Fetching economic indicators",
+    "get_news_sentiment": "Analyzing recent news sentiment",
+    "discover_icp_companies": "Running batch company discovery",
+    "research_company": "Researching company details",
+    "find_company_executives": "Finding executives (7 methods)",
+    "search_job_postings": "Searching job postings",
+    "search_local_companies": "Checking local database",
 }
 
 STAGE_DISPLAY_NAMES = {
-    "company_discovery": "Company Discovery",
+    "industry_discovery": "Industry Discovery",
+    "firmographic_fit": "Firmographic Fit Check",
+    "budget_signals": "Budget Signal Research",
+    "urgency_signals": "Urgency Signal Research",
+    "budget_urgency_signals": "Budget & Urgency Signal Research",
     "contact_discovery": "Contact Discovery",
-    "enrichment": "Contact Enrichment",
-    "scoring": "BANT Scoring",
+    "final_scoring": "Final Scoring & Ranking",
 }
 
 
-def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collector: list = None):
+# ──────────────────────────────────────────────────────────────────
+# Callback handler (shared across all stages)
+# ──────────────────────────────────────────────────────────────────
+
+def create_pipeline_callback_handler(
+    events: dict,
+    run_id_str: str,
+    event_collector: list = None,
+    initial_stage: str = "industry_discovery",
+    cancelled_runs: set = None,
+):
     """Create a Strands callback handler that emits SSE events for pipeline progress.
 
     The handler captures tool calls, agent reasoning text, and lifecycle events
-    and pushes them into the in-memory SSE event queue. If event_collector is
-    provided, events are also appended there for later DB persistence.
+    and pushes them into the in-memory SSE event queue.
     """
     state = {
-        "current_stage": "company_discovery",
+        "current_stage": initial_stage,
         "text_buffer": "",
-        "last_reasoning": "",          # last emitted reasoning text (used as tool context)
-        "seen_tools": set(),           # set of tool names (for stage inference)
-        "emitted_tool_ids": set(),     # set of toolUseIds already emitted
-        "pending_tool": None,          # tool info waiting to be emitted (accumulating input)
+        "last_reasoning": "",
+        "seen_tools": set(),
+        "emitted_tool_ids": set(),
+        "pending_tool": None,
         "tool_call_count": 0,
     }
 
-    # Stage ordering for progression detection
-    stage_order = ["company_discovery", "contact_discovery", "enrichment", "scoring"]
+    stage_order = [
+        "industry_discovery", "firmographic_fit",
+        "budget_signals", "urgency_signals", "budget_urgency_signals",
+        "contact_discovery", "final_scoring",
+    ]
 
     def _emit(event: dict):
         if events is not None and run_id_str in events:
@@ -72,12 +122,17 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
         """Detect stage transitions from the agent's reasoning text."""
         text_lower = text.lower()
         detected = None
-        if any(kw in text_lower for kw in ("stage 2", "contact discovery", "find contacts", "finding contacts", "decision-makers")):
+
+        if any(kw in text_lower for kw in ("industry discovery", "discovering companies", "company discovery")):
+            detected = "industry_discovery"
+        elif any(kw in text_lower for kw in ("firmographic", "firmographic fit", "employee range", "revenue range")):
+            detected = "firmographic_fit"
+        elif any(kw in text_lower for kw in ("budget signal", "budget research", "financial capacity")):
+            detected = "budget_signals"
+        elif any(kw in text_lower for kw in ("urgency signal", "urgency research", "buying urgency")):
+            detected = "urgency_signals"
+        elif any(kw in text_lower for kw in ("contact discovery", "find contacts", "finding contacts", "decision-makers")):
             detected = "contact_discovery"
-        elif any(kw in text_lower for kw in ("stage 3", "contact enrichment", "enrichment", "missing email", "missing linkedin")):
-            detected = "enrichment"
-        elif any(kw in text_lower for kw in ("stage 4", "bant scor", "bant framework")):
-            detected = "scoring"
 
         if not detected:
             return
@@ -87,24 +142,22 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
 
         if new_idx > current_idx:
             state["current_stage"] = detected
-            progress = 20 + (new_idx * 20)
+            progress = 10 + (new_idx * 15)
             _emit({
                 "type": "stage_update",
                 "stage": detected,
-                "progress": progress,
+                "progress": min(progress, 90),
                 "message": f"Entering {STAGE_DISPLAY_NAMES.get(detected, detected)}...",
             })
 
     def _extract_context(tool_input) -> str:
         """Extract the most relevant search parameter from tool input for display."""
-        # Handle case where input is still a string (accumulated JSON text)
         if isinstance(tool_input, str):
             tool_input = tool_input.strip()
             if tool_input:
                 try:
                     tool_input = json.loads(tool_input)
                 except (json.JSONDecodeError, ValueError):
-                    # Partial JSON — try to extract key-value pairs with regex
                     import re
                     for key in ("query", "domain", "company_domain", "name", "url"):
                         match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', tool_input)
@@ -113,7 +166,7 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                     return ""
         if not isinstance(tool_input, dict):
             return ""
-        for key in ("query", "domain", "company_domain", "name", "url", "keyword_tags"):
+        for key in ("query", "domain", "company_domain", "name", "url", "keyword_tags", "company_name"):
             if key in tool_input and tool_input[key]:
                 val = tool_input[key]
                 if isinstance(val, list):
@@ -132,11 +185,8 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
         state["tool_call_count"] += 1
         state["seen_tools"].add(tool_name)
 
-        # Try to extract context from tool input; fall back to last reasoning text
         context = _extract_context(tool_input)
         if not context and state["last_reasoning"]:
-            # Use the preceding reasoning text as context (the agent usually says
-            # "Let me search for X" right before calling a tool)
             context = state["last_reasoning"][:150]
 
         _emit({
@@ -150,11 +200,11 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
         state["pending_tool"] = None
 
     def callback_handler(**kwargs):
+        if cancelled_runs is not None and run_id_str in cancelled_runs:
+            raise PipelineCancelled(f"Pipeline {run_id_str} cancelled by user")
+
         try:
             # Handle tool use events
-            # Strands streams current_tool_use multiple times as input accumulates.
-            # We buffer the latest version and emit once the tool changes or a
-            # data/lifecycle event arrives (indicating tool input streaming is done).
             if "current_tool_use" in kwargs:
                 tool_info = kwargs["current_tool_use"]
                 tool_name = tool_info.get("name", "")
@@ -163,25 +213,28 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 if not tool_name:
                     return
 
-                # Skip if already emitted
                 if tool_id and tool_id in state["emitted_tool_ids"]:
                     return
 
-                # Capture any unflushed reasoning text as context for this tool
+                # Flush reasoning buffer before tool call
                 if state["text_buffer"].strip():
                     text = state["text_buffer"].strip()
                     if not text.startswith("{") and not text.startswith("```"):
                         state["last_reasoning"] = text
+                        _try_detect_stage_from_text(text)
+                        _emit({
+                            "type": "agent_reasoning",
+                            "text": text,
+                            "stage": state["current_stage"],
+                        })
                     state["text_buffer"] = ""
 
-                # If this is a different tool_id, flush the previous pending tool
                 if state["pending_tool"] and state["pending_tool"].get("toolUseId") != tool_id:
                     pending_id = state["pending_tool"].get("toolUseId", "")
                     if pending_id:
                         state["emitted_tool_ids"].add(pending_id)
                     _flush_pending_tool()
 
-                # Buffer the latest version (with most complete input)
                 state["pending_tool"] = {
                     "name": tool_name,
                     "toolUseId": tool_id,
@@ -189,12 +242,25 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 }
                 return
 
-            # Any non-tool event should flush the pending tool first
+            # Flush pending tool on non-tool events
             if state["pending_tool"]:
                 pending_id = state["pending_tool"].get("toolUseId", "")
                 if pending_id:
                     state["emitted_tool_ids"].add(pending_id)
                 _flush_pending_tool()
+
+            # Flush reasoning before tool result
+            if "tool_result" in kwargs and state["text_buffer"].strip():
+                text = state["text_buffer"].strip()
+                if not text.startswith("{") and not text.startswith("```"):
+                    state["last_reasoning"] = text
+                    _try_detect_stage_from_text(text)
+                    _emit({
+                        "type": "agent_reasoning",
+                        "text": text,
+                        "stage": state["current_stage"],
+                    })
+                state["text_buffer"] = ""
 
             # Handle tool result events
             if "tool_result" in kwargs:
@@ -202,7 +268,7 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                 tool_name = result.get("name", "unknown")
                 content = result.get("content", "")
                 is_error = bool(result.get("error") or result.get("status") == "error")
-                # Truncate long results for log readability
+
                 if isinstance(content, str) and len(content) > 500:
                     content_preview = content[:500] + "... [truncated]"
                 elif isinstance(content, (list, dict)):
@@ -233,18 +299,15 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                         "success": True,
                     })
 
-            # Handle text/reasoning output from the agent
+            # Handle text/reasoning output
             if "data" in kwargs:
                 chunk = kwargs["data"]
                 if chunk and isinstance(chunk, str):
                     state["text_buffer"] += chunk
-                    # Emit reasoning in smaller chunks for finer granularity
-                    buf = state["text_buffer"]
-                    if len(buf) > 80 or buf.rstrip().endswith((".", "!", "?", ":")):
-                        text = buf.strip()
+                    if len(state["text_buffer"]) > 500:
+                        text = state["text_buffer"].strip()
                         if text and not text.startswith("{") and not text.startswith("```"):
                             state["last_reasoning"] = text
-                            # Detect stage transitions from reasoning text
                             _try_detect_stage_from_text(text)
                             _emit({
                                 "type": "agent_reasoning",
@@ -253,9 +316,8 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                             })
                         state["text_buffer"] = ""
 
-            # Handle lifecycle events — also flush any remaining text buffer
+            # Handle lifecycle events
             if "init_event_loop" in kwargs:
-                # Flush remaining buffered reasoning text
                 if state["text_buffer"].strip():
                     text = state["text_buffer"].strip()
                     if not text.startswith("{") and not text.startswith("```"):
@@ -265,272 +327,299 @@ def create_pipeline_callback_handler(events: dict, run_id_str: str, event_collec
                             "stage": state["current_stage"],
                         })
                     state["text_buffer"] = ""
+                stage_name = STAGE_DISPLAY_NAMES.get(initial_stage, initial_stage)
                 _emit({
                     "type": "stage_update",
-                    "stage": "company_discovery",
+                    "stage": initial_stage,
                     "progress": 10,
-                    "message": "Agent initialized, starting Company Discovery...",
+                    "message": f"Agent initialized, starting {stage_name}...",
                 })
 
+        except PipelineCancelled:
+            raise
         except Exception as e:
             logger.warning(f"Callback handler error (non-fatal): {e}")
 
     return callback_handler
 
-LEAD_GEN_SYSTEM_PROMPT = """You are an expert B2B lead generation specialist. Your job is to
-convert an Ideal Customer Profile (ICP) into a complete, sales-ready list of qualified
-companies and decision-maker contacts, enriched with data and scored using the BANT framework.
 
-You have access to 9 tools. Execute your work in 4 sequential stages:
+# ──────────────────────────────────────────────────────────────────
+# System prompts
+# ──────────────────────────────────────────────────────────────────
 
-═══════════════════════════════════════════════════════════════
-STAGE 1: COMPANY DISCOVERY
-═══════════════════════════════════════════════════════════════
-Goal: Find companies matching the ICP criteria.
+STAGE1_INDUSTRY_DISCOVERY_PROMPT = """You are a company discovery specialist. Your goal is to find the MAXIMUM number of companies
+matching the industry, vertical, and geography criteria. There is NO upper limit — find as
+many as possible. Aim for at least 500 companies in the initial discovery phase sticking to
+the basic search criteria of industry vertical and geography. Quality and quantity both matter.
+Do multiple iterations of search to find enough data.
 
-Search strategy (use multiple tools for better coverage):
-• apollo_company_search — PRIMARY. Best for structured filters (industry, size, location).
-  Start here. Run multiple queries if the ICP spans several industries or regions.
-• exa_search — SECONDARY. Best for semantic/qualitative matching (tech stack, business model).
-  Use natural language queries describing the ideal company.
-• tavily_search — SUPPLEMENTARY. Find companies in recent news matching ICP signals
-  (funding rounds, expansion, tech adoption announcements).
-• duckduckgo_search — FALLBACK. Use if other tools are rate-limited or return thin results.
+STEP 1 — LOCAL DATABASE:
+Call search_local_companies with the industry and country filters. This returns companies
+we already know about from previous searches. Include ALL matching results.
 
-For each company found, collect: name, website/domain, industry, city/state/country,
-estimated employee count, estimated revenue, and any technology signals.
+STEP 2 — TRAINING KNOWLEDGE:
+List well-known companies in the specified industry from your training knowledge. Include:
+major corporations, mid-market companies, notable startups, recently funded companies,
+companies you know are active in this space. Be exhaustive.
 
-Qualification: Rate each company 1-10 against the ICP. Discard any below 5.
-Deduplicate by domain. Aim for the requested number of companies.
+STEP 3 — TOOL-BASED DISCOVERY:
+Use ALL available tools aggressively to discover additional companies beyond your knowledge:
+- apollo_company_search: PAGINATE heavily. Query variations by sub-vertical, region, keyword.
+  Fetch pages 1, 2, 3, 4+ for each query.
+- exa_search: Run 8-12+ different query angles. Vary keywords, regions, adjacent terms.
+- discover_icp_companies: Use for broad DDG-based batch discovery.
+- search_yc_companies: Check YC directory for startups in this vertical.
+- tavily_search: Search for "top [industry] companies [country]" lists, directories, rankings.
+- duckduckgo_search: Search for industry directories, associations, conference exhibitor lists.
+- scrape_webpage: Scrape industry directories and "top companies" lists found by other tools.
 
-═══════════════════════════════════════════════════════════════
-STAGE 2: CONTACT DISCOVERY
-═══════════════════════════════════════════════════════════════
-Goal: For each qualified company, find 3-5 relevant decision-makers.
+Do NOT filter by revenue, employee count, or tech stack at this stage. That happens later.
+Output: name, website, industry, sub_industry, country, city, employee_count (if available),
+revenue_estimate (if available), description, source, is_from_local_db (boolean).
 
-Search strategy:
-• apollo_people_search — PRIMARY. Search by company domain + target role titles from the ICP.
-• hunter_domain_search — SECONDARY. Finds contacts by company domain with email patterns.
-• scrape_webpage — SUPPLEMENTARY. Scrape the company's /about, /team, or /leadership page.
-• duckduckgo_search — FALLBACK. Search "[company name] + [role title] + LinkedIn".
+Return the results as a JSON object with a "companies" array and "discovery_summary" object.
+"""
 
-Prioritize role relevance over volume. A CTO or VP Engineering is far more valuable than
-5 random employees. Map discovered titles to the ICP's target role categories.
+STAGE2_FIRMOGRAPHIC_FIT_PROMPT = """You are a firmographic analysis specialist. Evaluate EACH company in the batch against
+the firmographic criteria provided. Use tools to fill missing data.
 
-═══════════════════════════════════════════════════════════════
-STAGE 3: CONTACT ENRICHMENT
-═══════════════════════════════════════════════════════════════
-Goal: Fill in missing contact data fields (email, phone, LinkedIn).
+If EXISTING DATA is provided for a company (from prior runs), VERIFY it is still current.
+If data is <30 days old, trust it. If >90 days old, re-verify with tools.
 
-Only enrich fields that are missing — do not re-query data you already have.
-• hunter_email_finder — For missing emails when you have first_name + last_name + domain.
-• lusha_person_search — For missing phone numbers when you have name + company.
-• exa_search or duckduckgo_search — For missing LinkedIn URLs (search by name + company).
+For each company output:
+- recommendation: "pass" or "fail"
+- score: 0-100 firmographic fit score
+- per_criterion: {revenue: {value, in_range, source}, employees: {value, in_range, source}, ...}
+- reasoning: 1-2 sentences explaining the decision
 
-Mark each contact's enrichment status:
-- "enriched" = email + LinkedIn populated
-- "partial" = some fields still missing
-- "failed" = enrichment found nothing new
+Return the results as a JSON object with a "companies" array.
+"""
 
-═══════════════════════════════════════════════════════════════
-STAGE 4: BANT SCORING
-═══════════════════════════════════════════════════════════════
-Goal: Score each company using the BANT framework. This is the most important stage.
-Invest significant research effort here — data accuracy is the highest priority.
+STAGE3_SIGNAL_RESEARCH_PROMPT = """You are a B2B market intelligence specialist. Research specific signals for companies
+to determine their budget capacity and/or buying urgency.
 
-IMPORTANT: For each BANT dimension, you MUST include "*_sources" — a list of
-{"url": "...", "title": "...", "tool": "..."} objects citing where you found the
-evidence. Every dimension requires 2-3 source URLs. Sources come from your tool
-results — include the URLs from search results, company pages you scraped, etc.
+For EACH signal the user listed, actively research whether the company shows evidence of it.
+Use AT LEAST 3-4 different tools per company. Depth is critical — runtime doesn't matter.
 
-PRE-SCORING RESEARCH (mandatory for each company):
-Before scoring ANY company, you MUST conduct dedicated research:
+Also look for ADDITIONAL signals beyond what the user listed that indicate budget capacity
+or buying urgency. Your training knowledge about the industry helps here.
 
-a) BUDGET EVIDENCE: Search for the company's recent funding rounds, financial reports,
-   revenue estimates, and tech spending signals. Use tavily_search to find news about
-   fundraising, acquisitions, or financial performance. Scrape the company's website for
-   investor/press/about pages.
+If EXISTING DATA is provided (from prior runs), use it as a starting point but look for
+NEWER information. News older than 90 days should be refreshed.
 
-b) AUTHORITY VERIFICATION: Verify the identified contact's role and decision-making
-   power. Search their LinkedIn profile context via exa_search or duckduckgo_search.
-   Look for evidence of them speaking at conferences, publishing articles, or being
-   quoted in industry publications.
+Score each signal 0-5 with evidence text and source URL.
+Compute composite score (0-100) with confidence level (high/medium/low).
 
-c) NEED VALIDATION: Search for specific pain points or transformation signals. Look for
-   job postings (tavily_search "[company] careers [technology]"), tech stack analysis,
-   industry reports mentioning the company, or news about operational challenges.
+Return the results as a JSON object.
+"""
 
-d) TIMING SIGNALS: Search for recent events suggesting readiness: new executive hires,
-   RFP announcements, vendor evaluations, contract expirations, fiscal year planning.
-   Use tavily_search and exa_search for news within the last 6 months.
+STAGE4_CONTACT_DISCOVERY_PROMPT = """You are an expert B2B contact intelligence specialist. You find decision-maker contacts for
+ONE company at a time, using a combination of your training knowledge, database tools, and
+web research.
 
-Each research step should use AT LEAST 2 different tools to cross-validate findings.
-Use dynamic tool selection — if tavily_search doesn't find budget evidence, try
-exa_search with a different query, then scrape_webpage on the company's press page.
+STEP 1: USE YOUR TRAINING KNOWLEDGE
+Before calling ANY tools, think about what you already know about this company:
+- Do you know the CEO, CTO, or other executives from your training data?
+- Is this a well-known company whose leadership you can name?
+List any contacts you can identify from memory. These will be VERIFIED in the next steps.
 
-SCORING RUBRIC (1-5 per dimension):
+STEP 2: CHECK EXISTING DATA
+If CACHED CONTACTS are provided below (from a previous pipeline run), review them:
+- Are these people likely still at this company? (check tenure)
+- Any contact data that looks outdated?
 
-BUDGET (company size & financial capacity):
-  5 = Revenue > upper ICP range, clear tech budget signals (recent funding, tech hires)
-  4 = Revenue in upper half of ICP range, some budget indicators
-  3 = Revenue within ICP range, no specific budget signals
-  2 = Revenue in lower range, budget unclear
-  1 = Revenue below ICP minimum, likely budget-constrained
+STEP 3: TOOL-BASED DISCOVERY & VERIFICATION
+Use ALL of these methods:
+A. apollo_people_search — Paid B2B database (primary). Paginate.
+B. find_company_executives — Multi-method executive finder. Always call this.
+C. research_company — Comprehensive single-company research.
+D. find_linkedin_profiles — Batch LinkedIn search.
+E. scrape_team_page — Scan /team, /about, /leadership pages.
+F. hunter_domain_search / hunter_email_finder — Email discovery.
+G. lusha_person_search — Phone/email lookup.
+H. search_job_postings — Job postings for org structure signals.
+I. tavily_search / exa_search — News for executive quotes.
+J. duckduckgo_search — General verification searches.
 
-AUTHORITY (contact role & decision-making power):
-  5 = C-suite directly owning tech/digital budget (CTO, CDO, CEO at small co)
-  4 = VP-level in relevant function (VP Engineering, VP Ecommerce)
-  3 = Director-level in relevant function
-  2 = Manager-level or adjacent function
-  1 = No relevant decision-maker identified
+STEP 4: CROSS-REFERENCE & CONFIDENCE SCORING
+- Contacts found by 3+ sources → confidence 0.95
+- Contacts found by 2 sources → confidence 0.80
+- Contacts found by 1 source → confidence 0.60
+- Contacts from training knowledge only (not verified) → confidence 0.40
+- Inferred emails → confidence 0.30
 
-NEED (alignment with ICP transformation drivers):
-  5 = 3+ strong signals matching ICP needs (tech debt, growth pain, stated initiatives)
-  4 = 2 matching signals
-  3 = 1 matching signal or general industry alignment
-  2 = Weak alignment, speculative need
-  1 = No discernible need alignment
+Deduplicate by LinkedIn URL, then by (full_name + company). Merge data across sources.
+NEVER fabricate contacts, emails, or phone numbers.
 
-TIMING (readiness to act):
-  5 = Active RFP/vendor evaluation, recent relevant job postings, public announcements
-  4 = Recent funding round, stated transformation timeline
-  3 = General growth trajectory suggesting near-term action
-  2 = No timing signals but profile suggests eventual need
-  1 = No timing signals, possibly just completed similar project
-
-Every score MUST have a specific reason citing actual evidence from your research.
-No assumptions, no black boxes.
-
-EVIDENCE REQUIREMENTS:
-- Each BANT dimension MUST cite 2-3 specific sources with URLs.
-- Sources must be from your actual tool results — never fabricate URLs.
-- For each source, explain what specific evidence it provides in the reason text.
-- Prefer recent sources (< 12 months old) over older ones.
-- If you cannot find strong evidence for a dimension, score it lower (1-2) rather than
-  guessing. Honest low scores are more valuable than inflated unverifiable scores.
-
-═══════════════════════════════════════════════════════════════
-OUTPUT FORMAT
-═══════════════════════════════════════════════════════════════
-Return your complete results as a single JSON object with this exact structure:
-
-```json
-{
-  "companies": [
-    {
-      "name": "Company Name",
-      "website": "domain.com",
-      "industry": "Ecommerce / Fashion",
-      "city": "San Francisco",
-      "state": "California",
-      "country": "US",
-      "employee_count": 250,
-      "revenue_estimate": 50000000,
-      "tech_signals": ["Shopify Plus", "AWS", "Klaviyo"],
-      "icp_match_score": 8,
-      "match_reasoning": "Strong match because...",
-      "source": "apollo+exa",
-      "contacts": [
-        {
-          "full_name": "Jane Doe",
-          "first_name": "Jane",
-          "last_name": "Doe",
-          "designation": "Chief Technology Officer",
-          "role_category": "CTO",
-          "email": "jane@domain.com",
-          "phone": "+1-555-0123",
-          "linkedin_url": "https://linkedin.com/in/janedoe",
-          "source": "apollo",
-          "confidence": 0.9,
-          "enrichment_status": "enriched"
-        }
-      ],
-      "bant_score": {
-        "budget_score": 4,
-        "budget_reason": "Revenue ~$50M, Series B raised in 2025...",
-        "budget_sources": [
-          {"url": "https://techcrunch.com/2025/acme-series-b", "title": "Acme raises $30M Series B", "tool": "tavily"},
-          {"url": "https://acme.com/about", "title": "Company about page", "tool": "scrape_webpage"}
-        ],
-        "authority_score": 5,
-        "authority_reason": "CTO identified with direct tech budget ownership...",
-        "authority_sources": [
-          {"url": "https://linkedin.com/in/janedoe", "title": "Jane Doe - CTO at Acme", "tool": "apollo"}
-        ],
-        "need_score": 4,
-        "need_reason": "Running legacy Magento, job postings mention headless...",
-        "need_sources": [
-          {"url": "https://builtwith.com/acme.com", "title": "Acme tech profile", "tool": "exa"}
-        ],
-        "timing_score": 3,
-        "timing_reason": "Growing 25% YoY, no public replatforming timeline yet...",
-        "timing_sources": [
-          {"url": "https://acme.com/careers", "title": "Job postings page", "tool": "scrape_webpage"}
-        ],
-        "total_score": 16,
-        "overall_summary": "Strong prospect with budget and clear need."
-      }
-    }
-  ],
-  "summary": {
-    "total_companies": 20,
-    "total_contacts": 75,
-    "avg_bant_score": 14.2,
-    "hot_leads": 5,
-    "warm_leads": 10,
-    "cool_leads": 5
-  }
-}
-```
-
-═══════════════════════════════════════════════════════════════
-CRITICAL RULES
-═══════════════════════════════════════════════════════════════
-1. NEVER fabricate company names, contacts, emails, or phone numbers.
-   Only return data verified through tool results.
-2. If a tool fails or returns no results, try alternative tools before giving up.
-3. Quality over quantity — 15 well-researched companies beat 25 thin ones.
-4. Partial data is acceptable — mark missing fields as null, not made-up values.
-5. Every BANT score MUST have evidence-backed reasoning with 2-3 source URLs per
-   dimension. Conduct dedicated research per company before scoring — do not rely
-   solely on data gathered during company/contact discovery. If evidence is weak,
-   score conservatively and explain what is missing.
-6. Deduplicate companies by domain throughout the process.
-7. Process ALL stages before returning — do not skip enrichment or scoring.
-8. BANT scoring is the most important output. Spend proportionally more time on
-   research for scoring than on company/contact discovery. A well-researched BANT
-   score with specific evidence is far more valuable than finding additional companies.
+Return a JSON object with "contacts" array and "research_data" object.
 """
 
 
-def create_lead_gen_agent(callback_handler=None) -> Agent:
-    """Create the single lead generation agent with all tools.
+# ──────────────────────────────────────────────────────────────────
+# Stage 5: Final scoring (pure computation)
+# ──────────────────────────────────────────────────────────────────
 
-    Args:
-        callback_handler: Optional Strands callback handler for streaming events.
-            If None, uses the default PrintingCallbackHandler.
+def compute_contact_reachability(contacts: list) -> float:
+    """Score 0-100 based on contact enrichment quality."""
+    if not contacts:
+        return 0
+    has_email = sum(1 for c in contacts if c.email)
+    has_phone = sum(1 for c in contacts if c.phone)
+    has_linkedin = sum(1 for c in contacts if c.linkedin_url)
+    total = len(contacts)
+    return min(100, has_email * 15 + has_phone * 10 + has_linkedin * 10 + total * 5)
+
+
+def compute_final_score(company) -> float:
+    """Compute composite score from all pipeline stages.
+
+    Weights: firmographic=30%, budget=25%, urgency=25%, contact=20%.
+    Confidence multiplier based on data completeness (0.6-1.0).
     """
+    firmographic = company.icp_match_score or 0
+    budget = company.budget_signal_score or 0
+    urgency = company.urgency_signal_score or 0
+    contact_score = compute_contact_reachability(company.contacts)
+
+    final = (firmographic * 0.30) + (budget * 0.25) + (urgency * 0.25) + (contact_score * 0.20)
+
+    # Confidence multiplier based on data completeness
+    filled = sum(1 for d in [firmographic, budget, urgency, contact_score] if d > 0)
+    confidence = 0.6 + (filled / 4) * 0.4  # range 0.6-1.0
+
+    return round(final * confidence, 1)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Agent factory functions
+# ──────────────────────────────────────────────────────────────────
+
+def _filter_tools(tools: list, disabled_tools: set[str] | None) -> list:
+    """Filter out disabled tools by their __name__ attribute."""
+    if not disabled_tools:
+        return tools
+    return [t for t in tools if getattr(t, "__name__", "") not in disabled_tools]
+
+
+def create_industry_discovery_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create Stage 1 agent — broad company discovery."""
+    settings = get_settings()
     model = BedrockModel(
         model_id=settings.BEDROCK_MODEL_ID,
         region_name=settings.AWS_REGION,
+        max_tokens=64000,
     )
+
+    tools = _filter_tools([
+        search_local_companies,  # LOCAL DB CHECK
+        apollo_company_search,   # PRIMARY
+        exa_search,              # PRIMARY
+        discover_icp_companies,  # SECONDARY
+        tavily_search,           # SECONDARY
+        search_yc_companies,     # SECONDARY
+        duckduckgo_search,       # FALLBACK
+        scrape_webpage,          # VERIFICATION
+    ], disabled_tools)
 
     kwargs = {
         "model": model,
-        "system_prompt": LEAD_GEN_SYSTEM_PROMPT,
-        "tools": [
-            apollo_company_search,
-            exa_search,
-            tavily_search,
-            duckduckgo_search,
-            apollo_people_search,
-            hunter_domain_search,
-            hunter_email_finder,
-            lusha_person_search,
-            scrape_webpage,
-        ],
+        "system_prompt": STAGE1_INDUSTRY_DISCOVERY_PROMPT,
+        "tools": tools,
     }
+    if callback_handler is not None:
+        kwargs["callback_handler"] = callback_handler
 
+    return Agent(**kwargs)
+
+
+def create_firmographic_fit_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create Stage 2 agent — firmographic verification in batches."""
+    settings = get_settings()
+    model = BedrockModel(
+        model_id=settings.BEDROCK_MODEL_ID,
+        region_name=settings.AWS_REGION,
+        max_tokens=32000,
+    )
+
+    tools = _filter_tools([
+        apollo_company_search,
+        scrape_webpage,
+        exa_search,
+        duckduckgo_search,
+    ], disabled_tools)
+
+    kwargs = {
+        "model": model,
+        "system_prompt": STAGE2_FIRMOGRAPHIC_FIT_PROMPT,
+        "tools": tools,
+    }
+    if callback_handler is not None:
+        kwargs["callback_handler"] = callback_handler
+
+    return Agent(**kwargs)
+
+
+def create_signal_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create Stage 3 agent — budget/urgency signal research."""
+    settings = get_settings()
+    model = BedrockModel(
+        model_id=settings.BEDROCK_MODEL_ID,
+        region_name=settings.AWS_REGION,
+        max_tokens=16000,
+    )
+
+    tools = _filter_tools([
+        get_sec_filings,
+        get_market_data,
+        get_news_sentiment,
+        tavily_search,
+        exa_search,
+        duckduckgo_search,
+        scrape_webpage,
+        get_economic_indicators,
+    ], disabled_tools)
+
+    kwargs = {
+        "model": model,
+        "system_prompt": STAGE3_SIGNAL_RESEARCH_PROMPT,
+        "tools": tools,
+    }
+    if callback_handler is not None:
+        kwargs["callback_handler"] = callback_handler
+
+    return Agent(**kwargs)
+
+
+def create_contact_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create Stage 4 agent — contact discovery for one company."""
+    settings = get_settings()
+    model = BedrockModel(
+        model_id=settings.BEDROCK_MODEL_ID,
+        region_name=settings.AWS_REGION,
+        max_tokens=16000,
+    )
+
+    tools = _filter_tools([
+        apollo_people_search,
+        research_company,
+        find_company_executives,
+        find_linkedin_profiles,
+        scrape_team_page,
+        scrape_webpage,
+        hunter_domain_search,
+        hunter_email_finder,
+        lusha_person_search,
+        duckduckgo_search,
+        exa_search,
+        tavily_search,
+        search_job_postings,
+    ], disabled_tools)
+
+    kwargs = {
+        "model": model,
+        "system_prompt": STAGE4_CONTACT_DISCOVERY_PROMPT,
+        "tools": tools,
+    }
     if callback_handler is not None:
         kwargs["callback_handler"] = callback_handler
 

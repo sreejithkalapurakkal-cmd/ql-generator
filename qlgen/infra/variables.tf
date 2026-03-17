@@ -53,3 +53,30 @@ variable "clay_api_key" {
   sensitive = true
   default   = ""
 }
+
+variable "acm_certificate_arn" {
+  type        = string
+  description = "ARN of ACM certificate for qlgen.gadgeon.com (must be us-east-1)"
+}
+
+variable "custom_domain" {
+  type    = string
+  default = "qlgen.gadgeon.com"
+}
+
+variable "cors_allowed_origins" {
+  type    = string
+  default = "https://qlgen.gadgeon.com"
+}
+
+variable "google_client_secret" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "jwt_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}

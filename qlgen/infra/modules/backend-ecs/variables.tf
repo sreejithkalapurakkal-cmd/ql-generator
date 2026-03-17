@@ -43,3 +43,18 @@ variable "api_keys_secret_arn" {
 variable "db_password_secret_arn" {
   type = string
 }
+
+variable "cors_allowed_origins" {
+  type        = string
+  description = "Comma-separated list of allowed CORS origins"
+}
+
+variable "google_client_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "jwt_secret_key" {
+  type      = string
+  sensitive = true
+}

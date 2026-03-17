@@ -21,6 +21,13 @@ class PipelineRun(Base):
     stage_details = Column(JSONB)
     options = Column(JSONB)
 
+    # v2 pipeline columns
+    signal_mode = Column(String(50), nullable=True)     # budget_first, urgency_first, both
+    signal_phase = Column(String(50), nullable=True)    # first_signal_done, second_signal_done, or null
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+
     icp_config = relationship("ICPConfig", back_populates="pipeline_runs")
     companies = relationship("Company", back_populates="pipeline_run", cascade="all, delete-orphan")
     logs = relationship("PipelineLog", back_populates="pipeline_run", cascade="all, delete-orphan", order_by="PipelineLog.sequence_number")
+    user = relationship("User", lazy="selectin")

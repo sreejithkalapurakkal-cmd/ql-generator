@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-from functools import lru_cache
 
 
 class Settings(BaseSettings):
@@ -10,6 +9,8 @@ class Settings(BaseSettings):
     # AWS Bedrock
     AWS_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    BEDROCK_EMBEDDING_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
+    EMBEDDING_DIMENSION: int = 1024
 
     # CORS
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
@@ -27,13 +28,30 @@ class Settings(BaseSettings):
     CLAY_BASE_URL: str = "https://api.clay.com"
     TAVILY_API_KEY: str = ""
     TAVILY_BASE_URL: str = "https://api.tavily.com"
+    GOOGLE_PLACES_API_KEY: str = ""
+    SIMFIN_API_KEY: str = ""
+    FMP_API_KEY: str = ""
+    NEWS_API_KEY: str = ""
+    FRED_API_KEY: str = ""
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/auth/callback"
+    ALLOWED_EMAIL_DOMAIN: str = "gadgeon.com"
+
+    # JWT
+    JWT_SECRET_KEY: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    COOKIE_SECURE: bool = False
 
     class Config:
-        env_file = ".env", "../.env"
+        env_file = ".env", "../.env", "backend/.env"
         env_file_encoding = "utf-8"
         extra = "ignore"
 
 
-@lru_cache
 def get_settings() -> Settings:
     return Settings()

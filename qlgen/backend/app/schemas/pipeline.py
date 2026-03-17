@@ -1,11 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 
 class PipelineOptions(BaseModel):
-    max_companies: int = 25
     max_contacts_per_company: int = 5
 
 
@@ -28,9 +27,27 @@ class PipelineRunResponse(BaseModel):
     completed_at: Optional[datetime]
     error_log: Optional[str] = None
     estimated_duration_seconds: Optional[int] = None
+    signal_mode: Optional[str] = None
+    signal_phase: Optional[str] = None
+    stage_details: Optional[dict] = None
 
     class Config:
         from_attributes = True
+
+
+class PromoteFirmographicRequest(BaseModel):
+    company_ids: List[UUID]
+    signal_mode: str = "both"  # budget_first | urgency_first | both
+
+
+class PromoteFirstSignalRequest(BaseModel):
+    """Used in serial mode after reviewing the first signal type."""
+    company_ids: List[UUID]
+
+
+class PromoteSignalsRequest(BaseModel):
+    """Used after the final signal review (all modes)."""
+    company_ids: List[UUID]
 
 
 class PipelineLogResponse(BaseModel):

@@ -36,11 +36,16 @@ module "backend_ecs" {
   db_password            = var.db_password
   api_keys_secret_arn    = module.secrets.api_keys_secret_arn
   db_password_secret_arn = module.secrets.db_password_secret_arn
+  cors_allowed_origins   = var.cors_allowed_origins
+  google_client_secret   = var.google_client_secret
+  jwt_secret_key         = var.jwt_secret_key
 }
 
 module "frontend_cdn" {
-  source       = "./modules/frontend-cdn"
-  project_name = var.project_name
-  environment  = var.environment
-  alb_dns_name = module.backend_ecs.alb_dns_name
+  source              = "./modules/frontend-cdn"
+  project_name        = var.project_name
+  environment         = var.environment
+  alb_dns_name        = module.backend_ecs.alb_dns_name
+  acm_certificate_arn = var.acm_certificate_arn
+  custom_domain       = var.custom_domain
 }
