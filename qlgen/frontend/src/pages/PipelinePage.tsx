@@ -1863,21 +1863,21 @@ const PipelinePage: React.FC = () => {
           // Check stage_results for firmographic_fit first
           const firmoResult = record.stage_results?.find(sr => sr.stage === 'firmographic_fit');
           if (firmoResult) {
-            if (firmoResult.status === 'passed') return <Tag color="green">Pass</Tag>;
+            if (firmoResult.status === 'passed') return <Tag color="green">High Fit</Tag>;
             if (firmoResult.status === 'failed') {
               return (
                 <Tooltip title={firmoResult.reasoning || record.rejection_reason || ''}>
-                  <Tag color="red">Fail</Tag>
+                  <Tag color="red">Low Fit</Tag>
                 </Tooltip>
               );
             }
             return <Tag color="blue">{firmoResult.status}</Tag>;
           }
           // Fallback to qualification-based mapping
-          if (q === 'verified_match' || q === 'best_fit') return <Tag color="green">Pass</Tag>;
-          if (q === 'good_fit' || q === 'potential_match') return <Tag color="blue">Pass</Tag>;
+          if (q === 'verified_match' || q === 'best_fit') return <Tag color="green">High Fit</Tag>;
+          if (q === 'good_fit' || q === 'potential_match') return <Tag color="blue">High Fit</Tag>;
           if (q === 'possible_fit' || q === 'weak_match') return <Tag color="gold">Marginal</Tag>;
-          return <Tag color="red">Fail</Tag>;
+          return <Tag color="red">Low Fit</Tag>;
         },
       },
     ];
