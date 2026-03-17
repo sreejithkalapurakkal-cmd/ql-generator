@@ -164,33 +164,14 @@ const ICPConfigPage: React.FC = () => {
             <Alert
               type="info"
               showIcon
-              icon={<FileExcelOutlined />}
-              message="Have your search criteria in a spreadsheet?"
-              description={
-                <Space size="middle" style={{ marginTop: 4 }}>
-                  <Button size="small" icon={<UploadOutlined />} onClick={() => setImportModalOpen(true)}>
-                    Import from Excel
-                  </Button>
-                  <a href={getICPTemplateURL()} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-                    <DownloadOutlined /> Download Template
-                  </a>
-                </Space>
-              }
-              style={{ marginBottom: 16 }}
-            />
-          )}
-          {!id && (
-            <Alert
-              type="info"
-              showIcon
               icon={<RobotOutlined />}
-              message="Want AI to build your search criteria?"
+              message="Build your search criteria faster!"
               description={
                 <Space size="middle" style={{ marginTop: 4 }}>
                   <Button size="small" icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>
-                    Create with AI
+                    Create with AI / Upload
                   </Button>
-                  <span style={{ fontSize: 12, color: 'var(--g500)' }}>Describe your ideal customer and let AI fill in all the fields</span>
+                  <span style={{ fontSize: 12, color: 'var(--g500)' }}>Describe your ideal customer and fill in all the fields using AI, or upload your own criteria from a spreadsheet</span>
                 </Space>
               }
               style={{ marginBottom: 16 }}

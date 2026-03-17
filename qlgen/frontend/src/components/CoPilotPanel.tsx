@@ -195,6 +195,7 @@ const CoPilotPanel: React.FC = () => {
         className="copilot-fab"
         onClick={() => { if (isOpen) setIsFullscreen(false); setIsOpen(!isOpen); }}
         title="Co-pilot Assistant"
+        style={isOpen ? { display: 'none' } : undefined}
       >
         {isOpen ? '\u2715' : '\u2728'}
       </button>
