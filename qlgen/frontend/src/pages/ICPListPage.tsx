@@ -94,6 +94,10 @@ const ICPListPage: React.FC = () => {
     fetchICPs();
   };
 
+  const handleClone = (icp: ICPConfig) => {
+    navigate('/icp/new', { state: { cloneFrom: icp } });
+  };
+
   const handleRunPipeline = async (icpId: string) => {
     try {
       const res = await startPipeline({ icp_config_id: icpId, options: { max_contacts_per_company: 5 } });
@@ -274,6 +278,15 @@ const ICPListPage: React.FC = () => {
                           }}
                         >
                           Edit
+                        </div>
+                        <div
+                          className="menu-item"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            handleClone(icp);
+                          }}
+                        >
+                          Clone
                         </div>
                         <div className="menu-divider"></div>
                         <Popconfirm
