@@ -34,6 +34,8 @@ class ICPConfigResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     is_active: bool
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
 
     class Config:
         from_attributes = True

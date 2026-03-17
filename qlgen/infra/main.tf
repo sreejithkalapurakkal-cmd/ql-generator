@@ -23,6 +23,13 @@ module "database" {
   db_password           = var.db_password
 }
 
+module "redis" {
+  source                  = "./modules/redis"
+  project_name            = var.project_name
+  private_subnet_ids      = module.networking.private_subnet_ids
+  redis_security_group_id = module.networking.redis_security_group_id
+}
+
 module "backend_ecs" {
   source                 = "./modules/backend-ecs"
   project_name           = var.project_name
@@ -39,6 +46,7 @@ module "backend_ecs" {
   cors_allowed_origins   = var.cors_allowed_origins
   google_client_secret   = var.google_client_secret
   jwt_secret_key         = var.jwt_secret_key
+  redis_endpoint         = module.redis.endpoint
 }
 
 module "frontend_cdn" {

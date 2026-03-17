@@ -14,6 +14,7 @@ from app.models.user import User
 from app.schemas.company import CompanyResponse, CompanyStageResultResponse, ContactResponse
 from app.services.export_service import generate_xlsx, generate_csv
 from app.auth.dependencies import get_current_user, get_user_from_token_param
+from app.auth.authorization import check_resource_access
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -63,6 +64,16 @@ def _build_company_response(company: Company) -> CompanyResponse:
     )
 
 
+async def _get_run_with_access_check(run_id: UUID, db: AsyncSession, user: User) -> PipelineRun:
+    """Fetch a pipeline run and verify the user has access."""
+    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = run_result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
+    return run
+
+
 @router.get("/{run_id}/companies", response_model=List[CompanyResponse])
 async def get_lead_companies(
     run_id: UUID,
@@ -71,12 +82,9 @@ async def get_lead_companies(
     stage_filter: Optional[str] = Query(None),
     sort_by: Optional[str] = Query("final_score"),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-    run = run_result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    await _get_run_with_access_check(run_id, db, user)
 
     query = (
         select(Company)
@@ -119,12 +127,9 @@ async def get_lead_companies(
 async def get_disqualified_companies(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-    run = run_result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    await _get_run_with_access_check(run_id, db, user)
 
     query = (
         select(Company)
@@ -144,13 +149,10 @@ async def get_disqualified_companies(
 async def get_stage_summary(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Per-stage funnel summary with counts and averages."""
-    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-    run = run_result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    run = await _get_run_with_access_check(run_id, db, user)
 
     # Get stage result counts
     stages = ["industry_discovery", "firmographic_fit", "budget_signals", "urgency_signals", "contact_discovery"]
@@ -209,12 +211,9 @@ async def export_leads(
     run_id: UUID,
     format: str = Query("xlsx"),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_user_from_token_param),
+    user: User = Depends(get_user_from_token_param),
 ):
-    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
-    run = run_result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    await _get_run_with_access_check(run_id, db, user)
 
     if format == "csv":
         buffer = await generate_csv(run_id, db)

@@ -17,6 +17,8 @@ export interface ICPConfig {
   created_at?: string;
   updated_at?: string;
   is_active?: boolean;
+  user_name?: string | null;
+  user_email?: string | null;
 }
 
 export interface ICPDefinition {
@@ -71,6 +73,7 @@ export interface PipelineRun {
   pipeline_mode?: string | null;
   match_strictness?: string | null;
   estimated_duration_seconds?: number | null;
+  user_name?: string | null;
   stage_details?: {
     total_discovered?: number;
     pre_filter_passed?: number;
@@ -247,6 +250,49 @@ export interface ToolHealthCheckResult {
   status: string;
   message: string;
   checked_at: string;
+}
+
+// Admin types
+export interface AdminUserSummary {
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  role: string;
+  icp_count: number;
+  pipeline_count: number;
+  last_activity: string | null;
+}
+
+export interface AdminActivityResponse {
+  user_summaries: AdminUserSummary[];
+  recent_runs: {
+    id: string;
+    icp_name: string | null;
+    user_name: string | null;
+    status: string;
+    companies_found: number;
+    contacts_found: number;
+    started_at: string | null;
+  }[];
+  recent_icps: {
+    id: string;
+    name: string;
+    user_name: string | null;
+    created_at: string | null;
+  }[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string | null;
 }
 
 export const DEFAULT_ICP: ICPDefinition = {

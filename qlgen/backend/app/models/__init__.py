@@ -8,10 +8,12 @@ from app.models.pipeline_log import PipelineLog
 from app.models.chat_session import ChatSession
 from app.models.chat_message import ChatMessage
 from app.models.tool_registry import ToolRegistry
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "User",
     "ICPConfig", "Company", "Contact", "CompanyStageResult",
     "PipelineRun", "PipelineLog", "ChatSession", "ChatMessage",
     "ToolRegistry",
+    "AuditLog",
 ]

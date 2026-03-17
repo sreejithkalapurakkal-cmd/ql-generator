@@ -30,3 +30,7 @@ output "ecs_cluster_name" {
 output "ecs_service_name" {
   value = module.backend_ecs.service_name
 }
+
+output "redis_endpoint" {
+  value = module.redis.endpoint
+}

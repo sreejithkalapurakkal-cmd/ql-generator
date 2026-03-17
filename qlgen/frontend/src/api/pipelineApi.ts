@@ -64,3 +64,8 @@ export interface ICPStat {
 
 export const getPipelineStatsByICP = () =>
   client.get<ICPStat[]>('/pipeline/stats/by-icp');
+
+import { AdminActivityResponse } from '../types';
+
+export const getAdminActivity = () =>
+  client.get<AdminActivityResponse>('/admin/activity');

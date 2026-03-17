@@ -124,3 +124,17 @@ resource "aws_security_group" "rds" {
 
   tags = { Name = "${var.project_name}-rds-sg" }
 }
+
+resource "aws_security_group" "redis" {
+  vpc_id = aws_vpc.main.id
+  name   = "${var.project_name}-redis-sg"
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  tags = { Name = "${var.project_name}-redis-sg" }
+}

@@ -8,9 +8,12 @@ class Settings(BaseSettings):
 
     # AWS Bedrock
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     BEDROCK_EMBEDDING_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
     EMBEDDING_DIMENSION: int = 1024
+
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # CORS
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"

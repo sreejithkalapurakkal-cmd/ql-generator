@@ -38,6 +38,7 @@ from app.models.contact import Contact
 from app.models.company_stage import CompanyStageResult
 from app.models.pipeline_log import PipelineLog
 from app.services.tool_registry_service import get_disabled_tool_names
+from app.services import event_store
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,9 @@ logger = logging.getLogger(__name__)
 # Utility functions
 # ──────────────────────────────────────────────────────────────────
 
-def _emit_event(events: dict, run_id: str, event: dict):
-    """Add event to the SSE event list."""
-    if events is not None and run_id in events:
-        events[run_id].append(event)
+async def _emit_event(run_id: str, event: dict):
+    """Push an SSE event to the Redis-backed event store."""
+    await event_store.push_event(run_id, event)
 
 
 def _repair_truncated_json(text: str) -> str:
@@ -259,7 +259,7 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
 # Shared error handling wrapper
 # ──────────────────────────────────────────────────────────────────
 
-async def _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, error, cancelled=False):
+async def _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, error, cancelled=False):
     """Shared error handling for pipeline execution failures."""
     try:
         await db.rollback()
@@ -290,13 +290,13 @@ async def _handle_pipeline_error(db, run_id, run, event_collector, events, run_i
         logger.error(f"Failed to persist {'cancelled' if cancelled else 'error'} status for pipeline {run_id}: {commit_err}")
 
     if cancelled:
-        _emit_event(events, run_id_str, {
+        await _emit_event(run_id_str, {
             "type": "cancelled",
             "companies_found": run.companies_found or 0 if run else 0,
             "contacts_found": run.contacts_found or 0 if run else 0,
         })
     else:
-        _emit_event(events, run_id_str, {
+        await _emit_event(run_id_str, {
             "type": "error",
             "message": str(error),
         })
@@ -326,7 +326,7 @@ async def _get_existing_log_count(db, run_id) -> int:
 # Main pipeline: Stages 1 + 2 → pause for review
 # ──────────────────────────────────────────────────────────────────
 
-async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: set = None):
+async def execute_pipeline(run_id: UUID):
     """Execute Stages 1 (Industry Discovery) and 2 (Firmographic Fit).
 
     After Stage 2 completes, the pipeline pauses for mandatory user review.
@@ -365,7 +365,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             # STAGE 1: Industry Discovery
             # ════════════════════════════════════════
             logger.info(f"[Stage 1] Starting industry discovery for run {run_id}")
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "industry_discovery",
                 "progress": 5,
@@ -373,9 +373,8 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             })
 
             callback_handler = create_pipeline_callback_handler(
-                events or {}, run_id_str, event_collector,
+                run_id_str, event_collector,
                 initial_stage="industry_discovery",
-                cancelled_runs=cancelled_runs,
             )
             discovery_agent = create_industry_discovery_agent(
                 callback_handler=callback_handler, disabled_tools=disabled_tools,
@@ -442,7 +441,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
             await db.flush()
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "industry_discovery",
                 "progress": 25,
@@ -456,7 +455,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             await db.commit()
 
             logger.info(f"[Stage 2] Starting firmographic fit for run {run_id}")
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "firmographic_fit",
                 "progress": 30,
@@ -518,7 +517,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     batch_dicts.append(cdict)
                     batch_map[(c.website or "").lower()] = c
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "stage_update",
                     "stage": "firmographic_fit",
                     "progress": 35 + int(25 * (batch_idx + 1) / max(len(list(_chunk(companies_to_verify, 8))), 1)),
@@ -527,9 +526,8 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
                 try:
                     fit_callback = create_pipeline_callback_handler(
-                        events or {}, run_id_str, event_collector,
+                        run_id_str, event_collector,
                         initial_stage="firmographic_fit",
-                        cancelled_runs=cancelled_runs,
                     )
                     fit_agent = create_firmographic_fit_agent(
                         callback_handler=fit_callback, disabled_tools=disabled_tools,
@@ -645,7 +643,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                 logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
             total_failed = len(failed) + companies_failed_agent
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "awaiting_firmographic_review",
                 "companies_passed": companies_passed,
                 "companies_failed": total_failed,
@@ -659,13 +657,12 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
         except PipelineCancelled:
             logger.info(f"Pipeline {run_id} cancelled by user")
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
 
         except Exception as e:
             logger.error(f"Pipeline {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -676,8 +673,6 @@ async def resume_after_firmographic(
     run_id: UUID,
     company_ids: list[UUID],
     signal_mode: str,
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume pipeline after firmographic review. Runs signal research (Stage 3).
 
@@ -752,7 +747,7 @@ async def resume_after_firmographic(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             log_offset = await _get_existing_log_count(db, run_id)
@@ -764,7 +759,7 @@ async def resume_after_firmographic(
 
                 await _run_signal_research(
                     db, run, promoted_companies, icp, "both",
-                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                    run_id_str, event_collector, disabled_tools,
                 )
 
                 await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -775,7 +770,7 @@ async def resume_after_firmographic(
                 avg_budget = sum(c.budget_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
                 avg_urgency = sum(c.urgency_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "awaiting_signal_review",
                     "companies_scored": len(promoted_companies),
                     "avg_budget": round(avg_budget, 1),
@@ -790,7 +785,7 @@ async def resume_after_firmographic(
 
                 await _run_signal_research(
                     db, run, promoted_companies, icp, first_type,
-                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                    run_id_str, event_collector, disabled_tools,
                 )
 
                 await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -802,7 +797,7 @@ async def resume_after_firmographic(
                 score_attr = "budget_signal_score" if first_type == "budget_signals" else "urgency_signal_score"
                 avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "awaiting_first_signal_review",
                     "signal_type": first_type,
                     "companies_scored": len(promoted_companies),
@@ -810,12 +805,11 @@ async def resume_after_firmographic(
                 })
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -825,8 +819,6 @@ async def resume_after_firmographic(
 async def resume_after_first_signal(
     run_id: UUID,
     company_ids: list[UUID],
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume after reviewing first signal results in serial mode.
     Runs the second signal type."""
@@ -893,14 +885,14 @@ async def resume_after_first_signal(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             log_offset = await _get_existing_log_count(db, run_id)
 
             await _run_signal_research(
                 db, run, promoted_companies, icp, second_type,
-                events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                run_id_str, event_collector, disabled_tools,
             )
 
             await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -912,7 +904,7 @@ async def resume_after_first_signal(
             score_attr = "budget_signal_score" if second_type == "budget_signals" else "urgency_signal_score"
             avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "awaiting_second_signal_review",
                 "signal_type": second_type,
                 "companies_scored": len(promoted_companies),
@@ -920,12 +912,11 @@ async def resume_after_first_signal(
             })
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -935,8 +926,6 @@ async def resume_after_first_signal(
 async def resume_after_signals(
     run_id: UUID,
     company_ids: list[UUID],
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume after final signal review. Runs Stages 4 (contacts) + 5 (scoring)."""
     run_id_str = str(run_id)
@@ -990,7 +979,7 @@ async def resume_after_signals(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             total_companies = len(promoted_companies)
@@ -999,7 +988,7 @@ async def resume_after_signals(
             # ════════════════════════════════════════
             # STAGE 4: Contact Discovery
             # ════════════════════════════════════════
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "contact_discovery",
                 "progress": 60,
@@ -1018,7 +1007,7 @@ async def resume_after_signals(
                 }
                 await db.commit()
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "company_start",
                     "company_name": company.name,
                     "company_index": i + 1,
@@ -1048,9 +1037,8 @@ async def resume_after_signals(
                             ]
 
                     contact_callback = create_pipeline_callback_handler(
-                        events or {}, run_id_str, event_collector,
+                        run_id_str, event_collector,
                         initial_stage="contact_discovery",
-                        cancelled_runs=cancelled_runs,
                     )
                     contact_agent = create_contact_agent(
                         callback_handler=contact_callback, disabled_tools=disabled_tools,
@@ -1097,7 +1085,7 @@ async def resume_after_signals(
                     db.add(stage_result)
                     contacts_total += contacts_saved
 
-                    _emit_event(events, run_id_str, {
+                    await _emit_event(run_id_str, {
                         "type": "company_stage_result",
                         "company_name": company.name,
                         "stage": "contact_discovery",
@@ -1119,7 +1107,7 @@ async def resume_after_signals(
             run.current_stage = "final_scoring"
             await db.commit()
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "final_scoring",
                 "progress": 90,
@@ -1166,7 +1154,7 @@ async def resume_after_signals(
 
             avg_final = sum(c.final_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "completed",
                 "companies_found": len(promoted_companies),
                 "contacts_found": contacts_total,
@@ -1179,12 +1167,11 @@ async def resume_after_signals(
             )
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1193,7 +1180,7 @@ async def resume_after_signals(
 
 async def _run_signal_research(
     db, run, companies, icp, signal_type,
-    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+    run_id_str, event_collector, disabled_tools,
 ):
     """Run signal research for a list of companies.
 
@@ -1205,7 +1192,7 @@ async def _run_signal_research(
         "both": "Budget & Urgency Signal Research",
     }.get(signal_type, signal_type)
 
-    _emit_event(events, run_id_str, {
+    await _emit_event(run_id_str, {
         "type": "stage_update",
         "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
         "progress": 40,
@@ -1222,7 +1209,7 @@ async def _run_signal_research(
         }
         await db.commit()
 
-        _emit_event(events, run_id_str, {
+        await _emit_event(run_id_str, {
             "type": "company_start",
             "company_name": company.name,
             "company_index": i + 1,
@@ -1233,9 +1220,8 @@ async def _run_signal_research(
 
         try:
             signal_callback = create_pipeline_callback_handler(
-                events or {}, run_id_str, event_collector,
+                run_id_str, event_collector,
                 initial_stage=signal_type if signal_type != "both" else "budget_urgency_signals",
-                cancelled_runs=cancelled_runs,
             )
             agent = create_signal_agent(
                 callback_handler=signal_callback, disabled_tools=disabled_tools,
@@ -1297,7 +1283,7 @@ async def _run_signal_research(
             else:
                 company.current_stage = signal_type
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "company_stage_result",
                 "company_name": company.name,
                 "stage": signal_type,

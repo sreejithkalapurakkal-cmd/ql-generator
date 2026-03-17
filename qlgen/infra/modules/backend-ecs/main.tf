@@ -97,6 +97,7 @@ resource "aws_iam_role_policy" "bedrock_invoke" {
       ]
       Resource = [
         "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5*",
         "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4*"
       ]
     }]
@@ -169,7 +170,8 @@ resource "aws_ecs_task_definition" "backend" {
     environment = [
       { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
       { name = "AWS_REGION", value = var.aws_region },
-      { name = "BEDROCK_MODEL_ID", value = "us.anthropic.claude-sonnet-4-20250514-v1:0" },
+      { name = "BEDROCK_MODEL_ID", value = "us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
+      { name = "REDIS_URL", value = "redis://${var.redis_endpoint}:6379/0" },
       { name = "DATABASE_URL", value = "postgresql+asyncpg://${var.db_username}:${var.db_password}@${var.db_endpoint}/qlgen" },
       { name = "DATABASE_URL_SYNC", value = "postgresql://${var.db_username}:${var.db_password}@${var.db_endpoint}/qlgen" },
       { name = "APOLLO_BASE_URL", value = "https://api.apollo.io/v1" },

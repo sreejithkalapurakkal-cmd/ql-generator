@@ -18,6 +18,7 @@ from app.models.company_stage import CompanyStageResult
 from app.models.icp import ICPConfig
 from app.models.pipeline import PipelineRun
 from app.services.embedding_service import generate_embedding
+from app.auth.context import current_user_id, current_user_is_admin
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,6 +33,26 @@ def _get_sync_session():
         _sync_engine = create_engine(settings.DATABASE_URL_SYNC, pool_pre_ping=True)
         _SyncSession = sessionmaker(bind=_sync_engine)
     return _SyncSession()
+
+
+def _get_user_scope():
+    """Return (user_id, is_admin) from context vars."""
+    uid = current_user_id.get()
+    admin = current_user_is_admin.get()
+    return uid, admin
+
+
+def _apply_company_user_filter(query, session_obj=None):
+    """Add a JOIN to pipeline_runs and filter by user_id for non-admin users.
+
+    Works with ORM-style queries (session.query(Company)...).
+    """
+    uid, admin = _get_user_scope()
+    if admin or uid is None:
+        return query
+    query = query.join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+    query = query.filter(PipelineRun.user_id == uid)
+    return query
 
 
 def _company_to_dict(company, include_contacts=False):
@@ -100,11 +121,21 @@ def search_companies_semantic(query: str, limit: int = 10) -> str:
     else:
         return json.dumps({"error": "Failed to generate embedding for query", "companies": []})
 
+    uid, admin = _get_user_scope()
+
     session = _get_sync_session()
     try:
-        # Use pgvector cosine distance operator
+        # Build user-scoped SQL
+        user_join = ""
+        user_where = ""
+        params = {"embedding": embedding_str, "limit": limit}
+        if not admin and uid is not None:
+            user_join = "JOIN pipeline_runs pr ON c.pipeline_run_id = pr.id"
+            user_where = "AND pr.user_id = :user_id"
+            params["user_id"] = str(uid)
+
         results = session.execute(
-            text("""
+            text(f"""
                 SELECT c.id, c.name, c.website, c.industry, c.sub_industry,
                        c.city, c.state_region, c.country, c.employee_count,
                        c.revenue_estimate, c.tech_stack_json, c.source,
@@ -112,11 +143,12 @@ def search_companies_semantic(query: str, limit: int = 10) -> str:
                        c.final_score, c.current_stage,
                        1 - (c.embedding <=> :embedding::vector) as similarity
                 FROM companies c
-                WHERE c.embedding IS NOT NULL
+                {user_join}
+                WHERE c.embedding IS NOT NULL {user_where}
                 ORDER BY c.embedding <=> :embedding::vector
                 LIMIT :limit
             """),
-            {"embedding": embedding_str, "limit": limit}
+            params,
         )
 
         companies = []
@@ -194,6 +226,9 @@ def search_companies_structured(
             )
         )
 
+        # Apply user scoping
+        query = _apply_company_user_filter(query)
+
         if industry:
             query = query.filter(Company.industry.ilike(f"%{industry}%"))
         if country:
@@ -248,17 +283,25 @@ def get_company_details(company_id: str) -> str:
     Returns:
         JSON string with full company details including contacts and stage results
     """
+    uid, admin = _get_user_scope()
     session = _get_sync_session()
     try:
-        company = (
+        query = (
             session.query(Company)
             .options(
                 joinedload(Company.contacts),
                 joinedload(Company.stage_results),
             )
             .filter(Company.id == company_id)
-            .first()
         )
+
+        # Verify company belongs to user via pipeline_run
+        if not admin and uid is not None:
+            query = query.join(PipelineRun, Company.pipeline_run_id == PipelineRun.id).filter(
+                PipelineRun.user_id == uid
+            )
+
+        company = query.first()
 
         if not company:
             return json.dumps({"error": f"Company {company_id} not found"})
@@ -299,10 +342,14 @@ def get_icp_details(icp_id: str = None) -> str:
     Returns:
         JSON string with ICP configuration(s)
     """
+    uid, admin = _get_user_scope()
     session = _get_sync_session()
     try:
         if icp_id:
-            icp = session.query(ICPConfig).filter(ICPConfig.id == icp_id).first()
+            query = session.query(ICPConfig).filter(ICPConfig.id == icp_id)
+            if not admin and uid is not None:
+                query = query.filter(ICPConfig.user_id == uid)
+            icp = query.first()
             if not icp:
                 return json.dumps({"error": f"ICP {icp_id} not found"})
             return json.dumps({
@@ -314,12 +361,14 @@ def get_icp_details(icp_id: str = None) -> str:
                 "is_active": icp.is_active,
             })
 
-        icps = (
+        query = (
             session.query(ICPConfig)
             .filter(ICPConfig.is_active == True)
-            .order_by(ICPConfig.created_at.desc())
-            .all()
         )
+        if not admin and uid is not None:
+            query = query.filter(ICPConfig.user_id == uid)
+        icps = query.order_by(ICPConfig.created_at.desc()).all()
+
         return json.dumps({
             "count": len(icps),
             "icps": [
@@ -352,10 +401,14 @@ def get_pipeline_summary(run_id: str = None) -> str:
     Returns:
         JSON string with pipeline run summary/stats
     """
+    uid, admin = _get_user_scope()
     session = _get_sync_session()
     try:
         if run_id:
-            run = session.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+            query = session.query(PipelineRun).filter(PipelineRun.id == run_id)
+            if not admin and uid is not None:
+                query = query.filter(PipelineRun.user_id == uid)
+            run = query.first()
             if not run:
                 return json.dumps({"error": f"Pipeline run {run_id} not found"})
 
@@ -375,8 +428,11 @@ def get_pipeline_summary(run_id: str = None) -> str:
                 "completed_at": str(run.completed_at) if run.completed_at else None,
             })
 
+        query = session.query(PipelineRun)
+        if not admin and uid is not None:
+            query = query.filter(PipelineRun.user_id == uid)
         runs = (
-            session.query(PipelineRun)
+            query
             .order_by(PipelineRun.started_at.desc().nullslast())
             .limit(20)
             .all()
@@ -413,51 +469,73 @@ def get_data_statistics() -> str:
     Returns:
         JSON string with comprehensive data statistics
     """
+    uid, admin = _get_user_scope()
     session = _get_sync_session()
     try:
+        # Build base company query with user scoping
+        def scoped_company_query():
+            q = session.query(Company)
+            if not admin and uid is not None:
+                q = q.join(PipelineRun, Company.pipeline_run_id == PipelineRun.id).filter(
+                    PipelineRun.user_id == uid
+                )
+            return q
+
         # Totals
-        total_companies = session.query(func.count(Company.id)).scalar() or 0
-        total_contacts = session.query(func.count(Contact.id)).scalar() or 0
-        total_runs = session.query(func.count(PipelineRun.id)).scalar() or 0
-        total_icps = session.query(func.count(ICPConfig.id)).filter(ICPConfig.is_active == True).scalar() or 0
+        total_companies = scoped_company_query().with_entities(func.count(Company.id)).scalar() or 0
+
+        # Contact count (scoped through companies)
+        contact_q = session.query(func.count(Contact.id)).join(Company, Contact.company_id == Company.id)
+        if not admin and uid is not None:
+            contact_q = contact_q.join(PipelineRun, Company.pipeline_run_id == PipelineRun.id).filter(
+                PipelineRun.user_id == uid
+            )
+        total_contacts = contact_q.scalar() or 0
+
+        # Pipeline run count
+        run_q = session.query(func.count(PipelineRun.id))
+        if not admin and uid is not None:
+            run_q = run_q.filter(PipelineRun.user_id == uid)
+        total_runs = run_q.scalar() or 0
+
+        # ICP count
+        icp_q = session.query(func.count(ICPConfig.id)).filter(ICPConfig.is_active == True)
+        if not admin and uid is not None:
+            icp_q = icp_q.filter(ICPConfig.user_id == uid)
+        total_icps = icp_q.scalar() or 0
 
         # Score distribution
-        avg_final = session.query(func.avg(Company.final_score)).filter(
-            Company.final_score.isnot(None)
-        ).scalar()
-        high_score = session.query(func.count(Company.id)).filter(
-            Company.final_score >= 75,
-        ).scalar() or 0
-        medium_score = session.query(func.count(Company.id)).filter(
-            Company.final_score >= 50,
-            Company.final_score < 75,
-        ).scalar() or 0
-        low_score = session.query(func.count(Company.id)).filter(
-            Company.final_score > 0,
-            Company.final_score < 50,
-        ).scalar() or 0
+        avg_final = scoped_company_query().with_entities(
+            func.avg(Company.final_score)
+        ).filter(Company.final_score.isnot(None)).scalar()
+
+        high_score = scoped_company_query().with_entities(
+            func.count(Company.id)
+        ).filter(Company.final_score >= 75).scalar() or 0
+
+        medium_score = scoped_company_query().with_entities(
+            func.count(Company.id)
+        ).filter(Company.final_score >= 50, Company.final_score < 75).scalar() or 0
+
+        low_score = scoped_company_query().with_entities(
+            func.count(Company.id)
+        ).filter(Company.final_score > 0, Company.final_score < 50).scalar() or 0
 
         # Industry breakdown
-        industry_rows = (
-            session.query(Company.industry, func.count(Company.id))
-            .filter(Company.industry.isnot(None))
-            .group_by(Company.industry)
-            .order_by(func.count(Company.id).desc())
-            .limit(15)
-            .all()
-        )
-        industry_breakdown = {row[0]: row[1] for row in industry_rows}
+        industry_q = scoped_company_query().with_entities(
+            Company.industry, func.count(Company.id)
+        ).filter(Company.industry.isnot(None)).group_by(
+            Company.industry
+        ).order_by(func.count(Company.id).desc()).limit(15)
+        industry_breakdown = {row[0]: row[1] for row in industry_q.all()}
 
         # Country breakdown
-        country_rows = (
-            session.query(Company.country, func.count(Company.id))
-            .filter(Company.country.isnot(None))
-            .group_by(Company.country)
-            .order_by(func.count(Company.id).desc())
-            .limit(15)
-            .all()
-        )
-        country_breakdown = {row[0]: row[1] for row in country_rows}
+        country_q = scoped_company_query().with_entities(
+            Company.country, func.count(Company.id)
+        ).filter(Company.country.isnot(None)).group_by(
+            Company.country
+        ).order_by(func.count(Company.id).desc()).limit(15)
+        country_breakdown = {row[0]: row[1] for row in country_q.all()}
 
         return json.dumps({
             "totals": {
@@ -514,6 +592,9 @@ def search_local_companies(
             session.query(Company)
             .options(joinedload(Company.contacts))
         )
+
+        # Apply user scoping
+        query = _apply_company_user_filter(query)
 
         if industry:
             query = query.filter(Company.industry.ilike(f"%{industry}%"))

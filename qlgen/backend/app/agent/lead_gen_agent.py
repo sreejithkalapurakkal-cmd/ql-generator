@@ -85,17 +85,18 @@ STAGE_DISPLAY_NAMES = {
 # ──────────────────────────────────────────────────────────────────
 
 def create_pipeline_callback_handler(
-    events: dict,
     run_id_str: str,
     event_collector: list = None,
     initial_stage: str = "industry_discovery",
-    cancelled_runs: set = None,
 ):
     """Create a Strands callback handler that emits SSE events for pipeline progress.
 
     The handler captures tool calls, agent reasoning text, and lifecycle events
-    and pushes them into the in-memory SSE event queue.
+    and pushes them into Redis (for cross-process SSE delivery) and into
+    event_collector (for DB persistence).
     """
+    from app.services.event_store import push_event_sync, is_cancelled_sync
+
     state = {
         "current_stage": initial_stage,
         "text_buffer": "",
@@ -113,8 +114,7 @@ def create_pipeline_callback_handler(
     ]
 
     def _emit(event: dict):
-        if events is not None and run_id_str in events:
-            events[run_id_str].append(event)
+        push_event_sync(run_id_str, event)
         if event_collector is not None:
             event_collector.append(event)
 
@@ -200,7 +200,7 @@ def create_pipeline_callback_handler(
         state["pending_tool"] = None
 
     def callback_handler(**kwargs):
-        if cancelled_runs is not None and run_id_str in cancelled_runs:
+        if is_cancelled_sync(run_id_str):
             raise PipelineCancelled(f"Pipeline {run_id_str} cancelled by user")
 
         try:

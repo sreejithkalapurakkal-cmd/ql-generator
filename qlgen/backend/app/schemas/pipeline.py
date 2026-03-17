@@ -30,6 +30,7 @@ class PipelineRunResponse(BaseModel):
     signal_mode: Optional[str] = None
     signal_phase: Optional[str] = None
     stage_details: Optional[dict] = None
+    user_name: Optional[str] = None
 
     class Config:
         from_attributes = True
