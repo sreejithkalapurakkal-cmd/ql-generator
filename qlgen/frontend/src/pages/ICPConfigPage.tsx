@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Switch } from 'antd';
 import { UploadOutlined, FileExcelOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI, generateICPFromFile } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
 import { ICPDefinition, DEFAULT_ICP } from '../types';
@@ -54,6 +54,7 @@ const TagInputField: React.FC<{
 
 const ICPConfigPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id: string }>();
   const [current, setCurrent] = useState(0);
   const [name, setName] = useState('');
@@ -121,8 +122,16 @@ const ICPConfigPage: React.FC = () => {
         setDescription(res.data.description || '');
         setConfig(res.data.config as unknown as ICPDefinition);
       });
+    } else {
+      const cloneFrom = (location.state as any)?.cloneFrom;
+      if (cloneFrom) {
+        setName(`Copy of ${cloneFrom.name}`);
+        setDescription(cloneFrom.description || '');
+        setConfig(cloneFrom.config as unknown as ICPDefinition);
+        setCurrent(5); // Jump to Review step
+      }
     }
-  }, [id]);
+  }, [id, location.state]);
 
   const updateIndustry = useCallback((index: number, field: 'vertical' | 'sub_vertical', value: string) => {
     setConfig((prev) => {
