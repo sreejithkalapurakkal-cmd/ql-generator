@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Spin, Typography, message } from 'antd';
+import { Spin, Typography } from 'antd';
+import { CloseCircleFilled } from '@ant-design/icons';
 import { googleCallback } from '../api/authApi';
 import { useAuth } from '../context/AuthContext';
 
@@ -11,6 +12,7 @@ const AuthCallbackPage: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(4);
   const processed = useRef(false);
 
   const handleCallback = useCallback(async () => {
@@ -18,14 +20,16 @@ const AuthCallbackPage: React.FC = () => {
     const errorParam = searchParams.get('error');
 
     if (errorParam) {
-      setError(`Google authentication failed: ${errorParam}`);
-      setTimeout(() => navigate('/login'), 3000);
+      setError(
+        errorParam === 'access_denied'
+          ? 'Sign-in was cancelled. Please try again.'
+          : `Sign-in failed: ${errorParam}`
+      );
       return;
     }
 
     if (!code) {
-      setError('No authorization code received');
-      setTimeout(() => navigate('/login'), 3000);
+      setError('No authorisation code was received. Please try signing in again.');
       return;
     }
 
@@ -38,10 +42,8 @@ const AuthCallbackPage: React.FC = () => {
     } catch (err: unknown) {
       const detail =
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        'Authentication failed';
+        'Authentication failed. Please try again.';
       setError(detail);
-      message.error(detail);
-      setTimeout(() => navigate('/login'), 3000);
     }
   }, [searchParams, navigate, login]);
 
@@ -51,24 +53,76 @@ const AuthCallbackPage: React.FC = () => {
     handleCallback(); // eslint-disable-line react-hooks/set-state-in-effect
   }, [handleCallback]);
 
+  // Countdown + redirect when error is set
+  useEffect(() => {
+    if (!error) return;
+    const interval = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) {
+          clearInterval(interval);
+          navigate('/welcome');
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [error, navigate]);
+
   if (error) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <Text type="danger" style={{ fontSize: 16 }}>{error}</Text>
-          <br />
-          <Text type="secondary" style={{ marginTop: 8 }}>Redirecting to login...</Text>
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--g50)',
+      }}>
+        <div style={{
+          background: '#fff',
+          border: '1px solid var(--g200)',
+          borderRadius: 'var(--radius)',
+          boxShadow: 'var(--shadow-md)',
+          padding: '40px 48px',
+          textAlign: 'center',
+          maxWidth: 420,
+          width: '100%',
+        }}>
+          <CloseCircleFilled style={{ fontSize: 40, color: 'var(--red)', marginBottom: 16 }} />
+          <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--g900)', marginBottom: 10 }}>
+            Sign-in failed
+          </div>
+          <div style={{
+            fontSize: 14,
+            color: 'var(--g600)',
+            lineHeight: 1.6,
+            marginBottom: 24,
+            padding: '10px 14px',
+            background: '#fff5f5',
+            border: '1px solid #fecaca',
+            borderRadius: 'var(--radius-sm)',
+          }}>
+            {error}
+          </div>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            Redirecting to sign-in in {countdown}s…
+          </Text>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--g50)',
+    }}>
       <div style={{ textAlign: 'center' }}>
         <Spin size="large" />
         <div style={{ marginTop: 16 }}>
-          <Text type="secondary">Signing you in...</Text>
+          <Text type="secondary" style={{ fontSize: 14 }}>Signing you in…</Text>
         </div>
       </div>
     </div>

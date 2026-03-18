@@ -85,10 +85,22 @@ async def google_callback(
     user = result.scalar_one_or_none()
 
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your email is not authorized. Please contact an administrator.",
-        )
+        # Bootstrap: if the users table is empty, create the first user as super_admin
+        from sqlalchemy import func as sa_func
+        count_result = await db.execute(select(sa_func.count()).select_from(User))
+        user_count = count_result.scalar()
+
+        if user_count == 0:
+            logger.info(f"Bootstrap: creating first super_admin user {email}")
+            user = User(email=email, name=name, picture_url=picture, google_id=google_id, role="super_admin", is_active=True)
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your email is not authorized. Please contact an administrator.",
+            )
 
     if not user.is_active:
         raise HTTPException(
