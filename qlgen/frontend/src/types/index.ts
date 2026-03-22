@@ -17,6 +17,8 @@ export interface ICPConfig {
   created_at?: string;
   updated_at?: string;
   is_active?: boolean;
+  user_name?: string | null;
+  user_email?: string | null;
 }
 
 export interface ICPDefinition {
@@ -71,6 +73,7 @@ export interface PipelineRun {
   pipeline_mode?: string | null;
   match_strictness?: string | null;
   estimated_duration_seconds?: number | null;
+  user_name?: string | null;
   stage_details?: {
     total_discovered?: number;
     pre_filter_passed?: number;
@@ -83,6 +86,8 @@ export interface PipelineRun {
     total_companies_in_stage?: number;
     current_company_name?: string;
     contacts_found_so_far?: number;
+    newly_discovered?: number;
+    carried_forward?: number;
   } | null;
 }
 
@@ -152,9 +157,16 @@ export interface Company {
   final_score?: number | null;
   final_rank?: number | null;
   cached_from_run_id?: string | null;
+  carried_forward?: boolean | null;
   data_freshness?: string | null;
   stage_results?: CompanyStageResult[];
   bant_score?: { total_score?: number } | null;
+  // Recency-adjusted scoring
+  recency_adjusted_budget_score?: number | null;
+  recency_adjusted_urgency_score?: number | null;
+  deal_hotness_score?: number | null;
+  deal_hotness_tier?: string | null;
+  avg_evidence_age_months?: number | null;
 }
 
 export interface StageSummary {
@@ -172,6 +184,29 @@ export interface StageSummaryResponse {
   signal_mode: string | null;
   stages: StageSummary[];
   cached_companies: number;
+}
+
+// Tool Attribution types
+export interface ToolAttribution {
+  tool_name: string;
+  companies_discovered: number;
+  companies_qualified: number;
+  companies_disqualified: number;
+  high_fit_count: number;
+  medium_fit_count: number;
+  low_fit_count: number;
+  avg_icp_match_score: number | null;
+  efficiency: number | null;
+  sample_companies: string[];
+  total_calls: number;
+  successful_calls: number;
+  failed_calls: number;
+  success_rate: number | null;
+}
+
+export interface ToolAttributionResponse {
+  run_id: string;
+  tools: ToolAttribution[];
 }
 
 // Co-pilot Chat types
@@ -247,6 +282,49 @@ export interface ToolHealthCheckResult {
   status: string;
   message: string;
   checked_at: string;
+}
+
+// Admin types
+export interface AdminUserSummary {
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  role: string;
+  icp_count: number;
+  pipeline_count: number;
+  last_activity: string | null;
+}
+
+export interface AdminActivityResponse {
+  user_summaries: AdminUserSummary[];
+  recent_runs: {
+    id: string;
+    icp_name: string | null;
+    user_name: string | null;
+    status: string;
+    companies_found: number;
+    contacts_found: number;
+    started_at: string | null;
+  }[];
+  recent_icps: {
+    id: string;
+    name: string;
+    user_name: string | null;
+    created_at: string | null;
+  }[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string | null;
 }
 
 export const DEFAULT_ICP: ICPDefinition = {

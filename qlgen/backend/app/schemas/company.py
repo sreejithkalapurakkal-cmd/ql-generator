@@ -72,6 +72,15 @@ class CompanyResponse(BaseModel):
     data_freshness: Optional[datetime] = None
     stage_results: List[CompanyStageResultResponse] = []
 
+    carried_forward: Optional[bool] = None
+
+    # Recency-adjusted scoring
+    recency_adjusted_budget_score: Optional[float] = None
+    recency_adjusted_urgency_score: Optional[float] = None
+    deal_hotness_score: Optional[float] = None
+    deal_hotness_tier: Optional[str] = None
+    avg_evidence_age_months: Optional[float] = None
+
     class Config:
         from_attributes = True
 
@@ -87,3 +96,7 @@ class LeadExportRow(BaseModel):
     email: Optional[str]
     phone: Optional[str]
     final_score: Optional[float]
+    budget_signal_score: Optional[float] = None
+    urgency_signal_score: Optional[float] = None
+    deal_hotness_score: Optional[float] = None
+    deal_hotness_tier: Optional[str] = None

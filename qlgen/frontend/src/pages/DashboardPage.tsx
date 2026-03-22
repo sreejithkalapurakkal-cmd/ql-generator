@@ -1,16 +1,39 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress } from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress, Avatar } from 'antd';
+import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined, UserOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
-import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus } from '../api/pipelineApi';
-import { PipelineRun } from '../types';
+import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus, getAdminActivity } from '../api/pipelineApi';
+import { PipelineRun, AdminActivityResponse, AdminUserSummary } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
 
+const relativeTime = (dateStr: string | null): string => {
+  if (!dateStr) return 'Never';
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = now - then;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+};
+
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user: authUser } = useAuth();
+  const isAdmin = authUser?.role === 'super_admin';
   const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [adminActivity, setAdminActivity] = useState<AdminActivityResponse | null>(null);
+  const [adminTab, setAdminTab] = useState<'users' | 'searches' | 'icps'>('users');
+  const [adminUserSearch, setAdminUserSearch] = useState('');
+  const [adminRoleFilter, setAdminRoleFilter] = useState<string>('all');
+  const [adminRunStatusFilter, setAdminRunStatusFilter] = useState<string>('all');
 
   // Search + filter + infinite scroll state
   const [searchQuery, setSearchQuery] = useState('');
@@ -34,7 +57,12 @@ const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     refreshRuns();
-  }, []);
+    if (isAdmin) {
+      getAdminActivity()
+        .then((res) => setAdminActivity(res.data))
+        .catch(() => setAdminActivity(null));
+    }
+  }, [isAdmin]);
 
   const runsList = Array.isArray(runs) ? runs : [];
 
@@ -90,6 +118,47 @@ const DashboardPage: React.FC = () => {
 
   // Reset display count when filters change
   useEffect(() => { setDisplayCount(12); }, [searchQuery, statusFilter]);
+
+  // Admin filtered data
+  const filteredAdminUsers = useMemo(() => {
+    if (!adminActivity) return [];
+    let result = adminActivity.user_summaries;
+    if (adminRoleFilter !== 'all') {
+      result = result.filter((u) => u.role === adminRoleFilter);
+    }
+    if (adminUserSearch.trim()) {
+      const q = adminUserSearch.toLowerCase();
+      result = result.filter(
+        (u) =>
+          u.user_name?.toLowerCase().includes(q) ||
+          u.user_email?.toLowerCase().includes(q)
+      );
+    }
+    return result;
+  }, [adminActivity, adminRoleFilter, adminUserSearch]);
+
+  const filteredAdminRuns = useMemo(() => {
+    if (!adminActivity) return [];
+    let result = adminActivity.recent_runs;
+    if (adminRunStatusFilter !== 'all') {
+      result = result.filter((r) => r.status === adminRunStatusFilter);
+    }
+    return result;
+  }, [adminActivity, adminRunStatusFilter]);
+
+  const adminMetrics = useMemo(() => {
+    if (!adminActivity) return { totalUsers: 0, activeUsers: 0, totalICPs: 0, totalSearches: 0 };
+    const now = Date.now();
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    return {
+      totalUsers: adminActivity.user_summaries.length,
+      activeUsers: adminActivity.user_summaries.filter(
+        (u) => u.last_activity && now - new Date(u.last_activity).getTime() < sevenDays
+      ).length,
+      totalICPs: adminActivity.user_summaries.reduce((s, u) => s + u.icp_count, 0),
+      totalSearches: adminActivity.user_summaries.reduce((s, u) => s + u.pipeline_count, 0),
+    };
+  }, [adminActivity]);
 
   // IntersectionObserver for infinite scroll
   useEffect(() => {
@@ -330,9 +399,16 @@ const DashboardPage: React.FC = () => {
                     {/* Header: name + status badge */}
                     <div className="rc-header">
                       <div className="rc-title">{run.icp_name || `Run #${run.id.substring(0, 8)}`}</div>
-                      <Tag color={statusColor[run.status] || 'default'} style={{ fontSize: 11, height: 22 }}>
-                        {run.status.toUpperCase()}
-                      </Tag>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {isAdmin && run.user_name && (
+                          <span style={{ fontSize: 11, color: 'var(--g400)', fontWeight: 500 }}>
+                            by {run.user_name}
+                          </span>
+                        )}
+                        <Tag color={statusColor[run.status] || 'default'} style={{ fontSize: 11, height: 22 }}>
+                          {run.status.toUpperCase()}
+                        </Tag>
+                      </div>
                     </div>
 
                     {/* Date + offering snippet */}
@@ -524,6 +600,226 @@ const DashboardPage: React.FC = () => {
             </Space>
           </Space>
         </Card>
+      )}
+
+      {/* Admin Activity Section */}
+      {isAdmin && adminActivity && (
+        <div style={{
+          marginTop: 32,
+          background: 'var(--g50)',
+          border: '1px solid var(--g200)',
+          borderRadius: 'var(--radius)',
+          padding: 24,
+        }}>
+          <div className="section-label">Administration</div>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: '0 0 16px' }}>Team Activity</h2>
+
+          {/* Admin Overview Metrics */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={12} md={6}>
+              <div className="metric-tile">
+                <div className="metric-icon">👥</div>
+                <div className="value">{adminMetrics.totalUsers}</div>
+                <div className="label">Total Users</div>
+              </div>
+            </Col>
+            <Col xs={12} md={6}>
+              <div className="metric-tile">
+                <div className="metric-icon">✅</div>
+                <div className="value">{adminMetrics.activeUsers}</div>
+                <div className="label">Active (7d)</div>
+              </div>
+            </Col>
+            <Col xs={12} md={6}>
+              <div className="metric-tile">
+                <div className="metric-icon">🎯</div>
+                <div className="value">{adminMetrics.totalICPs}</div>
+                <div className="label">Total ICPs</div>
+              </div>
+            </Col>
+            <Col xs={12} md={6}>
+              <div className="metric-tile">
+                <div className="metric-icon">🔍</div>
+                <div className="value">{adminMetrics.totalSearches}</div>
+                <div className="label">Total Searches</div>
+              </div>
+            </Col>
+          </Row>
+
+          {/* Tab Bar */}
+          <div className="tabs">
+            <div className={`tab${adminTab === 'users' ? ' active' : ''}`} onClick={() => setAdminTab('users')}>Users</div>
+            <div className={`tab${adminTab === 'searches' ? ' active' : ''}`} onClick={() => setAdminTab('searches')}>Searches</div>
+            <div className={`tab${adminTab === 'icps' ? ' active' : ''}`} onClick={() => setAdminTab('icps')}>ICPs</div>
+          </div>
+
+          {/* Users Tab */}
+          {adminTab === 'users' && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                <Input
+                  prefix={<SearchOutlined style={{ color: 'var(--g400)' }} />}
+                  placeholder="Search users..."
+                  allowClear
+                  value={adminUserSearch}
+                  onChange={(e) => setAdminUserSearch(e.target.value)}
+                  style={{ maxWidth: 260, width: 220 }}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['all', 'super_admin', 'user'] as const).map((role) => (
+                    <div
+                      key={role}
+                      onClick={() => setAdminRoleFilter(role)}
+                      style={{
+                        padding: '4px 12px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        background: adminRoleFilter === role ? 'var(--purple-pale, #f0e6ff)' : 'var(--g100, #f5f5f5)',
+                        color: adminRoleFilter === role ? 'var(--purple)' : 'var(--g500)',
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      {role === 'all' ? 'All' : role === 'super_admin' ? 'Admin' : 'User'}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <Table
+                dataSource={filteredAdminUsers}
+                rowKey="user_id"
+                size="small"
+                pagination={false}
+                onRow={() => ({
+                  onClick: () => navigate('/admin/users'),
+                  style: { cursor: 'pointer' },
+                })}
+                columns={[
+                  {
+                    title: 'User', key: 'user',
+                    render: (_: unknown, r: AdminUserSummary) => (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar size={32} icon={<UserOutlined />} style={{ background: 'var(--purple-pale)', color: 'var(--purple)', flexShrink: 0 }} />
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--g800)' }}>{r.user_name || 'Unnamed'}</div>
+                          <div style={{ fontSize: 12, color: 'var(--g400)' }}>{r.user_email}</div>
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    title: 'Role', dataIndex: 'role', key: 'role', width: 100,
+                    render: (role: string) => <Tag color={role === 'super_admin' ? 'purple' : 'default'}>{role === 'super_admin' ? 'Admin' : 'User'}</Tag>,
+                  },
+                  { title: 'ICPs', dataIndex: 'icp_count', key: 'icp_count', width: 70 },
+                  { title: 'Searches', dataIndex: 'pipeline_count', key: 'pipeline_count', width: 90 },
+                  {
+                    title: 'Last Activity', dataIndex: 'last_activity', key: 'last_activity', width: 120,
+                    render: (d: string | null) => <span style={{ color: 'var(--g500)', fontSize: 12 }}>{relativeTime(d)}</span>,
+                  },
+                ]}
+              />
+            </>
+          )}
+
+          {/* Searches Tab */}
+          {adminTab === 'searches' && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+                {(['all', 'completed', 'running', 'failed'] as const).map((status) => (
+                  <div
+                    key={status}
+                    onClick={() => setAdminRunStatusFilter(status)}
+                    style={{
+                      padding: '4px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      background: adminRunStatusFilter === status ? 'var(--purple-pale, #f0e6ff)' : 'var(--g100, #f5f5f5)',
+                      color: adminRunStatusFilter === status ? 'var(--purple)' : 'var(--g500)',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+                  </div>
+                ))}
+              </div>
+              <Table
+                dataSource={filteredAdminRuns}
+                rowKey="id"
+                size="small"
+                pagination={false}
+                columns={[
+                  {
+                    title: 'Name', key: 'name', ellipsis: true,
+                    render: (_: unknown, r: AdminActivityResponse['recent_runs'][0]) => (
+                      <a
+                        onClick={() => r.status === 'running' ? navigate(`/pipeline/${r.id}`) : navigate(`/leads/${r.id}`)}
+                        style={{ color: 'var(--purple)', cursor: 'pointer', fontWeight: 500 }}
+                      >
+                        {r.icp_name || r.id.substring(0, 8)}
+                      </a>
+                    ),
+                  },
+                  {
+                    title: 'User', key: 'user', width: 140, ellipsis: true,
+                    render: (_: unknown, r: AdminActivityResponse['recent_runs'][0]) => (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Avatar size={20} icon={<UserOutlined />} style={{ background: 'var(--purple-pale)', color: 'var(--purple)', flexShrink: 0, fontSize: 10 }} />
+                        <span style={{ fontSize: 12 }}>{r.user_name || 'Unknown'}</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    title: 'Status', dataIndex: 'status', key: 'status', width: 100,
+                    render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s}</Tag>,
+                  },
+                  { title: 'Companies', dataIndex: 'companies_found', key: 'companies_found', width: 95 },
+                  { title: 'Contacts', dataIndex: 'contacts_found', key: 'contacts_found', width: 85 },
+                  {
+                    title: 'Date', dataIndex: 'started_at', key: 'started_at', width: 100,
+                    render: (d: string | null) => <span style={{ color: 'var(--g500)', fontSize: 12 }}>{relativeTime(d)}</span>,
+                  },
+                ]}
+              />
+            </>
+          )}
+
+          {/* ICPs Tab */}
+          {adminTab === 'icps' && (
+            <Table
+              dataSource={adminActivity.recent_icps}
+              rowKey="id"
+              size="small"
+              pagination={false}
+              columns={[
+                {
+                  title: 'Name', dataIndex: 'name', key: 'name', ellipsis: true,
+                  render: (name: string, r: AdminActivityResponse['recent_icps'][0]) => (
+                    <a onClick={() => navigate(`/icp/${r.id}/edit`)} style={{ color: 'var(--purple)', cursor: 'pointer', fontWeight: 500 }}>
+                      {name}
+                    </a>
+                  ),
+                },
+                {
+                  title: 'User', key: 'user', width: 140, ellipsis: true,
+                  render: (_: unknown, r: AdminActivityResponse['recent_icps'][0]) => (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Avatar size={20} icon={<UserOutlined />} style={{ background: 'var(--purple-pale)', color: 'var(--purple)', flexShrink: 0, fontSize: 10 }} />
+                      <span style={{ fontSize: 12 }}>{r.user_name || 'Unknown'}</span>
+                    </div>
+                  ),
+                },
+                {
+                  title: 'Created', dataIndex: 'created_at', key: 'created_at', width: 120,
+                  render: (d: string | null) => <span style={{ color: 'var(--g500)', fontSize: 12 }}>{relativeTime(d)}</span>,
+                },
+              ]}
+            />
+          )}
+        </div>
       )}
 
       {/* Stats Breakdown Modal */}

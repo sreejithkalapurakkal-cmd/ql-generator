@@ -3,6 +3,8 @@ import logging
 
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search, is_rate_limited as _ddg_is_rate_limited
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,12 +28,6 @@ def search_job_postings(
     Returns:
         dict with job_postings, hiring_signals, and org_insights
     """
-    try:
-        from ddgs import DDGS
-        from ddgs.exceptions import RatelimitException
-    except ImportError:
-        return {"error": "DuckDuckGo library not available", "job_postings": []}
-
     role_keywords = role_keywords or []
     all_postings = []
     hiring_signals = []
@@ -53,58 +49,49 @@ def search_job_postings(
         domain_clean = company_domain.replace("https://", "").replace("http://", "").rstrip("/")
         queries.append(f'site:{domain_clean} careers OR jobs OR "open positions"')
 
-    try:
-        with DDGS() as ddgs:
-            for query in queries:
-                try:
-                    results = list(ddgs.text(query, max_results=5))
-                    for r in results:
-                        posting = {
-                            "title": r.get("title", ""),
-                            "url": r.get("href", ""),
-                            "snippet": r.get("body", ""),
-                            "source_query": query.split('"')[0].strip() if '"' in query else "general",
-                        }
+    for query in queries:
+        if _ddg_is_rate_limited():
+            hiring_signals.append("DuckDuckGo rate limited — partial results only")
+            break
 
-                        # Extract insights from job titles
-                        title_lower = posting["title"].lower()
-                        snippet_lower = posting["snippet"].lower()
+        results = _ddg_search(query, max_results=5)
 
-                        # Detect hiring manager names in snippets
-                        if "hiring manager" in snippet_lower or "reports to" in snippet_lower:
-                            org_insights.append(f"Hiring manager signal in: {posting['title']}")
+        # Check for rate-limit error
+        if results and isinstance(results[0], dict) and (results[0].get("rate_limited") or results[0].get("error")):
+            hiring_signals.append("DuckDuckGo rate limited — partial results only")
+            break
 
-                        # Detect tech stack from descriptions
-                        tech_keywords = [
-                            "python", "java", "react", "aws", "azure", "gcp",
-                            "kubernetes", "docker", "terraform", "salesforce",
-                            "sap", "oracle", "snowflake", "databricks",
-                        ]
-                        found_tech = [t for t in tech_keywords if t in snippet_lower]
-                        if found_tech:
-                            org_insights.append(f"Tech stack from jobs: {', '.join(found_tech)}")
+        for r in results:
+            posting = {
+                "title": r.get("title", ""),
+                "url": r.get("href", ""),
+                "snippet": r.get("body", ""),
+                "source_query": query.split('"')[0].strip() if '"' in query else "general",
+            }
 
-                        # Detect growth signals
-                        growth_keywords = ["scaling", "growing", "expanding", "new team", "building"]
-                        if any(g in snippet_lower for g in growth_keywords):
-                            hiring_signals.append(f"Growth signal: {posting['title']}")
+            # Extract insights from job titles
+            snippet_lower = posting["snippet"].lower()
 
-                        all_postings.append(posting)
-                except RatelimitException:
-                    hiring_signals.append("DuckDuckGo rate limited — partial results only")
-                    break
-                except Exception as e:
-                    logger.debug(f"Job search query failed: {query} - {e}")
-                    continue
+            # Detect hiring manager names in snippets
+            if "hiring manager" in snippet_lower or "reports to" in snippet_lower:
+                org_insights.append(f"Hiring manager signal in: {posting['title']}")
 
-    except RatelimitException:
-        return {
-            "error": "RATE_LIMITED: DuckDuckGo is blocking queries. Switch to other search tools.",
-            "job_postings": [],
-            "rate_limited": True,
-        }
-    except Exception as e:
-        return {"error": str(e), "job_postings": []}
+            # Detect tech stack from descriptions
+            tech_keywords = [
+                "python", "java", "react", "aws", "azure", "gcp",
+                "kubernetes", "docker", "terraform", "salesforce",
+                "sap", "oracle", "snowflake", "databricks",
+            ]
+            found_tech = [t for t in tech_keywords if t in snippet_lower]
+            if found_tech:
+                org_insights.append(f"Tech stack from jobs: {', '.join(found_tech)}")
+
+            # Detect growth signals
+            growth_keywords = ["scaling", "growing", "expanding", "new team", "building"]
+            if any(g in snippet_lower for g in growth_keywords):
+                hiring_signals.append(f"Growth signal: {posting['title']}")
+
+            all_postings.append(posting)
 
     # Deduplicate postings by URL
     seen_urls = set()

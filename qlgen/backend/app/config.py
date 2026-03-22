@@ -8,9 +8,12 @@ class Settings(BaseSettings):
 
     # AWS Bedrock
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     BEDROCK_EMBEDDING_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
     EMBEDDING_DIMENSION: int = 1024
+
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # CORS
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
@@ -33,6 +36,15 @@ class Settings(BaseSettings):
     FMP_API_KEY: str = ""
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
+
+    # Free government registry API keys
+    COMPANIES_HOUSE_API_KEY: str = ""     # UK Companies House (free at developer.company-information.service.gov.uk)
+
+    # Free/optional API keys for enhanced discovery
+    GITHUB_TOKEN: str = ""                # GitHub API (5000 req/hr with token, 60 without)
+    GOOGLE_CSE_API_KEY: str = ""          # Google Custom Search (100 free queries/day)
+    GOOGLE_CSE_ID: str = ""               # Google Programmable Search Engine ID
+    PRODUCTHUNT_TOKEN: str = ""           # ProductHunt API (free developer token)
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""

@@ -3,6 +3,8 @@ import time
 
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search, is_rate_limited as _ddg_is_rate_limited
+
 
 @tool
 def find_linkedin_profiles(
@@ -25,25 +27,20 @@ def find_linkedin_profiles(
     if not titles:
         titles = ["CEO", "CTO", "VP Engineering", "Head of Product"]
 
-    try:
-        from ddgs import DDGS
-    except ImportError:
-        return {"error": "ddgs package not installed", "profiles": []}
-
     profiles = []
     seen_urls = set()
     linkedin_pattern = re.compile(r"https?://(?:www\.)?linkedin\.com/in/([\w-]+)")
 
     for i, title in enumerate(titles):
-        if i > 0:
-            time.sleep(2)  # Rate limit between searches
+        if _ddg_is_rate_limited():
+            break
 
         query = f'site:linkedin.com/in "{company_name}" "{title}"'
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=5))
-        except Exception:
-            continue
+        results = _ddg_search(query, max_results=5)
+
+        # Skip rate-limit error results
+        if results and isinstance(results[0], dict) and (results[0].get("rate_limited") or results[0].get("error")):
+            break
 
         for r in results:
             href = r.get("href", "")
