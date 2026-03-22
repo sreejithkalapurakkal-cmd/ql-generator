@@ -4,25 +4,36 @@ from uuid import UUID
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.company import Company
 
 
-async def _fetch_companies(run_id: UUID, db: AsyncSession):
-    result = await db.execute(
+async def _fetch_companies(run_id: UUID, db: AsyncSession, scope: str = "all"):
+    stmt = (
         select(Company)
         .where(Company.pipeline_run_id == run_id)
         .options(selectinload(Company.contacts))
         .order_by(Company.name)
     )
+    if scope == "final":
+        # Exclude disqualified companies; for multi-step runs also
+        # require promoted=True (non-promoted are early-stage discards).
+        stmt = stmt.where(Company.qualification != "disqualified")
+        stmt = stmt.where(
+            or_(
+                Company.promoted == True,   # noqa: E712  — multi-step: explicitly promoted
+                Company.promoted.is_(None),  # single-step: promoted is NULL for all
+            )
+        )
+    result = await db.execute(stmt)
     return result.scalars().unique().all()
 
 
-async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
-    companies = await _fetch_companies(run_id, db)
+async def generate_xlsx(run_id: UUID, db: AsyncSession, scope: str = "all") -> BytesIO:
+    companies = await _fetch_companies(run_id, db, scope=scope)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -102,8 +113,8 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
     return buffer
 
 
-async def generate_csv(run_id: UUID, db: AsyncSession) -> BytesIO:
-    companies = await _fetch_companies(run_id, db)
+async def generate_csv(run_id: UUID, db: AsyncSession, scope: str = "all") -> BytesIO:
+    companies = await _fetch_companies(run_id, db, scope=scope)
 
     output = StringIO()
     writer = csv.writer(output)

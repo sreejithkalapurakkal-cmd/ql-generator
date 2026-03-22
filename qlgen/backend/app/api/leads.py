@@ -219,24 +219,26 @@ async def get_stage_summary(
 async def export_leads(
     run_id: UUID,
     format: str = Query("xlsx"),
+    scope: str = Query("all", description="Export scope: 'all' for every company, 'final' for qualified/promoted only"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_user_from_token_param),
 ):
     await _get_run_with_access_check(run_id, db, user)
 
+    suffix = "final" if scope == "final" else "all"
     if format == "csv":
-        buffer = await generate_csv(run_id, db)
+        buffer = await generate_csv(run_id, db, scope=scope)
         return StreamingResponse(
             buffer,
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{run_id}.csv"},
+            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{suffix}_{run_id}.csv"},
         )
     else:
-        buffer = await generate_xlsx(run_id, db)
+        buffer = await generate_xlsx(run_id, db, scope=scope)
         return StreamingResponse(
             buffer,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{run_id}.xlsx"},
+            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{suffix}_{run_id}.xlsx"},
         )
 
 

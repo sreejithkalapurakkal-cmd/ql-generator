@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography,
-  Popconfirm, message, Badge, Collapse,
+  Popconfirm, message, Badge, Collapse, Dropdown,
 } from 'antd';
 import {
   DownloadOutlined, ToolOutlined, DeleteOutlined, PlayCircleOutlined,
@@ -1560,72 +1560,33 @@ const LeadsPage: React.FC = () => {
     urgency_signal_score: number | null | undefined;
     deal_hotness_score: number | null | undefined;
     deal_hotness_tier: string | null | undefined;
-    contact_name: string;
-    designation: string | null;
-    linkedin: string | null;
-    email: string | null;
-    phone: string | null;
+    contacts_count: number;
     qualification: string | null;
     source: string | null;
     company: Company;
   }> = [];
   let serial = 1;
   filteredCompanies.forEach((company) => {
-    if (company.contacts.length > 0) {
-      company.contacts.forEach((contact) => {
-        flatRows.push({
-          key: `${company.id}-${contact.id}`,
-          serial: serial++,
-          company_name: company.name,
-          website: company.website,
-          industry: company.industry,
-          country: company.country,
-          revenue_estimate: company.revenue_estimate,
-          asset_value: company.asset_value,
-          final_score: company.final_score,
-          final_rank: company.final_rank,
-          budget_signal_score: company.budget_signal_score,
-          urgency_signal_score: company.urgency_signal_score,
-          deal_hotness_score: company.deal_hotness_score,
-          deal_hotness_tier: company.deal_hotness_tier,
-          contact_name: contact.full_name || '',
-          designation: contact.designation,
-          linkedin: contact.linkedin_url,
-          email: contact.email,
-          phone: contact.phone,
-          qualification: company.qualification,
-          source: contact.source || company.source,
-          company,
-          contact,
-        });
-      });
-    } else {
-      flatRows.push({
-        key: company.id,
-        serial: serial++,
-        company_name: company.name,
-        website: company.website,
-        industry: company.industry,
-        country: company.country,
-        revenue_estimate: company.revenue_estimate,
-        asset_value: company.asset_value,
-        final_score: company.final_score,
-        final_rank: company.final_rank,
-        budget_signal_score: company.budget_signal_score,
-        urgency_signal_score: company.urgency_signal_score,
-        deal_hotness_score: company.deal_hotness_score,
-        deal_hotness_tier: company.deal_hotness_tier,
-        contact_name: '-',
-        designation: '-',
-        linkedin: null,
-        email: null,
-        phone: null,
-        qualification: company.qualification,
-        source: company.source,
-        company,
-        contact: null,
-      });
-    }
+    flatRows.push({
+      key: company.id,
+      serial: serial++,
+      company_name: company.name,
+      website: company.website,
+      industry: company.industry,
+      country: company.country,
+      revenue_estimate: company.revenue_estimate,
+      asset_value: company.asset_value,
+      final_score: company.final_score,
+      final_rank: company.final_rank,
+      budget_signal_score: company.budget_signal_score,
+      urgency_signal_score: company.urgency_signal_score,
+      deal_hotness_score: company.deal_hotness_score,
+      deal_hotness_tier: company.deal_hotness_tier,
+      contacts_count: company.contacts.length,
+      qualification: company.qualification,
+      source: company.source,
+      company,
+    });
   });
 
   // Summary stats
@@ -1739,39 +1700,13 @@ const LeadsPage: React.FC = () => {
       ),
     },
     {
-      title: 'Contact',
-      dataIndex: 'contact_name',
-      width: 140,
-      render: (name: string) => name === '-' ? <Text type="secondary">--</Text> : name,
-    },
-    { title: 'Title', dataIndex: 'designation', width: 150, render: (v: string | null) => v || '-' },
-    {
-      title: 'Email',
-      dataIndex: 'email',
-      width: 180,
-      render: (e: string | null) => e || '-',
-    },
-    {
-      title: 'LinkedIn',
-      dataIndex: 'linkedin',
+      title: 'Contacts',
+      dataIndex: 'contacts_count',
       width: 90,
-      render: (url: string | null) =>
-        url ? (
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: 'var(--purple)', fontSize: 12 }}>
-            Profile
-          </a>
-        ) : '-',
-    },
-    {
-      title: 'Phone',
-      dataIndex: 'phone',
-      width: 120,
-      render: (p: string | null) =>
-        p ? (
-          <a href={`tel:${p}`} style={{ color: 'var(--purple)', fontSize: 12 }}>
-            {p}
-          </a>
-        ) : '-',
+      render: (count: number) =>
+        count > 0
+          ? <Tag color="blue" style={{ fontSize: 12 }}>{count}</Tag>
+          : <Text type="secondary">--</Text>,
     },
   ];
 
@@ -1954,12 +1889,29 @@ const LeadsPage: React.FC = () => {
                 <Select.Option value="qualification">Sort by Category</Select.Option>
                 <Select.Option value="company_name">Sort by Company</Select.Option>
               </Select>
-              <Button icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'csv'))}>
-                CSV
-              </Button>
-              <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
-                Export Excel
-              </Button>
+              <Dropdown.Button
+                icon={<DownOutlined />}
+                onClick={() => window.open(getExportUrl(runId!, 'csv', 'final'))}
+                menu={{
+                  items: [
+                    { key: 'csv-all', label: 'All Companies (CSV)', onClick: () => window.open(getExportUrl(runId!, 'csv', 'all')) },
+                  ],
+                }}
+              >
+                <DownloadOutlined /> CSV
+              </Dropdown.Button>
+              <Dropdown.Button
+                type="primary"
+                icon={<DownOutlined />}
+                onClick={() => window.open(getExportUrl(runId!, 'xlsx', 'final'))}
+                menu={{
+                  items: [
+                    { key: 'xlsx-all', label: 'All Companies (Excel)', onClick: () => window.open(getExportUrl(runId!, 'xlsx', 'all')) },
+                  ],
+                }}
+              >
+                <DownloadOutlined /> Export Excel
+              </Dropdown.Button>
             </Space>
           }
         >
@@ -1968,33 +1920,15 @@ const LeadsPage: React.FC = () => {
             dataSource={flatRows}
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
-            scroll={{ x: 1660 }}
-            expandable={{
-              expandedRowKeys,
-              onExpandedRowsChange: (keys) => {
-                setExpandedRowKeys(keys as (string | number)[]);
-                const lastKey = keys.length > 0 ? String(keys[keys.length - 1]) : null;
-                if (lastKey) {
-                  const companyId = lastKey.includes('-') ? lastKey.split('-')[0] : lastKey;
-                  setCompanyId(companyId);
-                } else {
-                  setCompanyId(null);
-                }
+            scroll={{ x: 1200 }}
+            onRow={(record) => ({
+              onClick: () => {
+                const companyId = record.company.id;
+                setCompanyId(companyId);
+                navigate(`/leads/${runId}/company/${companyId}`, { state: { company: record.company, icp_name: pipelineRun?.icp_name ?? null } });
               },
-              expandedRowRender: (record) => (
-                <div>
-                  {record.company && <CompanyInsightsPanel company={record.company} />}
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, marginTop: 12, color: 'var(--g800)' }}>
-                    Stage Results
-                  </div>
-                  {record.company?.stage_results && record.company.stage_results.length > 0 ? (
-                    <SignalDetailPanel company={record.company} />
-                  ) : (
-                    <Text type="secondary">No stage-level results available for this company.</Text>
-                  )}
-                </div>
-              ),
-            }}
+              style: { cursor: 'pointer' },
+            })}
             size="small"
           />
         </Card>

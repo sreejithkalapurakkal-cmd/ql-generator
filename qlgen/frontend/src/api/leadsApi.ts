@@ -15,9 +15,9 @@ export const getDisqualifiedCompanies = (runId: string) =>
 export const getStageSummary = (runId: string) =>
   client.get<StageSummaryResponse>(`/leads/${runId}/stage-summary`);
 
-export const getExportUrl = (runId: string, format: 'xlsx' | 'csv' = 'xlsx') => {
+export const getExportUrl = (runId: string, format: 'xlsx' | 'csv' = 'xlsx', scope: 'all' | 'final' = 'all') => {
   const token = getAccessToken();
-  return `${API_BASE}/leads/${runId}/export?format=${format}&token=${token}`;
+  return `${API_BASE}/leads/${runId}/export?format=${format}&scope=${scope}&token=${token}`;
 };
 
 export const getToolAttribution = (runId: string) =>
