@@ -1,10 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Button, Card, Tag, Tooltip, Typography, Spin,
+  Button, Card, Tag, Tooltip, Typography, Spin, Select, message, Space,
 } from 'antd';
-import { LinkOutlined } from '@ant-design/icons';
+import { LinkOutlined, ThunderboltOutlined, TeamOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { getLeadCompanies } from '../api/leadsApi';
+import {
+  getSingleCompany, discoverCompanySignals, discoverCompanyContacts, getDiscoveryStreamUrl,
+  getDiscoveryStatus,
+} from '../api/leadsApi';
 import { Company, CompanyStageResult, Contact } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
 
@@ -791,6 +794,15 @@ const CompanyDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(!company);
   const [activeTab, setActiveTab] = useState<'contacts' | 'overview' | 'discovery_fit' | 'budget_signals' | 'urgency_signals'>('contacts');
 
+  // Discovery state
+  const [discoveryRunning, setDiscoveryRunning] = useState(false);
+  const [discoveryType, setDiscoveryType] = useState<'signals' | 'contacts' | null>(null);
+  const [discoveryProgress, setDiscoveryProgress] = useState('');
+  const [discoveryLog, setDiscoveryLog] = useState<{ type: string; text: string }[]>([]);
+  const [signalTypeChoice, setSignalTypeChoice] = useState<'budget_signals' | 'urgency_signals' | 'both'>('both');
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const [showLog, setShowLog] = useState(false);
+
   // Set co-pilot context
   useEffect(() => {
     if (companyId) setCompanyId(companyId);
@@ -799,16 +811,242 @@ const CompanyDetailPage: React.FC = () => {
 
   // Fallback: fetch from API if navigated directly (no state)
   useEffect(() => {
-    if (company || !runId) return;
+    if (company || !runId || !companyId) return;
     setLoading(true);
-    getLeadCompanies(runId, {})
-      .then(res => {
-        const found = (res.data as Company[]).find(c => c.id === companyId);
-        setCompany(found ?? null);
-      })
+    getSingleCompany(runId, companyId)
+      .then(res => setCompany(res.data as Company))
       .catch(() => setCompany(null))
       .finally(() => setLoading(false));
   }, [runId, companyId, company]);
+
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+    };
+  }, []);
+
+  // localStorage helpers for persisting discovery state across navigation/refresh
+  const discoveryStorageKey = companyId ? `qlgen:discovery:${companyId}` : null;
+
+  const saveDiscoveryState = useCallback((kind: 'signals' | 'contacts') => {
+    if (!discoveryStorageKey) return;
+    try {
+      localStorage.setItem(discoveryStorageKey, JSON.stringify({ type: kind, startedAt: Date.now() }));
+    } catch { /* quota errors etc */ }
+  }, [discoveryStorageKey]);
+
+  const clearDiscoveryState = useCallback(() => {
+    if (!discoveryStorageKey) return;
+    try { localStorage.removeItem(discoveryStorageKey); } catch { /* */ }
+  }, [discoveryStorageKey]);
+
+  const readDiscoveryState = useCallback((): { type: 'signals' | 'contacts' } | null => {
+    if (!discoveryStorageKey) return null;
+    try {
+      const raw = localStorage.getItem(discoveryStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // Ignore entries older than 2 hours (matching event store TTL)
+      if (Date.now() - parsed.startedAt > 2 * 60 * 60 * 1000) {
+        localStorage.removeItem(discoveryStorageKey);
+        return null;
+      }
+      return { type: parsed.type };
+    } catch {
+      return null;
+    }
+  }, [discoveryStorageKey]);
+
+  // Connect to an active discovery SSE stream (shared by start + resume)
+  const connectToStream = useCallback((kind: 'signals' | 'contacts', isResume = false) => {
+    if (!runId || !companyId) return;
+
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    const streamUrl = getDiscoveryStreamUrl(runId, companyId, kind);
+    const es = new EventSource(streamUrl);
+    eventSourceRef.current = es;
+
+    // For resumes: if no events arrive within 8s, the discovery is likely gone
+    let receivedAnyEvent = false;
+    let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
+    if (isResume) {
+      safetyTimeout = setTimeout(() => {
+        if (!receivedAnyEvent) {
+          es.close();
+          eventSourceRef.current = null;
+          setDiscoveryRunning(false);
+          setDiscoveryType(null);
+          setDiscoveryProgress('');
+          clearDiscoveryState();
+        }
+      }, 8000);
+    }
+    const markEvent = () => {
+      receivedAnyEvent = true;
+      if (safetyTimeout) { clearTimeout(safetyTimeout); safetyTimeout = null; }
+    };
+
+    es.addEventListener('stage_update', (event) => {
+      markEvent();
+      const data = JSON.parse(event.data);
+      setDiscoveryProgress(data.message || 'Researching...');
+      setDiscoveryLog(prev => [...prev, { type: 'stage', text: data.message || '' }]);
+    });
+
+    es.addEventListener('tool_start', (event) => {
+      markEvent();
+      const data = JSON.parse(event.data);
+      const displayName = data.display_name || data.tool_name || '';
+      setDiscoveryProgress(displayName);
+      setDiscoveryLog(prev => [...prev, { type: 'tool', text: `${displayName}${data.context ? ': ' + data.context : ''}` }]);
+    });
+
+    es.addEventListener('agent_reasoning', (event) => {
+      markEvent();
+      const data = JSON.parse(event.data);
+      if (data.text) {
+        setDiscoveryLog(prev => [...prev, { type: 'reasoning', text: data.text }]);
+      }
+    });
+
+    es.addEventListener('completed', async (event) => {
+      markEvent();
+      const data = JSON.parse(event.data);
+      es.close();
+      eventSourceRef.current = null;
+      setDiscoveryProgress('');
+      setDiscoveryRunning(false);
+      setDiscoveryType(null);
+      clearDiscoveryState();
+
+      try {
+        const res = await getSingleCompany(runId!, companyId!);
+        setCompany(res.data as Company);
+        if (kind === 'signals') {
+          message.success(`Signal discovery complete! Budget: ${data.budget_signal_score ?? 'N/A'}, Urgency: ${data.urgency_signal_score ?? 'N/A'}`);
+        } else {
+          message.success(`Contact discovery complete! ${data.contacts_found ?? 0} contacts found.`);
+        }
+      } catch {
+        message.success('Discovery complete! Refresh the page to see results.');
+      }
+    });
+
+    // Server-sent "error" events (backend explicitly reports failure via SSE)
+    es.addEventListener('error', (event: Event) => {
+      // Only handle server-sent error events (MessageEvent), not native connection errors.
+      // Native errors are handled by es.onerror which allows EventSource auto-reconnect.
+      if (!(event instanceof MessageEvent)) return;
+      let msg = 'Discovery failed';
+      try { msg = JSON.parse(event.data)?.message || msg; } catch { /* */ }
+      es.close();
+      eventSourceRef.current = null;
+      setDiscoveryRunning(false);
+      setDiscoveryType(null);
+      setDiscoveryProgress('');
+      clearDiscoveryState();
+      message.error(msg);
+    });
+
+    // Native connection errors — let EventSource auto-reconnect handle transient issues.
+    // Only reset state if the connection stays dead after 5s.
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) return;
+      setTimeout(() => {
+        if (es.readyState === EventSource.CLOSED) {
+          setDiscoveryRunning(false);
+          setDiscoveryType(null);
+          setDiscoveryProgress('');
+          clearDiscoveryState();
+        }
+      }, 5000);
+    };
+  }, [runId, companyId, clearDiscoveryState]);
+
+  // Resume active discovery on mount (survives navigation & page refresh)
+  useEffect(() => {
+    if (!runId || !companyId || discoveryRunning || loading) return;
+
+    let cancelled = false;
+
+    // First check localStorage for a discovery we started
+    const stored = readDiscoveryState();
+
+    // Then verify against the backend status endpoint
+    getDiscoveryStatus(runId, companyId)
+      .then(res => {
+        if (cancelled) return;
+        const status = res.data;
+        // Determine which (if any) discovery is actively running
+        let activeKind: 'signals' | 'contacts' | null = null;
+        if (status.signals === 'running') activeKind = 'signals';
+        else if (status.contacts === 'running') activeKind = 'contacts';
+        // Also check localStorage hint (backend might not have events yet if just started)
+        else if (stored && status[stored.type] !== 'completed') activeKind = stored.type;
+
+        if (activeKind) {
+          setDiscoveryRunning(true);
+          setDiscoveryType(activeKind);
+          setDiscoveryProgress('Resuming...');
+          setDiscoveryLog([]);
+          connectToStream(activeKind, true);
+        } else {
+          // No active discovery — clean up stale localStorage if any
+          clearDiscoveryState();
+          // If a discovery completed while we were away, refresh data
+          if (status.signals === 'completed' || status.contacts === 'completed') {
+            getSingleCompany(runId, companyId)
+              .then(r => { if (!cancelled) setCompany(r.data as Company); })
+              .catch(() => {});
+          }
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Status endpoint failed — fall back to localStorage hint
+        if (stored) {
+          setDiscoveryRunning(true);
+          setDiscoveryType(stored.type);
+          setDiscoveryProgress('Resuming...');
+          setDiscoveryLog([]);
+          connectToStream(stored.type, true);
+        }
+      });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, companyId, loading]);
+
+  const handleStartDiscovery = useCallback(async (kind: 'signals' | 'contacts') => {
+    if (!runId || !companyId || discoveryRunning) return;
+
+    setDiscoveryRunning(true);
+    setDiscoveryType(kind);
+    setDiscoveryProgress('Initializing...');
+    setDiscoveryLog([]);
+    saveDiscoveryState(kind);
+
+    try {
+      if (kind === 'signals') {
+        await discoverCompanySignals(runId, companyId, signalTypeChoice);
+      } else {
+        await discoverCompanyContacts(runId, companyId);
+      }
+
+      connectToStream(kind);
+    } catch {
+      setDiscoveryRunning(false);
+      setDiscoveryType(null);
+      setDiscoveryProgress('');
+      clearDiscoveryState();
+      message.error('Failed to start discovery');
+    }
+  }, [runId, companyId, discoveryRunning, signalTypeChoice, connectToStream, saveDiscoveryState, clearDiscoveryState]);
 
   if (loading) {
     return (
@@ -890,6 +1128,109 @@ const CompanyDetailPage: React.FC = () => {
         )}
       </div>
 
+      {/* Discovery CTA / Progress */}
+      {(() => {
+        const hasBudget = company.budget_signal_score != null;
+        const hasUrgency = company.urgency_signal_score != null;
+        const hasContacts = (company.contacts?.length ?? 0) > 0;
+        const missingSignals = !hasBudget || !hasUrgency;
+
+        if (discoveryRunning) {
+          return (
+            <div style={{
+              marginBottom: 12, padding: '8px 16px',
+              background: 'var(--g50, #fafafa)', borderRadius: 8,
+              borderLeft: '3px solid var(--amber, #e0820a)',
+              fontSize: 12,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <LoadingOutlined spin style={{ color: 'var(--amber, #e0820a)' }} />
+                  <Text style={{ fontWeight: 600, fontSize: 12 }}>
+                    {discoveryType === 'contacts' ? 'Contact' : 'Signal'} Discovery
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {discoveryProgress || 'Working...'}
+                  </Text>
+                </div>
+                <Button type="text" size="small" onClick={() => setShowLog(prev => !prev)} style={{ fontSize: 11 }}>
+                  {showLog ? 'Hide log' : 'Show log'}
+                </Button>
+              </div>
+              {showLog && (
+                <div style={{
+                  maxHeight: 120, overflowY: 'auto', fontSize: 10,
+                  marginTop: 6, padding: '4px 8px',
+                  background: '#fff', borderRadius: 4,
+                }}>
+                  {discoveryLog.map((entry, i) => (
+                    <div key={i} style={{ marginBottom: 2, display: 'flex', gap: 6 }}>
+                      <span style={{
+                        fontWeight: 600,
+                        color: entry.type === 'tool' ? 'var(--purple, #5C2D8F)' : entry.type === 'stage' ? 'var(--green, #1E9B6B)' : 'var(--g400, #bfbfbf)',
+                        minWidth: 36,
+                      }}>
+                        {entry.type === 'tool' ? 'TOOL' : entry.type === 'stage' ? 'STAGE' : 'AI'}
+                      </span>
+                      <span>{entry.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        if (missingSignals || !hasContacts) {
+          return (
+            <Card size="small" style={{ marginBottom: 16, borderLeft: '3px solid var(--purple, #5C2D8F)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                <div>
+                  <Text style={{ fontWeight: 600, fontSize: 13 }}>
+                    <ThunderboltOutlined style={{ marginRight: 6, color: 'var(--purple, #5C2D8F)' }} />
+                    On-Demand Discovery
+                  </Text>
+                  <div style={{ fontSize: 12, color: 'var(--g500, #8c8c8c)', marginTop: 2 }}>
+                    {missingSignals && !hasContacts
+                      ? 'Signals and contacts have not been discovered for this company.'
+                      : missingSignals
+                        ? `${!hasBudget && !hasUrgency ? 'Budget and urgency signals' : !hasBudget ? 'Budget signals' : 'Urgency signals'} not yet researched.`
+                        : 'No contacts found for this company.'}
+                  </div>
+                </div>
+                <Space wrap>
+                  {missingSignals && (
+                    <>
+                      <Select
+                        value={signalTypeChoice}
+                        onChange={setSignalTypeChoice}
+                        style={{ width: 180 }}
+                        size="small"
+                        options={[
+                          { value: 'both', label: 'Budget & Urgency' },
+                          { value: 'budget_signals', label: 'Budget Only' },
+                          { value: 'urgency_signals', label: 'Urgency Only' },
+                        ]}
+                      />
+                      <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => handleStartDiscovery('signals')} size="small">
+                        Discover Signals
+                      </Button>
+                    </>
+                  )}
+                  {!hasContacts && (
+                    <Button icon={<TeamOutlined />} onClick={() => handleStartDiscovery('contacts')} size="small">
+                      Discover Contacts
+                    </Button>
+                  )}
+                </Space>
+              </div>
+            </Card>
+          );
+        }
+
+        return null;
+      })()}
+
       {/* Tab navigation — matches LeadsPage pattern */}
       <div className="tabs">
         {tabs.map(t => (
@@ -904,11 +1245,53 @@ const CompanyDetailPage: React.FC = () => {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'contacts'        && <ContactsTab contacts={company.contacts} />}
+      {activeTab === 'contacts' && (
+        <div>
+          {(company.contacts?.length ?? 0) > 0 && !discoveryRunning && (
+            <div style={{ marginBottom: 12, textAlign: 'right' }}>
+              <Button size="small" type="text" icon={<TeamOutlined />}
+                onClick={() => handleStartDiscovery('contacts')}
+                style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
+              >
+                Re-discover Contacts
+              </Button>
+            </div>
+          )}
+          <ContactsTab contacts={company.contacts} />
+        </div>
+      )}
       {activeTab === 'overview'        && <OverviewTab company={company} />}
       {activeTab === 'discovery_fit'   && <DiscoveryFitTab company={company} />}
-      {activeTab === 'budget_signals'  && <BudgetSignalsTab company={company} />}
-      {activeTab === 'urgency_signals' && <UrgencySignalsTab company={company} />}
+      {activeTab === 'budget_signals' && (
+        <div>
+          {company.budget_signal_score != null && !discoveryRunning && (
+            <div style={{ marginBottom: 12, textAlign: 'right' }}>
+              <Button size="small" type="text" icon={<ThunderboltOutlined />}
+                onClick={() => { setSignalTypeChoice('budget_signals'); handleStartDiscovery('signals'); }}
+                style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
+              >
+                Re-discover
+              </Button>
+            </div>
+          )}
+          <BudgetSignalsTab company={company} />
+        </div>
+      )}
+      {activeTab === 'urgency_signals' && (
+        <div>
+          {company.urgency_signal_score != null && !discoveryRunning && (
+            <div style={{ marginBottom: 12, textAlign: 'right' }}>
+              <Button size="small" type="text" icon={<ThunderboltOutlined />}
+                onClick={() => { setSignalTypeChoice('urgency_signals'); handleStartDiscovery('signals'); }}
+                style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
+              >
+                Re-discover
+              </Button>
+            </div>
+          )}
+          <UrgencySignalsTab company={company} />
+        </div>
+      )}
     </div>
   );
 };

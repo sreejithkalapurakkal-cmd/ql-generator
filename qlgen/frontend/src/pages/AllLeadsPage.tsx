@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Card, Table, Tag, Input, Select, Typography, Space } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import { SearchOutlined, FilterOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { getAllCompanies, AllCompaniesParams } from '../api/leadsApi';
+import { getAllCompanies, getAllCompanyFilters, AllCompaniesParams } from '../api/leadsApi';
 import { Company } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
 
@@ -51,6 +51,22 @@ const AllLeadsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
+  // Filters
+  const [industryFilter, setIndustryFilter] = useState<string | undefined>(undefined);
+  const [countryFilter, setCountryFilter] = useState<string | undefined>(undefined);
+  const [availableIndustries, setAvailableIndustries] = useState<string[]>([]);
+  const [availableCountries, setAvailableCountries] = useState<string[]>([]);
+
+  // Load filter options once on mount
+  useEffect(() => {
+    getAllCompanyFilters()
+      .then(res => {
+        setAvailableIndustries(res.data.industries || []);
+        setAvailableCountries(res.data.countries || []);
+      })
+      .catch(() => {});
+  }, []);
+
   // Debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchQuery), 400);
@@ -67,6 +83,8 @@ const AllLeadsPage: React.FC = () => {
         sort_order: sortOrder,
       };
       if (debouncedSearch) params.search = debouncedSearch;
+      if (industryFilter) params.industry_filter = industryFilter;
+      if (countryFilter) params.country_filter = countryFilter;
 
       const res = await getAllCompanies(params);
       setCompanies(res.data.companies);
@@ -77,22 +95,24 @@ const AllLeadsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, sortBy, sortOrder, debouncedSearch]);
+  }, [page, pageSize, sortBy, sortOrder, debouncedSearch, industryFilter, countryFilter]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Reset to page 1 when search/sort changes
+  // Reset to page 1 when filters change
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, sortBy]);
+  }, [debouncedSearch, sortBy, industryFilter, countryFilter]);
 
-  // Unique ICP names for filtering display
+  // Unique ICP names for column filtering
   const icpNames = useMemo(() => {
     const names = new Set(companies.map(c => c.run_icp_name).filter(Boolean));
     return Array.from(names) as string[];
   }, [companies]);
+
+  const activeFilterCount = [industryFilter, countryFilter].filter(Boolean).length;
 
   const columns = [
     {
@@ -217,6 +237,37 @@ const AllLeadsPage: React.FC = () => {
           <div className="val">{total}</div>
           <div className="lbl">Total Companies</div>
         </div>
+      </div>
+
+      {/* Filter Bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <FilterOutlined style={{ color: '#8c8c8c' }} />
+        <Select
+          placeholder="Industry"
+          value={industryFilter}
+          onChange={setIndustryFilter}
+          allowClear
+          showSearch
+          style={{ width: 200 }}
+          options={availableIndustries.map(i => ({ label: i, value: i }))}
+        />
+        <Select
+          placeholder="Country"
+          value={countryFilter}
+          onChange={setCountryFilter}
+          allowClear
+          showSearch
+          style={{ width: 180 }}
+          options={availableCountries.map(c => ({ label: c, value: c }))}
+        />
+        {activeFilterCount > 0 && (
+          <a
+            onClick={() => { setIndustryFilter(undefined); setCountryFilter(undefined); }}
+            style={{ fontSize: 13, color: '#5C2D8F' }}
+          >
+            Clear filters ({activeFilterCount})
+          </a>
+        )}
       </div>
 
       {/* Controls + Table */}

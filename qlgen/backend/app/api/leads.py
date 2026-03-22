@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,6 +82,42 @@ async def _get_run_with_access_check(run_id: UUID, db: AsyncSession, user: User)
         raise HTTPException(status_code=404, detail="Pipeline run not found")
     check_resource_access(run.user_id, user)
     return run
+
+
+@router.get("/all/filters")
+async def get_all_company_filters(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return distinct industry and country values for filter dropdowns."""
+    base = (
+        select(Company)
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+    )
+
+    industry_result = await db.execute(
+        select(Company.industry)
+        .where(Company.id.in_(base.with_only_columns(Company.id).subquery().select()))
+        .where(Company.industry.isnot(None))
+        .where(Company.industry != "")
+        .distinct()
+        .order_by(Company.industry)
+    )
+    industries = [r[0] for r in industry_result.all()]
+
+    country_result = await db.execute(
+        select(Company.country)
+        .where(Company.id.in_(base.with_only_columns(Company.id).subquery().select()))
+        .where(Company.country.isnot(None))
+        .where(Company.country != "")
+        .distinct()
+        .order_by(Company.country)
+    )
+    countries = [r[0] for r in country_result.all()]
+
+    return {"industries": industries, "countries": countries}
 
 
 @router.get("/all/companies")
@@ -198,6 +236,180 @@ async def get_all_companies(
         "page_size": page_size,
         "total_pages": (total_count + page_size - 1) // page_size,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# On-demand single-company discovery endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/{run_id}/companies/{company_id}")
+async def get_single_company(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get a single company with all stage results and contacts."""
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company)
+        .where(Company.id == company_id, Company.pipeline_run_id == run_id)
+        .options(
+            selectinload(Company.contacts),
+            selectinload(Company.stage_results),
+        )
+    )
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    return _build_company_response(company)
+
+
+@router.post("/{run_id}/companies/{company_id}/discover-signals")
+async def discover_company_signals(
+    run_id: UUID,
+    company_id: UUID,
+    signal_type: str = Query("both"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Trigger on-demand signal discovery for a single company."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.pipeline_service import discover_signals_for_company
+
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company).where(Company.id == company_id, Company.pipeline_run_id == run_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Company not found in this pipeline run")
+
+    if signal_type not in ("budget_signals", "urgency_signals", "both"):
+        raise HTTPException(status_code=400, detail="signal_type must be 'budget_signals', 'urgency_signals', or 'both'")
+
+    event_key = f"signal_discovery:{company_id}"
+    from app.services import event_store
+    await event_store.init_run(event_key)
+
+    # Launch as background coroutine
+    asyncio.ensure_future(discover_signals_for_company(company_id, signal_type))
+
+    return {
+        "status": "started",
+        "company_id": str(company_id),
+        "signal_type": signal_type,
+        "stream_key": event_key,
+    }
+
+
+@router.post("/{run_id}/companies/{company_id}/discover-contacts")
+async def discover_company_contacts(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Trigger on-demand contact discovery for a single company."""
+    from app.services.pipeline_service import discover_contacts_for_company
+
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company).where(Company.id == company_id, Company.pipeline_run_id == run_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Company not found in this pipeline run")
+
+    event_key = f"contact_discovery:{company_id}"
+    from app.services import event_store
+    await event_store.init_run(event_key)
+
+    asyncio.ensure_future(discover_contacts_for_company(company_id))
+
+    return {
+        "status": "started",
+        "company_id": str(company_id),
+        "stream_key": event_key,
+    }
+
+
+@router.get("/{run_id}/companies/{company_id}/discovery-status")
+async def get_discovery_status(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Check whether a signal or contact discovery is currently active for a company."""
+    await _get_run_with_access_check(run_id, db, user)
+
+    from app.services import event_store
+
+    terminal_types = {"completed", "error"}
+    result = {}
+    for kind, key_prefix in [("signals", "signal_discovery"), ("contacts", "contact_discovery")]:
+        event_key = f"{key_prefix}:{company_id}"
+        events = await event_store.get_events(event_key)
+        if not events:
+            result[kind] = "idle"
+        elif any(e.get("type") in terminal_types for e in events):
+            result[kind] = "completed"
+        else:
+            result[kind] = "running"
+    return result
+
+
+@router.get("/{run_id}/companies/{company_id}/discovery-stream")
+async def stream_company_discovery(
+    run_id: UUID,
+    company_id: UUID,
+    type: str = Query("signals"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_user_from_token_param),
+):
+    """SSE stream for single-company signal or contact discovery progress."""
+    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = run_result.scalar_one_or_none()
+    if run:
+        check_resource_access(run.user_id, user)
+
+    if type == "contacts":
+        event_key = f"contact_discovery:{company_id}"
+    else:
+        event_key = f"signal_discovery:{company_id}"
+
+    from app.services import event_store
+    import json as _json
+
+    async def event_generator():
+        last_index = 0
+        no_event_cycles = 0
+        terminal_events = {"completed", "error"}
+        while True:
+            new_events = await event_store.get_events(event_key, last_index)
+            if new_events:
+                no_event_cycles = 0
+                for event in new_events:
+                    event_type = event.get("type", "stage_update")
+                    data = _json.dumps(event)
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+                    last_index += 1
+                    if event_type in terminal_events:
+                        return
+            else:
+                no_event_cycles += 1
+                if no_event_cycles % 25 == 0:
+                    yield ": keepalive\n\n"
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{run_id}/companies", response_model=List[CompanyResponse])

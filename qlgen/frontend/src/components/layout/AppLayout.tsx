@@ -42,7 +42,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <div style={{ fontWeight: 500 }}>{user?.name || user?.email}</div>
           <div style={{ fontSize: 12, color: '#888' }}>{user?.email}</div>
           <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
-            {user?.role === 'super_admin' ? 'Super Admin' : 'User'}
+            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'User'}
           </div>
         </div>
       ),

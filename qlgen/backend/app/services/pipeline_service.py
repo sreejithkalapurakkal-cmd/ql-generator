@@ -539,6 +539,64 @@ async def _carry_forward_from_previous_runs(
     return carried
 
 
+def apply_signal_result(db, company, signal_json, signal_type):
+    """Apply signal research results to a single company (module-level).
+
+    Parses agent JSON, sets budget/urgency scores, creates CompanyStageResult
+    entries with evidence, and computes recency-adjusted scores.
+    """
+    from app.agent.lead_gen_agent import _normalize_score_to_100, compute_recency_adjusted_scores
+
+    if signal_type in ("budget_signals", "both"):
+        budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
+        company.budget_signal_score = _normalize_score_to_100(float(budget_score) if budget_score else None)
+
+    if signal_type in ("urgency_signals", "both"):
+        urgency_score = signal_json.get("urgency_signal_score") or signal_json.get("composite_score", 0)
+        company.urgency_signal_score = _normalize_score_to_100(float(urgency_score) if urgency_score else None)
+
+    signals_data = signal_json.get("signals", [])
+
+    if signal_type in ("budget_signals", "both"):
+        budget_signals = [s for s in signals_data if s.get("type") == "budget"] if signal_type == "both" else signals_data
+        stage_result = CompanyStageResult(
+            company_id=company.id,
+            stage="budget_signals",
+            status="passed",
+            score=company.budget_signal_score,
+            reasoning=f"Budget signal score: {company.budget_signal_score}/100",
+            evidence=budget_signals[:10] if budget_signals else None,
+        )
+        db.add(stage_result)
+
+    if signal_type in ("urgency_signals", "both"):
+        urgency_signals = [s for s in signals_data if s.get("type") == "urgency"] if signal_type == "both" else signals_data
+        stage_result = CompanyStageResult(
+            company_id=company.id,
+            stage="urgency_signals",
+            status="passed",
+            score=company.urgency_signal_score,
+            reasoning=f"Urgency signal score: {company.urgency_signal_score}/100",
+            evidence=urgency_signals[:10] if urgency_signals else None,
+        )
+        db.add(stage_result)
+
+    if signal_type == "both":
+        company.current_stage = "budget_urgency_signals"
+    else:
+        company.current_stage = signal_type
+
+    # Compute recency-adjusted scores from evidence
+    all_signals = signal_json.get("signals", [])
+    recency_result = compute_recency_adjusted_scores(all_signals)
+    if recency_result["recency_adjusted_budget_score"] is not None:
+        company.recency_adjusted_budget_score = recency_result["recency_adjusted_budget_score"]
+    if recency_result["recency_adjusted_urgency_score"] is not None:
+        company.recency_adjusted_urgency_score = recency_result["recency_adjusted_urgency_score"]
+    if recency_result["avg_evidence_age_months"] is not None:
+        company.avg_evidence_age_months = recency_result["avg_evidence_age_months"]
+
+
 def _deduplicate_contacts(contacts: list[dict]) -> list[dict]:
     """Deduplicate contacts by LinkedIn URL, email, and normalized name.
 
@@ -2088,57 +2146,9 @@ async def _run_signal_research(
         f"industry batches across {len(industry_groups)} industries"
     )
 
-    def _apply_signal_result(company, signal_json):
-        """Apply signal research results to a single company."""
-        if signal_type in ("budget_signals", "both"):
-            budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
-            company.budget_signal_score = _normalize_score_to_100(float(budget_score) if budget_score else None)
-
-        if signal_type in ("urgency_signals", "both"):
-            urgency_score = signal_json.get("urgency_signal_score") or signal_json.get("composite_score", 0)
-            company.urgency_signal_score = _normalize_score_to_100(float(urgency_score) if urgency_score else None)
-
-        signals_data = signal_json.get("signals", [])
-
-        if signal_type in ("budget_signals", "both"):
-            budget_signals = [s for s in signals_data if s.get("type") == "budget"] if signal_type == "both" else signals_data
-            stage_result = CompanyStageResult(
-                company_id=company.id,
-                stage="budget_signals",
-                status="passed",
-                score=company.budget_signal_score,
-                reasoning=f"Budget signal score: {company.budget_signal_score}/100",
-                evidence=budget_signals[:10] if budget_signals else None,
-            )
-            db.add(stage_result)
-
-        if signal_type in ("urgency_signals", "both"):
-            urgency_signals = [s for s in signals_data if s.get("type") == "urgency"] if signal_type == "both" else signals_data
-            stage_result = CompanyStageResult(
-                company_id=company.id,
-                stage="urgency_signals",
-                status="passed",
-                score=company.urgency_signal_score,
-                reasoning=f"Urgency signal score: {company.urgency_signal_score}/100",
-                evidence=urgency_signals[:10] if urgency_signals else None,
-            )
-            db.add(stage_result)
-
-        if signal_type == "both":
-            company.current_stage = "budget_urgency_signals"
-        else:
-            company.current_stage = signal_type
-
-        # Compute recency-adjusted scores from evidence
-        from app.agent.lead_gen_agent import compute_recency_adjusted_scores
-        all_signals = signal_json.get("signals", [])
-        recency_result = compute_recency_adjusted_scores(all_signals)
-        if recency_result["recency_adjusted_budget_score"] is not None:
-            company.recency_adjusted_budget_score = recency_result["recency_adjusted_budget_score"]
-        if recency_result["recency_adjusted_urgency_score"] is not None:
-            company.recency_adjusted_urgency_score = recency_result["recency_adjusted_urgency_score"]
-        if recency_result["avg_evidence_age_months"] is not None:
-            company.avg_evidence_age_months = recency_result["avg_evidence_age_months"]
+    def _apply_signal_result_local(company, signal_json):
+        """Delegate to module-level apply_signal_result."""
+        apply_signal_result(db, company, signal_json, signal_type)
 
     async def _process_signal_batch(batch, batch_index):
         """Process a batch of companies (same industry) via a single agent call."""
@@ -2176,7 +2186,7 @@ async def _run_signal_research(
                 prompt = build_signal_prompt(company_dict, icp, signal_type)
                 result = await asyncio.to_thread(agent, prompt)
                 signal_json = parse_json_from_agent_result(result)
-                _apply_signal_result(company, signal_json)
+                _apply_signal_result_local(company, signal_json)
 
                 await _emit_event(run_id_str, {
                     "type": "company_stage_result",
@@ -2215,7 +2225,7 @@ async def _run_signal_research(
                     signal_json = result_by_name.get(company_name_key)
 
                     if signal_json:
-                        _apply_signal_result(company, signal_json)
+                        _apply_signal_result_local(company, signal_json)
                         await _emit_event(run_id_str, {
                             "type": "company_stage_result",
                             "company_name": company.name,
@@ -2261,3 +2271,274 @@ async def _run_signal_research(
         await asyncio.gather(*tasks, return_exceptions=True)
         await db.flush()
         processed += sum(len(b) for b in parallel_group)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# On-demand single-company discovery (signal & contact)
+# ═══════════════════════════════════════════════════════════════════════
+
+async def discover_signals_for_company(
+    company_id: UUID,
+    signal_type: str = "both",
+) -> None:
+    """Run on-demand signal research for a single company.
+
+    Reuses the same agent, prompt, and scoring logic as the batch pipeline
+    but operates independently on one company with its own SSE event stream.
+    """
+    from app.agent.lead_gen_agent import (
+        compute_deal_hotness,
+        compute_final_score,
+        _normalize_score_to_100,
+    )
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.orm import selectinload
+
+    event_key = f"signal_discovery:{company_id}"
+
+    try:
+        async with async_session() as db:
+            # Load company
+            result = await db.execute(
+                select(Company)
+                .where(Company.id == company_id)
+                .options(selectinload(Company.contacts), selectinload(Company.stage_results))
+            )
+            company = result.scalar_one_or_none()
+            if not company:
+                await event_store.push_event(event_key, {"type": "error", "message": "Company not found"})
+                return
+
+            # Load ICP config via pipeline run
+            run_result = await db.execute(
+                select(PipelineRun).where(PipelineRun.id == company.pipeline_run_id)
+            )
+            run = run_result.scalar_one_or_none()
+            if not run:
+                await event_store.push_event(event_key, {"type": "error", "message": "Pipeline run not found"})
+                return
+
+            icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
+            icp_config = icp_result.scalar_one_or_none()
+            if not icp_config:
+                await event_store.push_event(event_key, {"type": "error", "message": "ICP config not found"})
+                return
+            icp = icp_config.config_json
+
+            await event_store.push_event(event_key, {
+                "type": "stage_update",
+                "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
+                "progress": 10,
+                "message": f"Starting signal discovery for {company.name}...",
+            })
+
+            # Clear old stage results for re-run
+            stages_to_clear = []
+            if signal_type in ("budget_signals", "both"):
+                stages_to_clear.append("budget_signals")
+            if signal_type in ("urgency_signals", "both"):
+                stages_to_clear.append("urgency_signals")
+            if stages_to_clear:
+                await db.execute(
+                    sa_delete(CompanyStageResult)
+                    .where(CompanyStageResult.company_id == company_id)
+                    .where(CompanyStageResult.stage.in_(stages_to_clear))
+                )
+
+            # Create agent
+            disabled_tools = await get_disabled_tool_names(db)
+            event_collector = []
+            signal_callback = create_pipeline_callback_handler(
+                event_key, event_collector, initial_stage=signal_type,
+            )
+            agent = create_signal_agent(
+                callback_handler=signal_callback, disabled_tools=disabled_tools,
+            )
+
+            # Build prompt and run
+            company_dict = {
+                "name": company.name,
+                "website": company.website,
+                "description": company.description,
+                "employee_count": company.employee_count,
+                "revenue_estimate": company.revenue_estimate,
+                "cached_from_run_id": str(company.cached_from_run_id) if company.cached_from_run_id else None,
+                "data_freshness": str(company.data_freshness) if company.data_freshness else None,
+            }
+            prompt = build_signal_prompt(company_dict, icp, signal_type)
+            result = await asyncio.to_thread(agent, prompt)
+            signal_json = parse_json_from_agent_result(result)
+
+            # Apply results
+            apply_signal_result(db, company, signal_json, signal_type)
+
+            # Compute deal hotness and final score
+            hotness, tier = compute_deal_hotness(
+                company.budget_signal_score,
+                company.urgency_signal_score,
+                company.recency_adjusted_budget_score,
+                company.recency_adjusted_urgency_score,
+                company.avg_evidence_age_months,
+            )
+            company.deal_hotness_score = hotness
+            company.deal_hotness_tier = tier
+            company.final_score = compute_final_score(company, icp=icp)
+            company.data_freshness = datetime.now(timezone.utc)
+
+            await db.commit()
+
+            await event_store.push_event(event_key, {
+                "type": "completed",
+                "company_name": company.name,
+                "budget_signal_score": company.budget_signal_score,
+                "urgency_signal_score": company.urgency_signal_score,
+                "deal_hotness_score": company.deal_hotness_score,
+                "deal_hotness_tier": company.deal_hotness_tier,
+                "final_score": company.final_score,
+            })
+
+    except Exception as e:
+        logger.error(f"Signal discovery for {company_id} failed: {e}\n{traceback.format_exc()}")
+        await event_store.push_event(event_key, {
+            "type": "error",
+            "message": f"Signal discovery failed: {str(e)[:200]}",
+        })
+
+
+async def discover_contacts_for_company(company_id: UUID) -> None:
+    """Run on-demand contact discovery for a single company.
+
+    Reuses the same agent, prompt, validation, and dedup logic as the batch
+    pipeline but operates independently on one company.
+    """
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.orm import selectinload
+    from app.services.contact_dedup_service import deduplicate_company_contacts
+
+    event_key = f"contact_discovery:{company_id}"
+
+    try:
+        async with async_session() as db:
+            # Load company
+            result = await db.execute(
+                select(Company)
+                .where(Company.id == company_id)
+                .options(selectinload(Company.contacts))
+            )
+            company = result.scalar_one_or_none()
+            if not company:
+                await event_store.push_event(event_key, {"type": "error", "message": "Company not found"})
+                return
+
+            # Load ICP config
+            run_result = await db.execute(
+                select(PipelineRun).where(PipelineRun.id == company.pipeline_run_id)
+            )
+            run = run_result.scalar_one_or_none()
+            if not run:
+                await event_store.push_event(event_key, {"type": "error", "message": "Pipeline run not found"})
+                return
+
+            icp_result = await db.execute(select(ICPConfig).where(ICPConfig.id == run.icp_config_id))
+            icp_config = icp_result.scalar_one_or_none()
+            if not icp_config:
+                await event_store.push_event(event_key, {"type": "error", "message": "ICP config not found"})
+                return
+            icp = icp_config.config_json
+
+            await event_store.push_event(event_key, {
+                "type": "stage_update",
+                "stage": "contact_discovery",
+                "progress": 10,
+                "message": f"Starting contact discovery for {company.name}...",
+            })
+
+            # Gather existing contacts as cached_contacts for context
+            cached_contacts = []
+            for c in (company.contacts or []):
+                cached_contacts.append({
+                    "full_name": c.full_name,
+                    "designation": c.designation,
+                    "email": c.email,
+                    "linkedin_url": c.linkedin_url,
+                    "source": c.source,
+                })
+
+            # Delete old contacts
+            await db.execute(
+                sa_delete(Contact).where(Contact.company_id == company_id)
+            )
+
+            # Create agent
+            disabled_tools = await get_disabled_tool_names(db)
+            event_collector = []
+            contact_callback = create_pipeline_callback_handler(
+                event_key, event_collector, initial_stage="contact_discovery",
+            )
+            agent = create_contact_agent(
+                callback_handler=contact_callback, disabled_tools=disabled_tools,
+            )
+
+            # Build prompt and run
+            company_dict = {
+                "name": company.name,
+                "website": company.website,
+                "industry": company.industry,
+                "employee_count": company.employee_count,
+            }
+            prompt = build_contact_discovery_prompt(company_dict, icp, cached_contacts if cached_contacts else None)
+            result = await asyncio.to_thread(agent, prompt)
+            contact_json = parse_json_from_agent_result(result)
+
+            # Extract and validate contacts
+            raw_contacts = contact_json.get("contacts", [])
+            validated_contacts = validate_stage_contacts(raw_contacts, company.website)
+            validated_contacts = _deduplicate_contacts(validated_contacts)
+
+            # Save contacts
+            for cd in validated_contacts:
+                contact = Contact(
+                    company_id=company.id,
+                    full_name=cd.get("full_name"),
+                    first_name=cd.get("first_name"),
+                    last_name=cd.get("last_name"),
+                    designation=cd.get("designation"),
+                    role_category=cd.get("role_category"),
+                    email=cd.get("email"),
+                    phone=cd.get("phone"),
+                    linkedin_url=cd.get("linkedin_url"),
+                    city=cd.get("city"),
+                    source=cd.get("source"),
+                    confidence=cd.get("confidence"),
+                    enrichment_status=cd.get("enrichment_status", "pending"),
+                )
+                db.add(contact)
+
+            await db.flush()
+
+            # Post-save dedup
+            try:
+                await deduplicate_company_contacts(db, company.id)
+            except Exception as dedup_err:
+                logger.warning(f"Contact dedup failed (non-fatal): {dedup_err}")
+
+            await db.commit()
+
+            # Count final contacts
+            count_result = await db.execute(
+                select(func.count(Contact.id)).where(Contact.company_id == company_id)
+            )
+            final_count = count_result.scalar() or 0
+
+            await event_store.push_event(event_key, {
+                "type": "completed",
+                "company_name": company.name,
+                "contacts_found": final_count,
+            })
+
+    except Exception as e:
+        logger.error(f"Contact discovery for {company_id} failed: {e}\n{traceback.format_exc()}")
+        await event_store.push_event(event_key, {
+            "type": "error",
+            "message": f"Contact discovery failed: {str(e)[:200]}",
+        })

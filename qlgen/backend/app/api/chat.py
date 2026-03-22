@@ -25,7 +25,7 @@ from app.schemas.chat import (
 )
 from app.agent.copilot_agent import create_copilot_agent, create_copilot_callback_handler
 from app.auth.dependencies import get_current_user, decode_token
-from app.auth.authorization import is_admin, ownership_filter, check_resource_access, check_delete_permission
+from app.auth.authorization import is_admin, is_super_admin, ownership_filter, check_resource_access, check_delete_permission
 from app.auth.context import current_user_id, current_user_is_admin
 
 logger = logging.getLogger(__name__)
@@ -257,16 +257,15 @@ async def send_chat_message(request: ChatMessageRequest, http_request: Request):
 
 @router.get("/sessions")
 async def list_chat_sessions(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """List all active chat sessions, most recent first."""
-    query = (
-        select(ChatSession)
-        .where(
-            ChatSession.is_active == True,
-            ownership_filter(ChatSession.user_id, user),
-        )
-        .order_by(ChatSession.created_at.desc())
-        .limit(50)
-    )
+    """List all active chat sessions, most recent first.
+
+    Chat sessions are private: only super_admin can see all sessions.
+    Admin and regular users see only their own sessions.
+    """
+    query = select(ChatSession).where(ChatSession.is_active == True)
+    if not is_super_admin(user):
+        query = query.where(ChatSession.user_id == user.id)
+    query = query.order_by(ChatSession.created_at.desc()).limit(50)
     result = await db.execute(query)
     sessions = result.scalars().all()
 
@@ -311,7 +310,9 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    check_resource_access(session.user_id, user)
+    # Chat messages are private: only super_admin can view any session
+    if not is_super_admin(user) and session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     msg_result = await db.execute(
         select(ChatMessage)

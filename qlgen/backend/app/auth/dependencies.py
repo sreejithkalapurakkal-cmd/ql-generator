@@ -76,6 +76,12 @@ async def get_current_super_admin(user: User = Depends(get_current_user)) -> Use
     return user
 
 
+async def get_current_admin_or_above(user: User = Depends(get_current_user)) -> User:
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user
+
+
 async def get_user_from_token_param(token: str = Query(...), db: AsyncSession = Depends(get_db)) -> User:
     """For SSE/download endpoints that can't send Authorization headers."""
     return await _get_user_from_token(token, db, expected_type="access")

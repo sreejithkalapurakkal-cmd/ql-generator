@@ -49,3 +49,43 @@ export interface AllCompaniesResponse {
 
 export const getAllCompanies = (params?: AllCompaniesParams) =>
   client.get<AllCompaniesResponse>('/leads/all/companies', { params });
+
+export interface AllCompanyFilters {
+  industries: string[];
+  countries: string[];
+}
+
+export const getAllCompanyFilters = () =>
+  client.get<AllCompanyFilters>('/leads/all/filters');
+
+// --- Single-company discovery ---
+
+export const getSingleCompany = (runId: string, companyId: string) =>
+  client.get<Company>(`/leads/${runId}/companies/${companyId}`);
+
+export const discoverCompanySignals = (
+  runId: string,
+  companyId: string,
+  signalType: 'budget_signals' | 'urgency_signals' | 'both' = 'both',
+) => client.post<{ status: string; company_id: string; signal_type: string; stream_key: string }>(
+  `/leads/${runId}/companies/${companyId}/discover-signals?signal_type=${signalType}`,
+);
+
+export const discoverCompanyContacts = (runId: string, companyId: string) =>
+  client.post<{ status: string; company_id: string; stream_key: string }>(
+    `/leads/${runId}/companies/${companyId}/discover-contacts`,
+  );
+
+export const getDiscoveryStatus = (runId: string, companyId: string) =>
+  client.get<{ signals: 'idle' | 'running' | 'completed'; contacts: 'idle' | 'running' | 'completed' }>(
+    `/leads/${runId}/companies/${companyId}/discovery-status`,
+  );
+
+export const getDiscoveryStreamUrl = (
+  runId: string,
+  companyId: string,
+  type: 'signals' | 'contacts',
+) => {
+  const token = getAccessToken();
+  return `${API_BASE}/leads/${runId}/companies/${companyId}/discovery-stream?type=${type}&token=${token}`;
+};
