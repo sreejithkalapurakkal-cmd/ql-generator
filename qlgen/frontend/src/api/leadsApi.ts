@@ -1,6 +1,6 @@
 import client, { API_BASE } from './client';
 import { getAccessToken } from '../context/AuthContext';
-import { Company, StageSummaryResponse } from '../types';
+import { Company, StageSummaryResponse, ToolAttributionResponse } from '../types';
 
 export const getLeadCompanies = (runId: string, params?: {
   min_final_score?: number;
@@ -19,3 +19,6 @@ export const getExportUrl = (runId: string, format: 'xlsx' | 'csv' = 'xlsx') => 
   const token = getAccessToken();
   return `${API_BASE}/leads/${runId}/export?format=${format}&token=${token}`;
 };
+
+export const getToolAttribution = (runId: string) =>
+  client.get<ToolAttributionResponse>(`/leads/${runId}/tool-attribution`);

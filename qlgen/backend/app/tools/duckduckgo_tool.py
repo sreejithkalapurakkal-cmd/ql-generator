@@ -1,5 +1,7 @@
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search_via_limiter
+
 
 @tool
 def duckduckgo_search(query: str, max_results: int = 10) -> list[dict]:
@@ -21,21 +23,4 @@ def duckduckgo_search(query: str, max_results: int = 10) -> list[dict]:
     Returns:
         list of dicts with 'title', 'href', 'body' for each result
     """
-    try:
-        from ddgs import DDGS
-        from ddgs.exceptions import RatelimitException
-
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=min(max_results, 10)))
-        return results
-    except RatelimitException:
-        return [{
-            "error": (
-                "RATE_LIMITED: DuckDuckGo is blocking automated queries from this IP. "
-                "Do NOT retry this tool. Switch to exa_search, tavily_search, or "
-                "apollo_company_search instead."
-            ),
-            "rate_limited": True,
-        }]
-    except Exception as e:
-        return [{"error": str(e)}]
+    return _ddg_search_via_limiter(query, max_results=max_results)

@@ -17,6 +17,7 @@ from app.models.contact import Contact
 from app.models.company_stage import CompanyStageResult
 from app.models.icp import ICPConfig
 from app.models.pipeline import PipelineRun
+from app.models.company_knowledge_base import CompanyKnowledgeBase
 from app.services.embedding_service import generate_embedding
 from app.auth.context import current_user_id, current_user_is_admin
 
@@ -631,6 +632,347 @@ def search_local_companies(
         })
     except Exception as e:
         logger.error(f"Local company search failed: {e}")
+        return json.dumps({"error": str(e), "companies": []})
+    finally:
+        session.close()
+
+
+@tool
+def search_kb_companies(
+    industry: str = None,
+    country: str = None,
+    domain: str = None,
+    min_employees: int = None,
+    max_employees: int = None,
+    icp_description: str = None,
+) -> str:
+    """
+    Search the Company Knowledge Base for companies matching criteria.
+    Returns ONE canonical record per company domain, merged from ALL previous
+    pipeline runs. This is deduplicated — no duplicate rows for the same company.
+    Use this BEFORE external tools to check what data already exists.
+    Returns ALL matching records (no artificial cap).
+
+    When icp_description is provided, results are ranked by semantic similarity
+    to the ICP (most relevant first). Otherwise results are ordered by recency.
+
+    Args:
+        industry: Filter by industry (partial match, case-insensitive)
+        country: Filter by country (partial match)
+        domain: Filter by website domain (partial match)
+        min_employees: Minimum employee count
+        max_employees: Maximum employee count
+        icp_description: Natural language ICP description for relevance ranking.
+            Pass the industry + geography + capability summary so results are
+            ranked by fit to the CURRENT ICP, not historical scores.
+
+    Returns:
+        JSON string with matching companies from the knowledge base
+    """
+    session = _get_sync_session()
+    try:
+        # If ICP description provided, use semantic ranking via pgvector
+        if icp_description:
+            embedding = generate_embedding(icp_description[:8000])
+            if embedding:
+                return _search_kb_semantic_ranked(
+                    session, embedding,
+                    industry=industry, country=country, domain=domain,
+                    min_employees=min_employees, max_employees=max_employees,
+                )
+
+        # Fallback: structured filter, ordered by most recently enriched
+        query = session.query(CompanyKnowledgeBase)
+
+        if industry:
+            query = query.filter(CompanyKnowledgeBase.industry.ilike(f"%{industry}%"))
+        if country:
+            query = query.filter(CompanyKnowledgeBase.country.ilike(f"%{country}%"))
+        if domain:
+            domain_clean = domain.lower().strip().removeprefix("www.").removeprefix("http://").removeprefix("https://").rstrip("/")
+            query = query.filter(CompanyKnowledgeBase.normalized_domain.contains(domain_clean))
+        if min_employees is not None:
+            query = query.filter(CompanyKnowledgeBase.employee_count >= min_employees)
+        if max_employees is not None:
+            query = query.filter(CompanyKnowledgeBase.employee_count <= max_employees)
+
+        query = query.order_by(
+            CompanyKnowledgeBase.last_enriched_at.desc().nullslast(),
+        )
+        records = query.all()
+
+        results = []
+        for kb in records:
+            results.append({
+                "name": kb.canonical_name,
+                "website": kb.normalized_domain,
+                "industry": kb.industry,
+                "sub_industry": kb.sub_industry,
+                "city": kb.city,
+                "state_region": kb.state_region,
+                "country": kb.country,
+                "employee_count": kb.employee_count,
+                "revenue_estimate": kb.revenue_estimate,
+                "description": (kb.description or "")[:200],
+                "source": "knowledge_base",
+                "best_final_score": kb.best_final_score,
+                "times_discovered": kb.times_discovered,
+                "last_enriched_at": str(kb.last_enriched_at) if kb.last_enriched_at else None,
+                "is_from_local_db": True,
+            })
+
+        return json.dumps({
+            "count": len(results),
+            "source": "knowledge_base",
+            "ranking": "recency",
+            "companies": results,
+        })
+    except Exception as e:
+        logger.error(f"KB company search failed: {e}")
+        return json.dumps({"error": str(e), "companies": []})
+    finally:
+        session.close()
+
+
+def _search_kb_semantic_ranked(
+    session, embedding: list[float],
+    industry: str = None, country: str = None, domain: str = None,
+    min_employees: int = None, max_employees: int = None,
+) -> str:
+    """Semantic-ranked KB search: filter by structured criteria, order by ICP similarity."""
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+    # Build dynamic WHERE clauses
+    where_clauses = ["kb.embedding IS NOT NULL"]
+    params: dict = {"embedding": embedding_str}
+
+    if industry:
+        where_clauses.append("kb.industry ILIKE :industry")
+        params["industry"] = f"%{industry}%"
+    if country:
+        where_clauses.append("kb.country ILIKE :country")
+        params["country"] = f"%{country}%"
+    if domain:
+        domain_clean = domain.lower().strip().removeprefix("www.").removeprefix("http://").removeprefix("https://").rstrip("/")
+        where_clauses.append("kb.normalized_domain LIKE :domain")
+        params["domain"] = f"%{domain_clean}%"
+    if min_employees is not None:
+        where_clauses.append("kb.employee_count >= :min_emp")
+        params["min_emp"] = min_employees
+    if max_employees is not None:
+        where_clauses.append("kb.employee_count <= :max_emp")
+        params["max_emp"] = max_employees
+
+    where_sql = " AND ".join(where_clauses)
+
+    results = session.execute(
+        text(f"""
+            SELECT kb.canonical_name, kb.normalized_domain,
+                   kb.industry, kb.sub_industry, kb.city, kb.state_region,
+                   kb.country, kb.employee_count, kb.revenue_estimate,
+                   kb.description, kb.best_final_score,
+                   kb.times_discovered, kb.last_enriched_at,
+                   1 - (kb.embedding <=> CAST(:embedding AS vector)) as icp_similarity
+            FROM company_knowledge_base kb
+            WHERE {where_sql}
+            ORDER BY kb.embedding <=> CAST(:embedding AS vector)
+        """),
+        params,
+    )
+
+    companies = []
+    for row in results:
+        companies.append({
+            "name": row.canonical_name,
+            "website": row.normalized_domain,
+            "industry": row.industry,
+            "sub_industry": row.sub_industry,
+            "city": row.city,
+            "state_region": row.state_region,
+            "country": row.country,
+            "employee_count": row.employee_count,
+            "revenue_estimate": row.revenue_estimate,
+            "description": (row.description or "")[:200],
+            "source": "knowledge_base",
+            "best_final_score": row.best_final_score,
+            "icp_similarity": round(row.icp_similarity, 4) if row.icp_similarity else None,
+            "times_discovered": row.times_discovered,
+            "last_enriched_at": str(row.last_enriched_at) if row.last_enriched_at else None,
+            "is_from_local_db": True,
+        })
+
+    return json.dumps({
+        "count": len(companies),
+        "source": "knowledge_base",
+        "ranking": "icp_similarity",
+        "companies": companies,
+    })
+
+
+def _kb_record_to_dict(kb):
+    """Serialize a CompanyKnowledgeBase ORM object to a dict."""
+    return {
+        "id": str(kb.id),
+        "normalized_domain": kb.normalized_domain,
+        "canonical_name": kb.canonical_name,
+        "industry": kb.industry,
+        "sub_industry": kb.sub_industry,
+        "city": kb.city,
+        "state_region": kb.state_region,
+        "country": kb.country,
+        "employee_count": kb.employee_count,
+        "revenue_estimate": kb.revenue_estimate,
+        "asset_value": kb.asset_value,
+        "description": (kb.description or "")[:500],
+        "best_icp_match_score": kb.best_icp_match_score,
+        "best_budget_signal_score": kb.best_budget_signal_score,
+        "best_urgency_signal_score": kb.best_urgency_signal_score,
+        "best_final_score": kb.best_final_score,
+        "best_deal_hotness_score": kb.best_deal_hotness_score,
+        "best_deal_hotness_tier": kb.best_deal_hotness_tier,
+        "times_discovered": kb.times_discovered,
+        "best_known_contacts": kb.best_known_contacts,
+        "last_enriched_at": str(kb.last_enriched_at) if kb.last_enriched_at else None,
+    }
+
+
+@tool
+def search_knowledge_base(query: str, limit: int = 10) -> str:
+    """
+    Search the Company Knowledge Base using semantic similarity (vector search).
+    The Knowledge Base contains ONE canonical 'golden record' per company domain,
+    merged from ALL pipeline runs. Use this for cross-run company lookups.
+    BEST FOR: Finding the best-known data about companies across all pipeline runs.
+
+    Args:
+        query: Natural language search query describing what you're looking for
+        limit: Maximum number of results to return (default 10, max 25)
+
+    Returns:
+        JSON string with matching KB records and similarity scores
+    """
+    limit = min(limit, 25)
+    embedding = generate_embedding(query)
+    if not embedding is None:
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    else:
+        return json.dumps({"error": "Failed to generate embedding for query", "companies": []})
+
+    session = _get_sync_session()
+    try:
+        results = session.execute(
+            text("""
+                SELECT kb.id, kb.normalized_domain, kb.canonical_name,
+                       kb.industry, kb.sub_industry, kb.city, kb.state_region,
+                       kb.country, kb.employee_count, kb.revenue_estimate,
+                       kb.asset_value, kb.description,
+                       kb.best_icp_match_score, kb.best_budget_signal_score,
+                       kb.best_urgency_signal_score, kb.best_final_score,
+                       kb.best_deal_hotness_score, kb.best_deal_hotness_tier,
+                       kb.times_discovered, kb.last_enriched_at,
+                       1 - (kb.embedding <=> CAST(:embedding AS vector)) as similarity
+                FROM company_knowledge_base kb
+                WHERE kb.embedding IS NOT NULL
+                ORDER BY kb.embedding <=> CAST(:embedding AS vector)
+                LIMIT :limit
+            """),
+            {"embedding": embedding_str, "limit": limit},
+        )
+
+        companies = []
+        for row in results:
+            companies.append({
+                "id": str(row.id),
+                "normalized_domain": row.normalized_domain,
+                "canonical_name": row.canonical_name,
+                "industry": row.industry,
+                "sub_industry": row.sub_industry,
+                "city": row.city,
+                "state_region": row.state_region,
+                "country": row.country,
+                "employee_count": row.employee_count,
+                "revenue_estimate": row.revenue_estimate,
+                "best_final_score": row.best_final_score,
+                "best_deal_hotness_score": row.best_deal_hotness_score,
+                "best_deal_hotness_tier": row.best_deal_hotness_tier,
+                "times_discovered": row.times_discovered,
+                "last_enriched_at": str(row.last_enriched_at) if row.last_enriched_at else None,
+                "similarity": round(row.similarity, 4) if row.similarity else None,
+            })
+
+        return json.dumps({
+            "source": "knowledge_base",
+            "query": query,
+            "count": len(companies),
+            "companies": companies,
+        })
+    except Exception as e:
+        logger.error(f"KB semantic search failed: {e}")
+        return json.dumps({"error": str(e), "companies": []})
+    finally:
+        session.close()
+
+
+@tool
+def search_knowledge_base_structured(
+    industry: str = None,
+    country: str = None,
+    min_score: float = None,
+    min_employees: int = None,
+    max_employees: int = None,
+    limit: int = 20,
+) -> str:
+    """
+    Search the Company Knowledge Base using structured filters.
+    The Knowledge Base contains ONE canonical 'golden record' per company domain,
+    merged from ALL pipeline runs. Use this for cross-run filtered lookups.
+    BEST FOR: Filtering the best-known company data by industry, country, score, size.
+
+    Args:
+        industry: Filter by industry (partial match, case-insensitive)
+        country: Filter by country (partial match)
+        min_score: Minimum best_final_score (0-100)
+        min_employees: Minimum employee count
+        max_employees: Maximum employee count
+        limit: Maximum results (default 20, max 50)
+
+    Returns:
+        JSON string with matching KB records
+    """
+    limit = min(limit, 50)
+    session = _get_sync_session()
+    try:
+        query = session.query(CompanyKnowledgeBase)
+
+        if industry:
+            query = query.filter(CompanyKnowledgeBase.industry.ilike(f"%{industry}%"))
+        if country:
+            query = query.filter(CompanyKnowledgeBase.country.ilike(f"%{country}%"))
+        if min_score is not None:
+            query = query.filter(CompanyKnowledgeBase.best_final_score >= min_score)
+        if min_employees is not None:
+            query = query.filter(CompanyKnowledgeBase.employee_count >= min_employees)
+        if max_employees is not None:
+            query = query.filter(CompanyKnowledgeBase.employee_count <= max_employees)
+
+        query = query.order_by(CompanyKnowledgeBase.best_final_score.desc().nullslast())
+        records = query.limit(limit).all()
+
+        results = [_kb_record_to_dict(r) for r in records]
+        return json.dumps({
+            "source": "knowledge_base",
+            "count": len(results),
+            "filters_applied": {
+                k: v for k, v in {
+                    "industry": industry, "country": country,
+                    "min_score": min_score,
+                    "min_employees": min_employees, "max_employees": max_employees,
+                }.items() if v is not None
+            },
+            "companies": results,
+        })
+    except Exception as e:
+        logger.error(f"KB structured search failed: {e}")
         return json.dumps({"error": str(e), "companies": []})
     finally:
         session.close()

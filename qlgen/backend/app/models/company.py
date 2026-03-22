@@ -43,7 +43,15 @@ class Company(Base):
     final_score = Column(Float, nullable=True)                  # 0-100, computed in Stage 5
     final_rank = Column(Integer, nullable=True)                 # rank within the pipeline run
     data_freshness = Column(DateTime(timezone=True), nullable=True)  # when company data was last enriched/verified
+
+    # Recency-adjusted scoring
+    recency_adjusted_budget_score = Column(Float, nullable=True)
+    recency_adjusted_urgency_score = Column(Float, nullable=True)
+    deal_hotness_score = Column(Float, nullable=True)
+    deal_hotness_tier = Column(String(10), nullable=True)
+    avg_evidence_age_months = Column(Float, nullable=True)
     cached_from_run_id = Column(UUID(as_uuid=True), nullable=True)   # if data was seeded from a previous pipeline run
+    carried_forward = Column(Boolean, default=False, nullable=True)  # if company was carried forward from a previous run
 
     contacts = relationship("Contact", back_populates="company", cascade="all, delete-orphan")
     pipeline_run = relationship("PipelineRun", back_populates="companies")

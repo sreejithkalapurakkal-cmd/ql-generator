@@ -9,6 +9,8 @@ from app.models.chat_session import ChatSession
 from app.models.chat_message import ChatMessage
 from app.models.tool_registry import ToolRegistry
 from app.models.audit_log import AuditLog
+from app.models.discovery_intelligence import DiscoveryQuery, ToolEffectiveness
+from app.models.company_knowledge_base import CompanyKnowledgeBase
 
 __all__ = [
     "User",
@@ -16,4 +18,6 @@ __all__ = [
     "PipelineRun", "PipelineLog", "ChatSession", "ChatMessage",
     "ToolRegistry",
     "AuditLog",
+    "DiscoveryQuery", "ToolEffectiveness",
+    "CompanyKnowledgeBase",
 ]

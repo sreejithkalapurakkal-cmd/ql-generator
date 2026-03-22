@@ -31,7 +31,8 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
     headers = [
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
-        "Phone", "Final Score",
+        "Phone", "Final Score", "Budget Score", "Urgency Score",
+        "Deal Hotness", "Hotness Tier",
     ]
 
     header_fill = PatternFill(start_color="1F4E79", fill_type="solid")
@@ -48,6 +49,10 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
     for company in companies:
         score_display = company.final_score if company.final_score is not None else "N/A"
         city_str = ", ".join(filter(None, [company.city, company.state_region, company.country]))
+        budget_display = company.budget_signal_score if company.budget_signal_score is not None else ""
+        urgency_display = company.urgency_signal_score if company.urgency_signal_score is not None else ""
+        hotness_display = company.deal_hotness_score if company.deal_hotness_score is not None else ""
+        tier_display = company.deal_hotness_tier or ""
 
         if company.contacts:
             for contact in company.contacts:
@@ -61,6 +66,10 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
                 ws.cell(row=row_num, column=8, value=contact.email)
                 ws.cell(row=row_num, column=9, value=contact.phone)
                 ws.cell(row=row_num, column=10, value=score_display)
+                ws.cell(row=row_num, column=11, value=budget_display)
+                ws.cell(row=row_num, column=12, value=urgency_display)
+                ws.cell(row=row_num, column=13, value=hotness_display)
+                ws.cell(row=row_num, column=14, value=tier_display)
                 serial += 1
                 row_num += 1
         else:
@@ -69,6 +78,10 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession) -> BytesIO:
             ws.cell(row=row_num, column=3, value=company.website)
             ws.cell(row=row_num, column=4, value=city_str)
             ws.cell(row=row_num, column=10, value=score_display)
+            ws.cell(row=row_num, column=11, value=budget_display)
+            ws.cell(row=row_num, column=12, value=urgency_display)
+            ws.cell(row=row_num, column=13, value=hotness_display)
+            ws.cell(row=row_num, column=14, value=tier_display)
             serial += 1
             row_num += 1
 
@@ -97,13 +110,18 @@ async def generate_csv(run_id: UUID, db: AsyncSession) -> BytesIO:
     writer.writerow([
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
-        "Phone", "Final Score",
+        "Phone", "Final Score", "Budget Score", "Urgency Score",
+        "Deal Hotness", "Hotness Tier",
     ])
 
     serial = 1
     for company in companies:
         score_display = company.final_score if company.final_score is not None else "N/A"
         city_str = ", ".join(filter(None, [company.city, company.state_region, company.country]))
+        budget_display = company.budget_signal_score if company.budget_signal_score is not None else ""
+        urgency_display = company.urgency_signal_score if company.urgency_signal_score is not None else ""
+        hotness_display = company.deal_hotness_score if company.deal_hotness_score is not None else ""
+        tier_display = company.deal_hotness_tier or ""
 
         if company.contacts:
             for contact in company.contacts:
@@ -111,12 +129,14 @@ async def generate_csv(run_id: UUID, db: AsyncSession) -> BytesIO:
                     serial, company.name, company.website, city_str,
                     contact.full_name, contact.designation, contact.linkedin_url,
                     contact.email, contact.phone, score_display,
+                    budget_display, urgency_display, hotness_display, tier_display,
                 ])
                 serial += 1
         else:
             writer.writerow([
                 serial, company.name, company.website, city_str,
                 "", "", "", "", "", score_display,
+                budget_display, urgency_display, hotness_display, tier_display,
             ])
             serial += 1
 

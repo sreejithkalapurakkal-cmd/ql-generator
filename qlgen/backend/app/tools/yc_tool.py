@@ -31,7 +31,7 @@ def search_yc_companies(
     batch: str = "",
     status: str = "Active",
     page: int = 1,
-    per_page: int = 20,
+    per_page: int = 50,
 ) -> dict:
     """
     Search Y Combinator's public company directory. FREE, no API key required.
@@ -105,7 +105,7 @@ def search_yc_companies(
             if not any(reg in region_text for reg in regions_lower):
                 continue
 
-        # Query text search
+        # Query text search — tokenized matching (any token matches)
         if query_lower:
             searchable = (
                 (c.get("name") or "").lower()
@@ -113,7 +113,9 @@ def search_yc_companies(
                 + " " + (c.get("long_description") or "").lower()[:300]
                 + " " + " ".join(str(t).lower() for t in (c.get("tags") or []))
             )
-            if query_lower not in searchable:
+            # Split query into tokens and match if ANY token appears
+            query_tokens = [t for t in query_lower.split() if len(t) > 2]
+            if query_tokens and not any(token in searchable for token in query_tokens):
                 continue
 
         filtered.append(c)

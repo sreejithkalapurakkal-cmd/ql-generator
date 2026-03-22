@@ -5,17 +5,20 @@ import {
 } from 'antd';
 import {
   DownloadOutlined, ToolOutlined, DeleteOutlined, PlayCircleOutlined,
-  ThunderboltOutlined, DatabaseOutlined,
+  ThunderboltOutlined, DatabaseOutlined, FireOutlined,
   DownOutlined, UpOutlined, LinkOutlined, CheckCircleOutlined,
   CloseCircleOutlined, ArrowUpOutlined, MinusOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getLeadCompanies, getStageSummary, getExportUrl } from '../api/leadsApi';
+import { getLeadCompanies, getStageSummary, getExportUrl, getToolAttribution } from '../api/leadsApi';
 import { getPipelineStatus, getPipelineLogs, deletePipelineRun, startPipeline, getCompaniesByStage } from '../api/pipelineApi';
 import {
   Company, CompanyStageResult, PipelineRun, PipelineLogEntry,
-  StageSummaryResponse, StageSummary,
+  StageSummaryResponse, StageSummary, ToolAttribution,
 } from '../types';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RechartsTooltip,
+} from 'recharts';
 import { usePageContext } from '../context/PageContextProvider';
 
 const { Text } = Typography;
@@ -77,6 +80,37 @@ const SignalScoreBar: React.FC<{ score: number | null | undefined; label: string
           }} />
         </div>
       </div>
+    </Tooltip>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Deal Hotness helpers
+// ---------------------------------------------------------------------------
+
+const HOTNESS_CONFIG: Record<string, { color: string; label: string; tagColor: string }> = {
+  hot: { color: '#f5222d', label: 'Hot', tagColor: 'red' },
+  warm: { color: '#fa8c16', label: 'Warm', tagColor: 'orange' },
+  cool: { color: '#1677ff', label: 'Cool', tagColor: 'blue' },
+  cold: { color: '#8c8c8c', label: 'Cold', tagColor: 'default' },
+};
+
+const getRecencyBadge = (months: number | null | undefined): { label: string; color: string } => {
+  if (months == null) return { label: '', color: 'default' };
+  if (months < 1) return { label: 'Fresh', color: 'green' };
+  if (months <= 3) return { label: 'Recent', color: 'blue' };
+  if (months <= 6) return { label: 'Aging', color: 'orange' };
+  return { label: 'Stale', color: 'red' };
+};
+
+const HotnessIndicator: React.FC<{ tier: string | null | undefined; score: number | null | undefined }> = ({ tier, score }) => {
+  if (!tier || score == null) return <Text type="secondary" style={{ fontSize: 11 }}>--</Text>;
+  const cfg = HOTNESS_CONFIG[tier] || HOTNESS_CONFIG.cold;
+  return (
+    <Tooltip title={`Deal Hotness: ${Math.round(score)}/100 (${cfg.label})`}>
+      <Tag color={cfg.tagColor} style={{ fontWeight: 600, fontSize: 11 }} icon={tier === 'hot' ? <FireOutlined /> : undefined}>
+        {cfg.label} {Math.round(score)}
+      </Tag>
     </Tooltip>
   );
 };
@@ -288,6 +322,30 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
             </div>
           </div>
         )}
+        {company.deal_hotness_score != null && (
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>Deal Hotness</Text>
+            <div style={{ fontWeight: 700, fontSize: 16, color: HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.color || '#8c8c8c' }}>
+              {Math.round(company.deal_hotness_score)}/100
+              <Tag color={HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.tagColor || 'default'}
+                style={{ fontSize: 10, marginLeft: 6 }}>
+                {HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.label || 'Cold'}
+              </Tag>
+            </div>
+          </div>
+        )}
+        {company.avg_evidence_age_months != null && (
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>Avg Evidence Age</Text>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>
+              {company.avg_evidence_age_months < 1 ? '<1 mo' : `${company.avg_evidence_age_months.toFixed(1)} mo`}
+              {(() => {
+                const badge = getRecencyBadge(company.avg_evidence_age_months);
+                return badge.label ? <Tag color={badge.color} style={{ fontSize: 10, marginLeft: 6 }}>{badge.label}</Tag> : null;
+              })()}
+            </div>
+          </div>
+        )}
         {revenueStr && (
           <div>
             <Text type="secondary" style={{ fontSize: 11 }}>Revenue Est.</Text>
@@ -425,12 +483,23 @@ const EvidenceDisplay: React.FC<{ evidence: unknown }> = ({ evidence }) => {
             {item.description && (
               <div style={{ color: 'var(--g600)' }}>{item.description}</div>
             )}
-            {item.source_url && (
-              <a href={item.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--purple)' }}>
-                <LinkOutlined style={{ marginRight: 4 }} />
-                {item.source_url.length > 60 ? item.source_url.substring(0, 60) + '...' : item.source_url}
-              </a>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {item.source_url && (
+                <a href={item.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--purple)' }}>
+                  <LinkOutlined style={{ marginRight: 4 }} />
+                  {item.source_url.length > 60 ? item.source_url.substring(0, 60) + '...' : item.source_url}
+                </a>
+              )}
+              {item.evidence_date && (
+                <Tag style={{ fontSize: 10 }}>
+                  {new Date(item.evidence_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </Tag>
+              )}
+              {item.recency_months != null && (() => {
+                const badge = getRecencyBadge(item.recency_months);
+                return badge.label ? <Tag color={badge.color} style={{ fontSize: 10 }}>{badge.label}</Tag> : null;
+              })()}
+            </div>
           </div>
         ))}
       </div>
@@ -1141,6 +1210,206 @@ const RunSummaryPanel: React.FC<{ logs: PipelineLogEntry[]; companies: Company[]
 };
 
 // ---------------------------------------------------------------------------
+// Tool Effectiveness Tab
+// ---------------------------------------------------------------------------
+
+const getEfficiencyColor = (eff: number | null): string => {
+  if (eff == null) return '#d9d9d9';
+  if (eff >= 70) return '#52c41a';
+  if (eff >= 40) return '#faad14';
+  return '#ff4d4f';
+};
+
+const ToolEffectivenessTab: React.FC<{ runId: string }> = ({ runId }) => {
+  const [data, setData] = useState<ToolAttribution[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getToolAttribution(runId)
+      .then(res => setData(res.data.tools || []))
+      .catch(() => setData([]))
+      .finally(() => setLoading(false));
+  }, [runId]);
+
+  const discoveryTools = useMemo(
+    () => data.filter(t => t.companies_discovered > 0).sort((a, b) => b.companies_discovered - a.companies_discovered),
+    [data],
+  );
+
+  const enrichmentTools = useMemo(
+    () => data.filter(t => t.companies_discovered === 0 && t.total_calls > 0),
+    [data],
+  );
+
+  const columns = [
+    {
+      title: 'Tool',
+      dataIndex: 'tool_name',
+      key: 'tool_name',
+      render: (v: string) => <Text strong>{v}</Text>,
+    },
+    {
+      title: 'Discovered',
+      dataIndex: 'companies_discovered',
+      key: 'discovered',
+      sorter: (a: ToolAttribution, b: ToolAttribution) => a.companies_discovered - b.companies_discovered,
+    },
+    {
+      title: 'Qualified',
+      dataIndex: 'companies_qualified',
+      key: 'qualified',
+      render: (v: number) => <span style={{ color: '#52c41a', fontWeight: 600 }}>{v}</span>,
+    },
+    {
+      title: 'Disqualified',
+      dataIndex: 'companies_disqualified',
+      key: 'disqualified',
+      render: (v: number) => <span style={{ color: '#ff4d4f' }}>{v}</span>,
+    },
+    {
+      title: 'High Fit',
+      dataIndex: 'high_fit_count',
+      key: 'high_fit',
+      render: (v: number) => <Tag color="green">{v}</Tag>,
+    },
+    {
+      title: 'Medium Fit',
+      dataIndex: 'medium_fit_count',
+      key: 'medium_fit',
+      render: (v: number) => <Tag color="gold">{v}</Tag>,
+    },
+    {
+      title: 'Low Fit',
+      dataIndex: 'low_fit_count',
+      key: 'low_fit',
+      render: (v: number) => <Tag color="red">{v}</Tag>,
+    },
+    {
+      title: 'Efficiency',
+      dataIndex: 'efficiency',
+      key: 'efficiency',
+      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.efficiency ?? 0) - (b.efficiency ?? 0),
+      render: (v: number | null) => v != null ? (
+        <Tag color={getEfficiencyColor(v) === '#52c41a' ? 'green' : getEfficiencyColor(v) === '#faad14' ? 'gold' : 'red'}>
+          {v}%
+        </Tag>
+      ) : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'Avg Score',
+      dataIndex: 'avg_icp_match_score',
+      key: 'avg_score',
+      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.avg_icp_match_score ?? 0) - (b.avg_icp_match_score ?? 0),
+      render: (v: number | null) => v != null ? (
+        <span style={{ color: getScoreColor(v), fontWeight: 600 }}>{v}</span>
+      ) : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'Calls',
+      dataIndex: 'total_calls',
+      key: 'calls',
+    },
+    {
+      title: 'Success Rate',
+      dataIndex: 'success_rate',
+      key: 'success_rate',
+      render: (v: number | null) => v != null ? `${v}%` : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'Top Companies',
+      dataIndex: 'sample_companies',
+      key: 'samples',
+      width: 200,
+      render: (v: string[]) => v && v.length > 0 ? (
+        <Tooltip title={v.join(', ')}>
+          <Text ellipsis style={{ maxWidth: 180 }}>{v.join(', ')}</Text>
+        </Tooltip>
+      ) : <Text type="secondary">-</Text>,
+    },
+  ];
+
+  const enrichmentColumns = [
+    { title: 'Tool', dataIndex: 'tool_name', key: 'tool_name', render: (v: string) => <Text strong>{v}</Text> },
+    { title: 'Total Calls', dataIndex: 'total_calls', key: 'calls' },
+    {
+      title: 'Successful',
+      dataIndex: 'successful_calls',
+      key: 'success',
+      render: (v: number) => <span style={{ color: '#52c41a' }}>{v}</span>,
+    },
+    {
+      title: 'Failed',
+      dataIndex: 'failed_calls',
+      key: 'failed',
+      render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}</span>,
+    },
+    {
+      title: 'Success Rate',
+      dataIndex: 'success_rate',
+      key: 'success_rate',
+      render: (v: number | null) => v != null ? `${v}%` : '-',
+    },
+  ];
+
+  if (loading) {
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>Loading tool effectiveness data...</div>;
+  }
+
+  if (discoveryTools.length === 0 && enrichmentTools.length === 0) {
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>No tool attribution data available for this run.</div>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Stacked bar chart */}
+      {discoveryTools.length > 0 && (
+        <Card title="Company Discovery by Tool" size="small">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={discoveryTools} margin={{ bottom: 60 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="tool_name" angle={-35} textAnchor="end" height={80} interval={0} tick={{ fontSize: 11 }} />
+              <YAxis />
+              <RechartsTooltip />
+              <Legend />
+              <Bar dataKey="high_fit_count" stackId="a" fill="#52c41a" name="High Fit (70+)" />
+              <Bar dataKey="medium_fit_count" stackId="a" fill="#faad14" name="Medium Fit (40-69)" />
+              <Bar dataKey="low_fit_count" stackId="a" fill="#ff4d4f" name="Low Fit (<40)" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Discovery tools table */}
+      {discoveryTools.length > 0 && (
+        <Card title="Discovery Tool Breakdown" size="small">
+          <Table
+            columns={columns}
+            dataSource={discoveryTools}
+            rowKey="tool_name"
+            pagination={false}
+            size="small"
+            scroll={{ x: 1200 }}
+          />
+        </Card>
+      )}
+
+      {/* Enrichment/support tools table */}
+      {enrichmentTools.length > 0 && (
+        <Card title="Enrichment & Support Tools (no direct company attribution)" size="small">
+          <Table
+            columns={enrichmentColumns}
+            dataSource={enrichmentTools}
+            rowKey="tool_name"
+            pagination={false}
+            size="small"
+          />
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Main LeadsPage Component
 // ---------------------------------------------------------------------------
 
@@ -1155,7 +1424,7 @@ const LeadsPage: React.FC = () => {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null);
   const [agentLogs, setAgentLogs] = useState<PipelineLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary'>('companies');
+  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary' | 'tools'>('companies');
   const [promotedFilter, setPromotedFilter] = useState<'promoted' | 'all' | 'skipped'>('promoted');
 
   useEffect(() => {
@@ -1216,6 +1485,8 @@ const LeadsPage: React.FC = () => {
     final_rank: number | null | undefined;
     budget_signal_score: number | null | undefined;
     urgency_signal_score: number | null | undefined;
+    deal_hotness_score: number | null | undefined;
+    deal_hotness_tier: string | null | undefined;
     contact_name: string;
     designation: string | null;
     linkedin: string | null;
@@ -1243,6 +1514,8 @@ const LeadsPage: React.FC = () => {
           final_rank: company.final_rank,
           budget_signal_score: company.budget_signal_score,
           urgency_signal_score: company.urgency_signal_score,
+          deal_hotness_score: company.deal_hotness_score,
+          deal_hotness_tier: company.deal_hotness_tier,
           contact_name: contact.full_name || '',
           designation: contact.designation,
           linkedin: contact.linkedin_url,
@@ -1268,6 +1541,8 @@ const LeadsPage: React.FC = () => {
         final_rank: company.final_rank,
         budget_signal_score: company.budget_signal_score,
         urgency_signal_score: company.urgency_signal_score,
+        deal_hotness_score: company.deal_hotness_score,
+        deal_hotness_tier: company.deal_hotness_tier,
         contact_name: '-',
         designation: '-',
         linkedin: null,
@@ -1297,6 +1572,9 @@ const LeadsPage: React.FC = () => {
   }).length;
 
   const cachedCount = filteredCompanies.filter(c => c.cached_from_run_id).length;
+
+  const hotLeadCount = filteredCompanies.filter(c => c.deal_hotness_tier === 'hot').length;
+  const warmLeadCount = filteredCompanies.filter(c => c.deal_hotness_tier === 'warm').length;
 
   // Multi-step summary counts
   const promotedCount = isMultiStepRun ? companies.filter((c) => c.promoted === true).length : 0;
@@ -1378,6 +1656,14 @@ const LeadsPage: React.FC = () => {
       width: 85,
       render: (score: number | null | undefined) => (
         <SignalScoreBar score={score} label="Urgency Signal" />
+      ),
+    },
+    {
+      title: 'Hotness',
+      dataIndex: 'deal_hotness_tier',
+      width: 100,
+      render: (_tier: string | null | undefined, record: any) => (
+        <HotnessIndicator tier={record.deal_hotness_tier} score={record.deal_hotness_score} />
       ),
     },
     {
@@ -1521,6 +1807,16 @@ const LeadsPage: React.FC = () => {
           </div>
           <div className="lbl">High / Med / Low</div>
         </div>
+        {(hotLeadCount > 0 || warmLeadCount > 0) && (
+          <div className="summary-item">
+            <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
+              <span style={{ color: '#f5222d' }}>{hotLeadCount}</span>
+              {' / '}
+              <span style={{ color: '#fa8c16' }}>{warmLeadCount}</span>
+            </div>
+            <div className="lbl">Hot / Warm Leads</div>
+          </div>
+        )}
         {cachedCount > 0 && (
           <div className="summary-item">
             <div className="val">
@@ -1557,6 +1853,12 @@ const LeadsPage: React.FC = () => {
         >
           Search Summary
         </div>
+        <div
+          className={`tab ${activeTab === 'tools' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tools')}
+        >
+          Tool Effectiveness
+        </div>
       </div>
 
       {/* Tab: Companies */}
@@ -1576,6 +1878,7 @@ const LeadsPage: React.FC = () => {
                 <Select.Option value="final_score">Sort by Final Score</Select.Option>
                 <Select.Option value="budget_signal_score">Sort by Budget Score</Select.Option>
                 <Select.Option value="urgency_signal_score">Sort by Urgency Score</Select.Option>
+                <Select.Option value="deal_hotness_score">Sort by Deal Hotness</Select.Option>
                 <Select.Option value="qualification">Sort by Category</Select.Option>
                 <Select.Option value="company_name">Sort by Company</Select.Option>
               </Select>
@@ -1593,7 +1896,7 @@ const LeadsPage: React.FC = () => {
             dataSource={flatRows}
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
-            scroll={{ x: 1560 }}
+            scroll={{ x: 1660 }}
             expandable={{
               expandedRowKeys,
               onExpandedRowsChange: (keys) => {
@@ -1674,6 +1977,17 @@ const LeadsPage: React.FC = () => {
             <RunSummaryPanel logs={agentLogs} companies={companies} />
           )}
         </Card>
+      )}
+
+      {/* Tab: Tool Effectiveness */}
+      {activeTab === 'tools' && (
+        runId ? (
+          <ToolEffectivenessTab runId={runId} />
+        ) : (
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
+            No pipeline run selected.
+          </div>
+        )
       )}
 
     </div>

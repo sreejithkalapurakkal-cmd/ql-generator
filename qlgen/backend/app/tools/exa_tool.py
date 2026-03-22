@@ -16,7 +16,7 @@ RATE_LIMIT_MSG = (
 @tool
 def exa_search(
     query: str,
-    num_results: int = 10,
+    num_results: int = 30,
     use_autoprompt: bool = True,
     include_domains: list[str] = None,
     exclude_domains: list[str] = None,
@@ -30,11 +30,12 @@ def exa_search(
 
     Args:
         query: Natural language search query (e.g., "midsize ecommerce companies using Shopify Plus in California")
-        num_results: Number of results to return (max 50)
+        num_results: Number of results to return (max 50, default 30)
         use_autoprompt: Let Exa optimize the query
         include_domains: Only search these domains
         exclude_domains: Exclude these domains
         category: Filter category (company, research_paper, news, etc.)
+            Use "company" for Stage 1 discovery to focus on company websites.
 
     Returns:
         dict with 'results' list containing url, title, text, author, published_date
@@ -47,12 +48,12 @@ def exa_search(
     }
     payload = {
         "query": query,
-        "numResults": num_results,
+        "numResults": min(num_results, 50),
         "useAutoprompt": use_autoprompt,
         "includeDomains": include_domains,
         "excludeDomains": exclude_domains,
         "category": category,
-        "contents": {"text": {"maxCharacters": 2000}},
+        "contents": {"text": {"maxCharacters": 5000}},
     }
     payload = {k: v for k, v in payload.items() if v is not None}
     logger.info(f"Exa search payload: {payload}")
@@ -60,7 +61,18 @@ def exa_search(
     try:
         response = httpx.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        # Trim results to essential fields to prevent context window overflow
+        if "results" in data:
+            data["results"] = [
+                {
+                    "url": r.get("url"),
+                    "title": r.get("title"),
+                    "text": (r.get("text") or "")[:500],
+                }
+                for r in data["results"]
+            ]
+        return data
     except httpx.HTTPStatusError as e:
         resp_body = ""
         try:
@@ -77,6 +89,88 @@ def exa_search(
                     f"Exa rejected the request (400 Bad Request). "
                     f"Simplify the query or check parameter values. "
                     f"Details: {resp_body}"
+                ),
+                "results": [],
+            }
+        if e.response.status_code in (401, 403):
+            return {
+                "error": f"Exa authentication error ({e.response.status_code}). Check API key.",
+                "results": [],
+            }
+        return {"error": str(e), "results": []}
+    except Exception as e:
+        return {"error": str(e), "results": []}
+
+
+@tool
+def exa_find_similar(
+    url: str,
+    num_results: int = 30,
+    exclude_domains: list[str] = None,
+    category: str = None,
+) -> dict:
+    """
+    Find companies/pages similar to a given URL using Exa's neural similarity search.
+    BEST FOR: Discovering more companies like a known good match. After finding
+    high-scoring ICP matches, use their website URLs to find similar companies.
+    USE IN STAGE: Company Discovery (Stage 1)
+
+    Args:
+        url: A URL to find similar pages/companies for (e.g., "https://acme.com")
+        num_results: Number of similar results to return (max 50, default 30)
+        exclude_domains: Domains to exclude from results (e.g., exclude already-found companies)
+        category: Filter category — use "company" to focus on company websites
+
+    Returns:
+        dict with 'results' list containing url, title, text, score
+    """
+    settings = get_settings()
+    api_url = f"{settings.EXA_BASE_URL}/findSimilar"
+    headers = {
+        "x-api-key": settings.EXA_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "url": url,
+        "numResults": min(num_results, 50),
+        "excludeDomains": exclude_domains,
+        "category": category,
+        "contents": {"text": {"maxCharacters": 5000}},
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    logger.info(f"Exa findSimilar payload: {payload}")
+
+    try:
+        response = httpx.post(api_url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        # Trim results to essential fields to prevent context window overflow
+        if "results" in data:
+            data["results"] = [
+                {
+                    "url": r.get("url"),
+                    "title": r.get("title"),
+                    "text": (r.get("text") or "")[:500],
+                    "score": r.get("score"),
+                }
+                for r in data["results"]
+            ]
+        return data
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Exa findSimilar HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "results": []}
+        if e.response.status_code == 400:
+            return {
+                "error": (
+                    f"Exa findSimilar rejected the request (400). "
+                    f"Check the URL is valid. Details: {resp_body}"
                 ),
                 "results": [],
             }

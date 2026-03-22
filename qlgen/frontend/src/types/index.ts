@@ -86,6 +86,8 @@ export interface PipelineRun {
     total_companies_in_stage?: number;
     current_company_name?: string;
     contacts_found_so_far?: number;
+    newly_discovered?: number;
+    carried_forward?: number;
   } | null;
 }
 
@@ -155,9 +157,16 @@ export interface Company {
   final_score?: number | null;
   final_rank?: number | null;
   cached_from_run_id?: string | null;
+  carried_forward?: boolean | null;
   data_freshness?: string | null;
   stage_results?: CompanyStageResult[];
   bant_score?: { total_score?: number } | null;
+  // Recency-adjusted scoring
+  recency_adjusted_budget_score?: number | null;
+  recency_adjusted_urgency_score?: number | null;
+  deal_hotness_score?: number | null;
+  deal_hotness_tier?: string | null;
+  avg_evidence_age_months?: number | null;
 }
 
 export interface StageSummary {
@@ -175,6 +184,29 @@ export interface StageSummaryResponse {
   signal_mode: string | null;
   stages: StageSummary[];
   cached_companies: number;
+}
+
+// Tool Attribution types
+export interface ToolAttribution {
+  tool_name: string;
+  companies_discovered: number;
+  companies_qualified: number;
+  companies_disqualified: number;
+  high_fit_count: number;
+  medium_fit_count: number;
+  low_fit_count: number;
+  avg_icp_match_score: number | null;
+  efficiency: number | null;
+  sample_companies: string[];
+  total_calls: number;
+  successful_calls: number;
+  failed_calls: number;
+  success_rate: number | null;
+}
+
+export interface ToolAttributionResponse {
+  run_id: string;
+  tools: ToolAttribution[];
 }
 
 // Co-pilot Chat types

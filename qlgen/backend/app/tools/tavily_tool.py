@@ -12,7 +12,13 @@ RATE_LIMIT_MSG = (
 
 
 @tool
-def tavily_search(query: str, max_results: int = 5, search_depth: str = "advanced") -> dict:
+def tavily_search(
+    query: str,
+    max_results: int = 15,
+    search_depth: str = "advanced",
+    include_domains: list[str] = None,
+    topic: str = None,
+) -> dict:
     """
     Web search using Tavily API.
     BEST FOR: Finding recent news, funding rounds, company announcements,
@@ -21,8 +27,11 @@ def tavily_search(query: str, max_results: int = 5, search_depth: str = "advance
 
     Args:
         query: Search query
-        max_results: Maximum number of results
+        max_results: Maximum number of results (default 15, max 20)
         search_depth: 'basic' or 'advanced' (advanced = more detailed)
+        include_domains: List of domains to restrict search to
+            (e.g., ["crunchbase.com", "g2.com", "techcrunch.com"])
+        topic: Search topic filter — "general" (default) or "news" (for recent news only)
 
     Returns:
         dict with 'results' list containing title, url, content, score
@@ -32,10 +41,13 @@ def tavily_search(query: str, max_results: int = 5, search_depth: str = "advance
     payload = {
         "api_key": settings.TAVILY_API_KEY,
         "query": query,
-        "max_results": max_results,
+        "max_results": min(max_results, 20),
         "search_depth": search_depth,
         "include_raw_content": False,
+        "include_domains": include_domains,
+        "topic": topic,
     }
+    payload = {k: v for k, v in payload.items() if v is not None}
 
     try:
         response = httpx.post(url, json=payload, timeout=30)

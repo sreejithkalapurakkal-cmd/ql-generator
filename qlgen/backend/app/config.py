@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
 
+    # Free government registry API keys
+    COMPANIES_HOUSE_API_KEY: str = ""     # UK Companies House (free at developer.company-information.service.gov.uk)
+
+    # Free/optional API keys for enhanced discovery
+    GITHUB_TOKEN: str = ""                # GitHub API (5000 req/hr with token, 60 without)
+    GOOGLE_CSE_API_KEY: str = ""          # Google Custom Search (100 free queries/day)
+    GOOGLE_CSE_ID: str = ""               # Google Programmable Search Engine ID
+    PRODUCTHUNT_TOKEN: str = ""           # ProductHunt API (free developer token)
+
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

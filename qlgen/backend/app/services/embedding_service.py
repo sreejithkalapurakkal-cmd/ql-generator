@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -100,7 +101,7 @@ def generate_embedding(text: str) -> Optional[list[float]]:
 async def embed_company(company: Company, db: AsyncSession) -> None:
     """Generate and save embedding for a single company."""
     text_doc = _build_embedding_text(company)
-    embedding = generate_embedding(text_doc)
+    embedding = await asyncio.to_thread(generate_embedding, text_doc)
     if embedding:
         company.embedding = embedding
         await db.flush()
@@ -125,7 +126,7 @@ async def embed_all_companies(db: AsyncSession, batch_size: int = 50) -> int:
 
         for company in companies:
             text_doc = _build_embedding_text(company)
-            embedding = generate_embedding(text_doc)
+            embedding = await asyncio.to_thread(generate_embedding, text_doc)
             if embedding:
                 company.embedding = embedding
                 count += 1
