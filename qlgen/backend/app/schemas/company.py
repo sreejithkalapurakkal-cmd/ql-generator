@@ -81,6 +81,10 @@ class CompanyResponse(BaseModel):
     deal_hotness_tier: Optional[str] = None
     avg_evidence_age_months: Optional[float] = None
 
+    # Cross-run context (populated by /all/companies endpoint)
+    pipeline_run_id: Optional[UUID] = None
+    run_icp_name: Optional[str] = None
+
     class Config:
         from_attributes = True
 

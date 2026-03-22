@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, Text, DateTime
+from sqlalchemy import Column, String, Boolean, Text, DateTime, Integer, Float
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -21,5 +21,11 @@ class ToolRegistry(Base):
     last_health_message = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     rate_limit_info = Column(String(200), nullable=True)
+
+    # Effectiveness-based priority and auto-disable
+    priority = Column(Integer, default=50, nullable=True)  # 0-100, higher = preferred
+    effectiveness_threshold = Column(Float, default=20.0, nullable=True)  # Auto-disable below this
+    auto_disabled = Column(Boolean, default=False, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

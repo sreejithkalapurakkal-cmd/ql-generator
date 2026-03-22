@@ -827,7 +827,11 @@ const DashboardPage: React.FC = () => {
         title={MODAL_TITLES[statsModalTile]}
         open={statsModalOpen}
         onCancel={() => setStatsModalOpen(false)}
-        footer={null}
+        footer={
+          <Button type="primary" onClick={() => { setStatsModalOpen(false); navigate('/all-leads'); }}>
+            View All Leads
+          </Button>
+        }
         width={800}
       >
         {statsModalTile === 'pipeline_runs' ? (

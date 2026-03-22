@@ -16,7 +16,8 @@ from app.models.user import User
 from app.schemas.company import CompanyResponse, CompanyStageResultResponse, ContactResponse
 from app.services.export_service import generate_xlsx, generate_csv
 from app.auth.dependencies import get_current_user, get_user_from_token_param
-from app.auth.authorization import check_resource_access
+from app.auth.authorization import check_resource_access, ownership_filter
+from app.models.icp import ICPConfig
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -79,6 +80,124 @@ async def _get_run_with_access_check(run_id: UUID, db: AsyncSession, user: User)
         raise HTTPException(status_code=404, detail="Pipeline run not found")
     check_resource_access(run.user_id, user)
     return run
+
+
+@router.get("/all/companies")
+async def get_all_companies(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    industry_filter: Optional[str] = Query(None),
+    country_filter: Optional[str] = Query(None),
+    qualification_filter: Optional[str] = Query(None),
+    min_final_score: Optional[float] = Query(None),
+    max_final_score: Optional[float] = Query(None),
+    sort_by: Optional[str] = Query("final_score"),
+    sort_order: Optional[str] = Query("desc"),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Cross-run unified company list for the current user."""
+    base_query = (
+        select(Company)
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+        .options(
+            selectinload(Company.contacts),
+            selectinload(Company.stage_results),
+        )
+    )
+
+    if industry_filter:
+        base_query = base_query.where(Company.industry.ilike(f"%{industry_filter}%"))
+    if country_filter:
+        base_query = base_query.where(Company.country.ilike(f"%{country_filter}%"))
+    if qualification_filter:
+        base_query = base_query.where(Company.qualification == qualification_filter)
+    if min_final_score is not None:
+        base_query = base_query.where(Company.final_score >= min_final_score)
+    if max_final_score is not None:
+        base_query = base_query.where(Company.final_score <= max_final_score)
+    if search:
+        base_query = base_query.where(
+            Company.name.ilike(f"%{search}%") | Company.website.ilike(f"%{search}%")
+        )
+
+    sort_column_map = {
+        "final_score": Company.final_score,
+        "icp_match_score": Company.icp_match_score,
+        "company_name": Company.name,
+        "created_at": Company.created_at,
+        "deal_hotness_score": Company.deal_hotness_score,
+        "budget_signal_score": Company.budget_signal_score,
+        "urgency_signal_score": Company.urgency_signal_score,
+    }
+    sort_col = sort_column_map.get(sort_by, Company.final_score)
+
+    if sort_order == "asc":
+        base_query = base_query.order_by(sort_col.asc().nullslast())
+    else:
+        base_query = base_query.order_by(sort_col.desc().nullslast())
+
+    # Total count
+    count_q = (
+        select(func.count(Company.id))
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+    )
+    if industry_filter:
+        count_q = count_q.where(Company.industry.ilike(f"%{industry_filter}%"))
+    if country_filter:
+        count_q = count_q.where(Company.country.ilike(f"%{country_filter}%"))
+    if qualification_filter:
+        count_q = count_q.where(Company.qualification == qualification_filter)
+    if min_final_score is not None:
+        count_q = count_q.where(Company.final_score >= min_final_score)
+    if max_final_score is not None:
+        count_q = count_q.where(Company.final_score <= max_final_score)
+    if search:
+        count_q = count_q.where(
+            Company.name.ilike(f"%{search}%") | Company.website.ilike(f"%{search}%")
+        )
+
+    total_result = await db.execute(count_q)
+    total_count = total_result.scalar() or 0
+
+    # Paginate
+    offset = (page - 1) * page_size
+    base_query = base_query.offset(offset).limit(page_size)
+
+    result = await db.execute(base_query)
+    companies = result.scalars().unique().all()
+
+    # Enrich with run/ICP metadata
+    run_ids = list(set(c.pipeline_run_id for c in companies))
+    run_map: dict = {}
+    if run_ids:
+        run_result = await db.execute(
+            select(PipelineRun)
+            .where(PipelineRun.id.in_(run_ids))
+            .options(selectinload(PipelineRun.icp_config))
+        )
+        run_map = {r.id: r for r in run_result.scalars().all()}
+
+    response_companies = []
+    for c in companies:
+        resp = _build_company_response(c)
+        resp.pipeline_run_id = c.pipeline_run_id
+        run = run_map.get(c.pipeline_run_id)
+        resp.run_icp_name = run.icp_config.name if run and run.icp_config else None
+        response_companies.append(resp)
+
+    return {
+        "companies": [r.model_dump() for r in response_companies],
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
 
 
 @router.get("/{run_id}/companies", response_model=List[CompanyResponse])
@@ -336,15 +455,16 @@ async def get_tool_attribution(
         })
 
     # Get tool call stats from pipeline_logs
+    tool_name_col = PipelineLog.event_data["tool_name"].astext
     log_result = await db.execute(
         select(
-            PipelineLog.event_data["tool_name"].astext.label("tool_name"),
+            tool_name_col.label("tool_name"),
             func.count(PipelineLog.id).label("total_calls"),
             func.count(case((PipelineLog.event_type == "tool_error", PipelineLog.id))).label("error_calls"),
         )
         .where(PipelineLog.pipeline_run_id == run_id)
         .where(PipelineLog.event_type.in_(["tool_result", "tool_error"]))
-        .group_by(PipelineLog.event_data["tool_name"].astext)
+        .group_by(tool_name_col)
     )
 
     call_stats = {}

@@ -1401,6 +1401,10 @@ async def execute_pipeline(run_id: UUID):
                     intel_industry = str(industry_types[0])
                 intel_countries = fd.get("geography", {}).get("countries", [])
                 intel_country = intel_countries[0] if intel_countries else ""
+                if not intel_industry:
+                    logger.warning(f"Empty industry for early intelligence recording on run {run_id}")
+                if not intel_country:
+                    logger.warning(f"Empty country for early intelligence recording on run {run_id}")
                 await record_early_intelligence(db, run_id, run.icp_config_id, intel_industry, intel_country)
                 await db.commit()
             except Exception as intel_err:
@@ -2001,6 +2005,10 @@ async def resume_after_signals(
                     industry_name = str(industry_types[0])
                 countries = fd.get("geography", {}).get("countries", [])
                 country_name = countries[0] if countries else ""
+                if not industry_name:
+                    logger.warning(f"Empty industry for discovery intelligence recording on run {run_id}")
+                if not country_name:
+                    logger.warning(f"Empty country for discovery intelligence recording on run {run_id}")
                 await record_discovery_intelligence(
                     db, run_id, run.icp_config_id,
                     industry=industry_name, country=country_name,

@@ -10,6 +10,7 @@ import ICPListPage from './pages/ICPListPage';
 import PipelinePage from './pages/PipelinePage';
 import LeadsPage from './pages/LeadsPage';
 import CompanyDetailPage from './pages/CompanyDetailPage';
+import AllLeadsPage from './pages/AllLeadsPage';
 import ToolsPage from './pages/ToolsPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -54,9 +55,17 @@ function App() {
                         <Route path="/icp/:id/edit" element={<ICPConfigPage />} />
                         <Route path="/icp" element={<ICPListPage />} />
                         <Route path="/pipeline/:runId" element={<PipelinePage />} />
+                        <Route path="/all-leads" element={<AllLeadsPage />} />
                         <Route path="/leads/:runId" element={<LeadsPage />} />
                         <Route path="/leads/:runId/company/:companyId" element={<CompanyDetailPage />} />
-                        <Route path="/tools" element={<ToolsPage />} />
+                        <Route
+                          path="/tools"
+                          element={
+                            <AdminRoute>
+                              <ToolsPage />
+                            </AdminRoute>
+                          }
+                        />
                         <Route
                           path="/admin/users"
                           element={

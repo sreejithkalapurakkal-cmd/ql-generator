@@ -23,14 +23,14 @@ from app.services.tool_registry_service import (
     get_tool_metrics,
     get_tool_last_errors,
 )
-from app.auth.dependencies import get_current_user, get_current_super_admin
+from app.auth.dependencies import get_current_super_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["Tools Monitoring"])
 
 
 @router.get("", response_model=list[ToolRegistryResponse])
-async def list_tools(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def list_tools(db: AsyncSession = Depends(get_db), _admin: User = Depends(get_current_super_admin)):
     """List all registered tools with usage metrics from pipeline_logs."""
     await ensure_tools_seeded(db)
 
@@ -60,6 +60,9 @@ async def list_tools(db: AsyncSession = Depends(get_db), _user: User = Depends(g
             last_health_message=tool.last_health_message,
             notes=tool.notes,
             rate_limit_info=tool.rate_limit_info,
+            priority=tool.priority,
+            effectiveness_threshold=tool.effectiveness_threshold,
+            auto_disabled=tool.auto_disabled,
             created_at=tool.created_at,
             updated_at=tool.updated_at,
             total_calls=total,
@@ -74,7 +77,7 @@ async def list_tools(db: AsyncSession = Depends(get_db), _user: User = Depends(g
 
 
 @router.get("/summary", response_model=ToolMetricsSummary)
-async def get_tools_summary(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_tools_summary(db: AsyncSession = Depends(get_db), _admin: User = Depends(get_current_super_admin)):
     """Get summary counts of tool health statuses."""
     await ensure_tools_seeded(db)
 
@@ -104,6 +107,8 @@ async def update_tool(tool_id: UUID, update: ToolRegistryUpdate, db: AsyncSessio
         tool.is_enabled = update.is_enabled
     if update.notes is not None:
         tool.notes = update.notes
+    if update.effectiveness_threshold is not None:
+        tool.effectiveness_threshold = update.effectiveness_threshold
 
     await db.commit()
     await db.refresh(tool)
@@ -128,7 +133,7 @@ async def update_tool(tool_id: UUID, update: ToolRegistryUpdate, db: AsyncSessio
 
 
 @router.post("/{tool_id}/health-check", response_model=ToolHealthCheckResponse)
-async def check_single_tool_health(tool_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def check_single_tool_health(tool_id: UUID, db: AsyncSession = Depends(get_db), _admin: User = Depends(get_current_super_admin)):
     """Run a health check for a single tool."""
     result = await db.execute(select(ToolRegistry).where(ToolRegistry.id == tool_id))
     tool = result.scalar_one_or_none()
@@ -147,7 +152,7 @@ async def check_single_tool_health(tool_id: UUID, db: AsyncSession = Depends(get
 
 
 @router.post("/health-check-all", response_model=list[ToolHealthCheckResponse])
-async def check_all_tools_health(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def check_all_tools_health(db: AsyncSession = Depends(get_db), _admin: User = Depends(get_current_super_admin)):
     """Run health checks for all enabled tools concurrently."""
     await ensure_tools_seeded(db)
 

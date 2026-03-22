@@ -10,15 +10,12 @@ import {
   CloseCircleOutlined, ArrowUpOutlined, MinusOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getLeadCompanies, getStageSummary, getExportUrl, getToolAttribution } from '../api/leadsApi';
+import { getLeadCompanies, getStageSummary, getExportUrl } from '../api/leadsApi';
 import { getPipelineStatus, getPipelineLogs, deletePipelineRun, startPipeline, getCompaniesByStage } from '../api/pipelineApi';
 import {
   Company, CompanyStageResult, PipelineRun, PipelineLogEntry,
-  StageSummaryResponse, StageSummary, ToolAttribution,
+  StageSummaryResponse, StageSummary,
 } from '../types';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RechartsTooltip,
-} from 'recharts';
 import { usePageContext } from '../context/PageContextProvider';
 
 const { Text } = Typography;
@@ -1292,206 +1289,6 @@ const RunSummaryPanel: React.FC<{ logs: PipelineLogEntry[]; companies: Company[]
 };
 
 // ---------------------------------------------------------------------------
-// Tool Effectiveness Tab
-// ---------------------------------------------------------------------------
-
-const getEfficiencyColor = (eff: number | null): string => {
-  if (eff == null) return '#d9d9d9';
-  if (eff >= 70) return '#52c41a';
-  if (eff >= 40) return '#faad14';
-  return '#ff4d4f';
-};
-
-const ToolEffectivenessTab: React.FC<{ runId: string }> = ({ runId }) => {
-  const [data, setData] = useState<ToolAttribution[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    getToolAttribution(runId)
-      .then(res => setData(res.data.tools || []))
-      .catch(() => setData([]))
-      .finally(() => setLoading(false));
-  }, [runId]);
-
-  const discoveryTools = useMemo(
-    () => data.filter(t => t.companies_discovered > 0).sort((a, b) => b.companies_discovered - a.companies_discovered),
-    [data],
-  );
-
-  const enrichmentTools = useMemo(
-    () => data.filter(t => t.companies_discovered === 0 && t.total_calls > 0),
-    [data],
-  );
-
-  const columns = [
-    {
-      title: 'Tool',
-      dataIndex: 'tool_name',
-      key: 'tool_name',
-      render: (v: string) => <Text strong>{v}</Text>,
-    },
-    {
-      title: 'Discovered',
-      dataIndex: 'companies_discovered',
-      key: 'discovered',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => a.companies_discovered - b.companies_discovered,
-    },
-    {
-      title: 'Qualified',
-      dataIndex: 'companies_qualified',
-      key: 'qualified',
-      render: (v: number) => <span style={{ color: '#52c41a', fontWeight: 600 }}>{v}</span>,
-    },
-    {
-      title: 'Disqualified',
-      dataIndex: 'companies_disqualified',
-      key: 'disqualified',
-      render: (v: number) => <span style={{ color: '#ff4d4f' }}>{v}</span>,
-    },
-    {
-      title: 'High Fit',
-      dataIndex: 'high_fit_count',
-      key: 'high_fit',
-      render: (v: number) => <Tag color="green">{v}</Tag>,
-    },
-    {
-      title: 'Medium Fit',
-      dataIndex: 'medium_fit_count',
-      key: 'medium_fit',
-      render: (v: number) => <Tag color="gold">{v}</Tag>,
-    },
-    {
-      title: 'Low Fit',
-      dataIndex: 'low_fit_count',
-      key: 'low_fit',
-      render: (v: number) => <Tag color="red">{v}</Tag>,
-    },
-    {
-      title: 'Efficiency',
-      dataIndex: 'efficiency',
-      key: 'efficiency',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.efficiency ?? 0) - (b.efficiency ?? 0),
-      render: (v: number | null) => v != null ? (
-        <Tag color={getEfficiencyColor(v) === '#52c41a' ? 'green' : getEfficiencyColor(v) === '#faad14' ? 'gold' : 'red'}>
-          {v}%
-        </Tag>
-      ) : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Avg Score',
-      dataIndex: 'avg_icp_match_score',
-      key: 'avg_score',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.avg_icp_match_score ?? 0) - (b.avg_icp_match_score ?? 0),
-      render: (v: number | null) => v != null ? (
-        <span style={{ color: getScoreColor(v), fontWeight: 600 }}>{v}</span>
-      ) : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Calls',
-      dataIndex: 'total_calls',
-      key: 'calls',
-    },
-    {
-      title: 'Success Rate',
-      dataIndex: 'success_rate',
-      key: 'success_rate',
-      render: (v: number | null) => v != null ? `${v}%` : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Top Companies',
-      dataIndex: 'sample_companies',
-      key: 'samples',
-      width: 200,
-      render: (v: string[]) => v && v.length > 0 ? (
-        <Tooltip title={v.join(', ')}>
-          <Text ellipsis style={{ maxWidth: 180 }}>{v.join(', ')}</Text>
-        </Tooltip>
-      ) : <Text type="secondary">-</Text>,
-    },
-  ];
-
-  const enrichmentColumns = [
-    { title: 'Tool', dataIndex: 'tool_name', key: 'tool_name', render: (v: string) => <Text strong>{v}</Text> },
-    { title: 'Total Calls', dataIndex: 'total_calls', key: 'calls' },
-    {
-      title: 'Successful',
-      dataIndex: 'successful_calls',
-      key: 'success',
-      render: (v: number) => <span style={{ color: '#52c41a' }}>{v}</span>,
-    },
-    {
-      title: 'Failed',
-      dataIndex: 'failed_calls',
-      key: 'failed',
-      render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}</span>,
-    },
-    {
-      title: 'Success Rate',
-      dataIndex: 'success_rate',
-      key: 'success_rate',
-      render: (v: number | null) => v != null ? `${v}%` : '-',
-    },
-  ];
-
-  if (loading) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>Loading tool effectiveness data...</div>;
-  }
-
-  if (discoveryTools.length === 0 && enrichmentTools.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>No tool attribution data available for this run.</div>;
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Stacked bar chart */}
-      {discoveryTools.length > 0 && (
-        <Card title="Company Discovery by Tool" size="small">
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={discoveryTools} margin={{ bottom: 60 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="tool_name" angle={-35} textAnchor="end" height={80} interval={0} tick={{ fontSize: 11 }} />
-              <YAxis />
-              <RechartsTooltip />
-              <Legend />
-              <Bar dataKey="high_fit_count" stackId="a" fill="#52c41a" name="High Fit (70+)" />
-              <Bar dataKey="medium_fit_count" stackId="a" fill="#faad14" name="Medium Fit (40-69)" />
-              <Bar dataKey="low_fit_count" stackId="a" fill="#ff4d4f" name="Low Fit (<40)" />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-
-      {/* Discovery tools table */}
-      {discoveryTools.length > 0 && (
-        <Card title="Discovery Tool Breakdown" size="small">
-          <Table
-            columns={columns}
-            dataSource={discoveryTools}
-            rowKey="tool_name"
-            pagination={false}
-            size="small"
-            scroll={{ x: 1200 }}
-          />
-        </Card>
-      )}
-
-      {/* Enrichment/support tools table */}
-      {enrichmentTools.length > 0 && (
-        <Card title="Enrichment & Support Tools (no direct company attribution)" size="small">
-          <Table
-            columns={enrichmentColumns}
-            dataSource={enrichmentTools}
-            rowKey="tool_name"
-            pagination={false}
-            size="small"
-          />
-        </Card>
-      )}
-    </div>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // Main LeadsPage Component
 // ---------------------------------------------------------------------------
 
@@ -1505,7 +1302,7 @@ const LeadsPage: React.FC = () => {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null);
   const [agentLogs, setAgentLogs] = useState<PipelineLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary' | 'tools'>('companies');
+  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary'>('companies');
   const [promotedFilter, setPromotedFilter] = useState<'promoted' | 'all' | 'skipped'>('promoted');
 
   useEffect(() => {
@@ -1860,12 +1657,6 @@ const LeadsPage: React.FC = () => {
         >
           Search Summary
         </div>
-        <div
-          className={`tab ${activeTab === 'tools' ? 'active' : ''}`}
-          onClick={() => setActiveTab('tools')}
-        >
-          Tool Effectiveness
-        </div>
       </div>
 
       {/* Tab: Companies */}
@@ -1987,17 +1778,6 @@ const LeadsPage: React.FC = () => {
             <RunSummaryPanel logs={agentLogs} companies={companies} />
           )}
         </Card>
-      )}
-
-      {/* Tab: Tool Effectiveness */}
-      {activeTab === 'tools' && (
-        runId ? (
-          <ToolEffectivenessTab runId={runId} />
-        ) : (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
-            No pipeline run selected.
-          </div>
-        )
       )}
 
     </div>
