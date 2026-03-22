@@ -1,12 +1,12 @@
 import asyncio
 import json
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from uuid import UUID
-from typing import List
+from typing import List, Optional
 
 from app.db.session import get_db
 from app.models.pipeline import PipelineRun
@@ -23,20 +23,18 @@ from app.services.pipeline_service import (
     resume_after_first_signal,
     resume_after_signals,
 )
+from app.services import event_store
 from app.auth.dependencies import get_current_user, get_user_from_token_param
+from app.auth.authorization import is_admin, ownership_filter, check_resource_access, check_delete_permission
+from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
-# In-memory store for SSE progress updates
-pipeline_events: dict[str, list] = {}
-# Set of run IDs that have been requested to cancel
-cancelled_runs: set[str] = set()
 
-
-def _build_run_response(run: PipelineRun) -> PipelineRunResponse:
+def _build_run_response(run: PipelineRun, requesting_user: Optional[User] = None) -> PipelineRunResponse:
     """Build a PipelineRunResponse from a PipelineRun model with ICP info."""
     icp = run.icp_config if hasattr(run, 'icp_config') and run.icp_config else None
-    return PipelineRunResponse(
+    resp = PipelineRunResponse(
         id=run.id,
         icp_config_id=run.icp_config_id,
         icp_name=icp.name if icp else None,
@@ -53,12 +51,16 @@ def _build_run_response(run: PipelineRun) -> PipelineRunResponse:
         signal_phase=run.signal_phase,
         stage_details=run.stage_details,
     )
+    if requesting_user and is_admin(requesting_user) and run.user:
+        resp.user_name = run.user.name
+    return resp
 
 
 @router.post("/run", response_model=PipelineRunResponse)
 async def start_pipeline(
     request: PipelineRunRequest,
     background_tasks: BackgroundTasks,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -66,6 +68,7 @@ async def start_pipeline(
     icp = result.scalar_one_or_none()
     if not icp:
         raise HTTPException(status_code=404, detail="ICP configuration not found")
+    check_resource_access(icp.user_id, user)
 
     run = PipelineRun(
         icp_config_id=request.icp_config_id,
@@ -75,37 +78,42 @@ async def start_pipeline(
         user_id=user.id,
     )
     db.add(run)
+    await db.flush()
+    await log_audit(db, user.id, "create", "pipeline", run.id, {"icp_name": icp.name}, ip_address=http_request.client.host if http_request.client else None)
     await db.commit()
     await db.refresh(run)
 
     run_id_str = str(run.id)
-    pipeline_events[run_id_str] = []
+    await event_store.init_run(run_id_str)
 
-    background_tasks.add_task(execute_pipeline, run.id, pipeline_events, cancelled_runs)
+    background_tasks.add_task(execute_pipeline, run.id)
 
     run.icp_config = icp
-    return _build_run_response(run)
+    return _build_run_response(run, requesting_user=user)
 
 
 @router.get("/history/list", response_model=List[PipelineRunResponse])
-async def list_pipeline_runs(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
-    result = await db.execute(
+async def list_pipeline_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    query = (
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
+        .where(ownership_filter(PipelineRun.user_id, user))
         .order_by(PipelineRun.started_at.desc())
         .limit(50)
     )
+    result = await db.execute(query)
     runs = result.scalars().all()
-    return [_build_run_response(run) for run in runs]
+    return [_build_run_response(run, requesting_user=user) for run in runs]
 
 
 @router.get("/stats/by-icp")
-async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
         .where(
-            (PipelineRun.companies_found > 0) | (PipelineRun.contacts_found > 0)
+            ownership_filter(PipelineRun.user_id, user),
+            (PipelineRun.companies_found > 0) | (PipelineRun.contacts_found > 0),
         )
     )
     runs = result.scalars().all()
@@ -138,7 +146,7 @@ async def get_pipeline_stats_by_icp(db: AsyncSession = Depends(get_db), _user: U
 
 
 @router.get("/{run_id}", response_model=PipelineRunResponse)
-async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     result = await db.execute(
         select(PipelineRun)
         .options(selectinload(PipelineRun.icp_config))
@@ -147,35 +155,38 @@ async def get_pipeline_status(run_id: UUID, db: AsyncSession = Depends(get_db), 
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
-    return _build_run_response(run)
+    check_resource_access(run.user_id, user)
+    return _build_run_response(run, requesting_user=user)
 
 
 @router.delete("/{run_id}")
-async def delete_pipeline_run(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def delete_pipeline_run(run_id: UUID, http_request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_delete_permission(run.user_id, user)
     if run.status == "running":
         raise HTTPException(status_code=400, detail="Cannot delete a running pipeline")
+    await log_audit(db, user.id, "delete", "pipeline", run.id, ip_address=http_request.client.host if http_request.client else None)
     await db.delete(run)
     await db.commit()
-    run_id_str = str(run_id)
-    if run_id_str in pipeline_events:
-        del pipeline_events[run_id_str]
-    cancelled_runs.discard(run_id_str)
+    await event_store.cleanup_run(str(run_id))
     return {"detail": "Pipeline run deleted"}
 
 
 @router.post("/{run_id}/cancel")
-async def cancel_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def cancel_pipeline(run_id: UUID, http_request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
     if run.status not in ("running", "pending"):
         raise HTTPException(status_code=400, detail=f"Cannot cancel pipeline with status '{run.status}'")
-    cancelled_runs.add(str(run_id))
+    await log_audit(db, user.id, "cancel", "pipeline", run.id, ip_address=http_request.client.host if http_request.client else None)
+    await db.commit()
+    await event_store.mark_cancelled(str(run_id))
     return {"detail": "Cancellation requested"}
 
 
@@ -189,7 +200,7 @@ async def promote_firmographic(
     request: PromoteFirmographicRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Stage 2 review: select companies and signal mode, start signal research."""
     result = await db.execute(
@@ -200,6 +211,7 @@ async def promote_firmographic(
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
     if run.status != "awaiting_review" or run.current_stage != "review_firmographic":
         raise HTTPException(status_code=400, detail=f"Pipeline is not awaiting firmographic review (stage: {run.current_stage})")
 
@@ -207,15 +219,14 @@ async def promote_firmographic(
         raise HTTPException(status_code=400, detail="signal_mode must be 'budget_first', 'urgency_first', or 'both'")
 
     run_id_str = str(run_id)
-    pipeline_events[run_id_str] = []
+    await event_store.init_run(run_id_str)
 
     background_tasks.add_task(
         resume_after_firmographic,
         run.id, request.company_ids, request.signal_mode,
-        pipeline_events, cancelled_runs,
     )
 
-    return _build_run_response(run)
+    return _build_run_response(run, requesting_user=user)
 
 
 @router.post("/{run_id}/promote-first-signal", response_model=PipelineRunResponse)
@@ -224,7 +235,7 @@ async def promote_first_signal(
     request: PromoteFirstSignalRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Serial mode: review after 1st signal → start 2nd signal research."""
     result = await db.execute(
@@ -235,19 +246,19 @@ async def promote_first_signal(
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
     if run.status != "awaiting_review" or run.signal_phase != "first_signal_done":
         raise HTTPException(status_code=400, detail="Pipeline is not awaiting first signal review")
 
     run_id_str = str(run_id)
-    pipeline_events[run_id_str] = []
+    await event_store.init_run(run_id_str)
 
     background_tasks.add_task(
         resume_after_first_signal,
         run.id, request.company_ids,
-        pipeline_events, cancelled_runs,
     )
 
-    return _build_run_response(run)
+    return _build_run_response(run, requesting_user=user)
 
 
 @router.post("/{run_id}/promote-signals", response_model=PipelineRunResponse)
@@ -256,7 +267,7 @@ async def promote_signals(
     request: PromoteSignalsRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Final signal review → start Stages 4+5 (contact discovery + scoring)."""
     result = await db.execute(
@@ -267,19 +278,19 @@ async def promote_signals(
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
     if run.status != "awaiting_review":
         raise HTTPException(status_code=400, detail=f"Pipeline is not awaiting review (status: {run.status})")
 
     run_id_str = str(run_id)
-    pipeline_events[run_id_str] = []
+    await event_store.init_run(run_id_str)
 
     background_tasks.add_task(
         resume_after_signals,
         run.id, request.company_ids,
-        pipeline_events, cancelled_runs,
     )
 
-    return _build_run_response(run)
+    return _build_run_response(run, requesting_user=user)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -291,7 +302,7 @@ async def get_companies_by_stage(
     run_id: UUID,
     stage: str = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Get companies for a pipeline run, optionally filtered by stage.
 
@@ -301,6 +312,13 @@ async def get_companies_by_stage(
     """
     from app.schemas.company import CompanyResponse, CompanyStageResultResponse, ContactResponse
     from app.models.company_stage import CompanyStageResult as CSR
+
+    # Verify ownership first
+    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = run_result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
 
     query = (
         select(Company)
@@ -373,7 +391,14 @@ async def get_companies_by_stage(
 # ──────────────────────────────────────────────────────────────────
 
 @router.get("/{run_id}/logs", response_model=List[PipelineLogResponse])
-async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    # Verify ownership first
+    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = run_result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    check_resource_access(run.user_id, user)
+
     from app.models.pipeline_log import PipelineLog
     result = await db.execute(
         select(PipelineLog)
@@ -392,11 +417,14 @@ async def get_pipeline_logs(run_id: UUID, db: AsyncSession = Depends(get_db), _u
 
 
 @router.get("/{run_id}/stream")
-async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), _user: User = Depends(get_user_from_token_param)):
+async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_user_from_token_param)):
     run_id_str = str(run_id)
 
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
     run = result.scalar_one_or_none()
+
+    if run:
+        check_resource_access(run.user_id, user)
 
     # Terminal events for already-finished pipelines
     terminal_stages = {
@@ -442,11 +470,10 @@ async def stream_pipeline(run_id: UUID, db: AsyncSession = Depends(get_db), _use
             "awaiting_second_signal_review", "awaiting_signal_review",
         }
         while True:
-            events = pipeline_events.get(run_id_str, [])
-            if last_index < len(events):
+            new_events = await event_store.get_events(run_id_str, last_index)
+            if new_events:
                 no_event_cycles = 0
-                while last_index < len(events):
-                    event = events[last_index]
+                for event in new_events:
                     event_type = event.get("type", "stage_update")
                     data = json.dumps(event)
                     yield f"event: {event_type}\ndata: {data}\n\n"

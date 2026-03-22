@@ -1,5 +1,6 @@
 import client from './client';
 import type { AuthUser } from './authApi';
+import { AuditLogEntry } from '../types';
 
 export const listUsers = () =>
   client.get<AuthUser[]>('/users');
@@ -12,3 +13,6 @@ export const updateUser = (userId: string, data: { role?: string; is_active?: bo
 
 export const deleteUser = (userId: string) =>
   client.delete(`/users/${userId}`);
+
+export const getAuditLogs = (params?: { resource_type?: string; user_id?: string; limit?: number }) =>
+  client.get<AuditLogEntry[]>('/admin/audit-logs', { params });

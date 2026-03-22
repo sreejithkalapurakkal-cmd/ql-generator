@@ -13,6 +13,9 @@ from urllib.parse import urlparse, quote_plus
 import httpx
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search_central
+from app.tools.retry_utils import httpx_get_with_retry
+
 logger = logging.getLogger(__name__)
 
 LINKEDIN_PATTERN = re.compile(r"https?://(?:www\.)?linkedin\.com/in/([\w-]+)")
@@ -38,29 +41,21 @@ DEFAULT_ROLES = ["CEO", "CTO", "COO", "CIO", "CDO", "VP Engineering",
 
 
 def _ddg(query: str, max_results: int = 8) -> list[dict]:
-    """DuckDuckGo search with rate-limit backoff."""
-    try:
-        from ddgs import DDGS
-        with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
-    except Exception as e:
-        if "ratelimit" in str(e).lower():
-            logger.warning("DDG rate limit hit, waiting 30s")
-            time.sleep(30)
-            try:
-                from ddgs import DDGS
-                with DDGS() as ddgs:
-                    return list(ddgs.text(query, max_results=max_results))
-            except Exception:
-                pass
+    """DuckDuckGo search through centralized rate limiter."""
+    results = _ddg_search_central(query, max_results=max_results)
+    # Filter out rate-limit error dicts so callers get a clean list
+    if results and isinstance(results[0], dict) and results[0].get("rate_limited"):
         return []
+    if results and isinstance(results[0], dict) and results[0].get("error"):
+        return []
+    return results
 
 
 def _fetch(url: str, timeout: int = 12) -> str:
     """Fetch a URL and return text content."""
     try:
         from bs4 import BeautifulSoup
-        resp = httpx.get(
+        resp = httpx_get_with_retry(
             url, follow_redirects=True, timeout=timeout,
             headers={"User-Agent": "Mozilla/5.0 qlGen Research Bot"},
         )
@@ -537,7 +532,7 @@ def find_company_executives(
     return {
         "company_name": company_name,
         "company_domain": company_domain,
-        "contacts": merged[:20],
+        "contacts": merged[:30],
         "total_found": len(merged),
         "methods_used": methods_used,
         "emails_found": len(set(all_emails)),

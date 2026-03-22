@@ -25,6 +25,8 @@ from app.schemas.chat import (
 )
 from app.agent.copilot_agent import create_copilot_agent, create_copilot_callback_handler
 from app.auth.dependencies import get_current_user, decode_token
+from app.auth.authorization import is_admin, ownership_filter, check_resource_access, check_delete_permission
+from app.auth.context import current_user_id, current_user_is_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -99,6 +101,7 @@ async def send_chat_message(request: ChatMessageRequest, http_request: Request):
                         select(ChatSession).where(
                             ChatSession.id == session_id,
                             ChatSession.is_active == True,
+                            ChatSession.user_id == user.id,
                         )
                     )
                     chat_session = result.scalar_one_or_none()
@@ -154,6 +157,10 @@ async def send_chat_message(request: ChatMessageRequest, http_request: Request):
                     disabled_tools = await get_disabled_tool_names(db)
                 except Exception:
                     disabled_tools = set()
+
+                # Set context vars for co-pilot DB tools (propagated to thread by asyncio.to_thread)
+                current_user_id.set(user.id)
+                current_user_is_admin.set(is_admin(user))
 
                 # Create agent with callback handler
                 event_queue = queue.Queue()
@@ -249,14 +256,18 @@ async def send_chat_message(request: ChatMessageRequest, http_request: Request):
 
 
 @router.get("/sessions")
-async def list_chat_sessions(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def list_chat_sessions(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """List all active chat sessions, most recent first."""
-    result = await db.execute(
+    query = (
         select(ChatSession)
-        .where(ChatSession.is_active == True)
+        .where(
+            ChatSession.is_active == True,
+            ownership_filter(ChatSession.user_id, user),
+        )
         .order_by(ChatSession.created_at.desc())
         .limit(50)
     )
+    result = await db.execute(query)
     sessions = result.scalars().all()
 
     response = []
@@ -289,7 +300,7 @@ async def list_chat_sessions(db: AsyncSession = Depends(get_db), _user: User = D
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """Get all messages for a chat session."""
     result = await db.execute(
         select(ChatSession).where(
@@ -300,6 +311,7 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    check_resource_access(session.user_id, user)
 
     msg_result = await db.execute(
         select(ChatMessage)
@@ -322,7 +334,7 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """Soft-delete a chat session."""
     result = await db.execute(
         select(ChatSession).where(ChatSession.id == session_id)
@@ -330,6 +342,7 @@ async def delete_chat_session(session_id: str, db: AsyncSession = Depends(get_db
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    check_delete_permission(session.user_id, user)
 
     session.is_active = False
     await db.commit()

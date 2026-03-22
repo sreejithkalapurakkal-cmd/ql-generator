@@ -58,3 +58,8 @@ variable "jwt_secret_key" {
   type      = string
   sensitive = true
 }
+
+variable "redis_endpoint" {
+  type        = string
+  description = "ElastiCache Redis endpoint address"
+}

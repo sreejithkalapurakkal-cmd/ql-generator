@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 import httpx
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search_central
+from app.tools.retry_utils import httpx_get_with_retry
+
 logger = logging.getLogger(__name__)
 
 EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
@@ -30,28 +33,19 @@ TEAM_PATHS = ["/team", "/about", "/about-us", "/leadership", "/our-team", "/peop
 
 
 def _ddg_search(query: str, max_results: int = 8) -> list[dict]:
-    """Run a DuckDuckGo search, return results. Handles rate limiting."""
-    try:
-        from ddgs import DDGS
-        with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
-    except Exception as e:
-        if "ratelimit" in str(e).lower():
-            logger.warning(f"DDG rate limited, waiting 30s: {e}")
-            time.sleep(30)
-            try:
-                with DDGS() as ddgs:
-                    return list(ddgs.text(query, max_results=max_results))
-            except Exception:
-                pass
+    """Run a DuckDuckGo search through centralized rate limiter."""
+    results = _ddg_search_central(query, max_results=max_results)
+    # Filter out rate-limit error dicts
+    if results and isinstance(results[0], dict) and (results[0].get("rate_limited") or results[0].get("error")):
         return []
+    return results
 
 
 def _scrape_page(url: str) -> dict:
     """Scrape a webpage, return title + text content + emails found."""
     try:
         from bs4 import BeautifulSoup
-        response = httpx.get(
+        response = httpx_get_with_retry(
             url,
             follow_redirects=True,
             timeout=15,

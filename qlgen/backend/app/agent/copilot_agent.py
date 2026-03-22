@@ -14,6 +14,8 @@ from app.tools.copilot_db_tools import (
     get_icp_details,
     get_pipeline_summary,
     get_data_statistics,
+    search_knowledge_base,
+    search_knowledge_base_structured,
 )
 
 # Reuse all 19 external tools from lead gen agent
@@ -90,6 +92,14 @@ DATABASE TOOLS (search existing data):
   • get_icp_details — Get ICP configuration(s). Shows what criteria were used for lead generation.
   • get_pipeline_summary — Get pipeline run stats. Shows when searches were run and what was found.
   • get_data_statistics — Aggregate stats: totals, industry breakdown, BANT distribution, geo breakdown.
+
+KNOWLEDGE BASE TOOLS (cross-run canonical company data):
+  • search_knowledge_base — Semantic search on the Company Knowledge Base, which maintains ONE
+    canonical "golden record" per company domain merged from all pipeline runs. Use this when the
+    user asks about companies across runs, best-known data, or historical company info.
+  • search_knowledge_base_structured — Filtered search on the Knowledge Base by industry, country,
+    score range, employee count. Prefer this over search_companies_structured when the user wants
+    deduplicated, cross-run results rather than per-run records.
 
 EXTERNAL RESEARCH TOOLS (live data from the web):
   • apollo_company_search, apollo_people_search — B2B database
@@ -189,6 +199,8 @@ COPILOT_TOOL_DISPLAY_NAMES = {
     "get_economic_indicators": "Fetching economic data",
     "get_investor_data": "Looking up investor data",
     "get_news_sentiment": "Analyzing news sentiment",
+    "search_knowledge_base": "Searching knowledge base",
+    "search_knowledge_base_structured": "Filtering knowledge base",
 }
 
 
@@ -276,9 +288,9 @@ def create_copilot_callback_handler(event_queue: queue.Queue):
 
 
 def create_copilot_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
-    """Create the co-pilot agent with all 25 tools (6 DB + 19 external).
+    """Create the co-pilot agent with all tools (8 DB/KB + 18 external).
 
-    disabled_tools filters external tools only — the 6 copilot_db tools are always included.
+    disabled_tools filters external tools only — the DB/KB tools are always included.
     """
     settings = get_settings()
     model = BedrockModel(
@@ -294,6 +306,8 @@ def create_copilot_agent(callback_handler=None, disabled_tools: set[str] | None 
         get_icp_details,
         get_pipeline_summary,
         get_data_statistics,
+        search_knowledge_base,
+        search_knowledge_base_structured,
     ]
 
     external_tools = [

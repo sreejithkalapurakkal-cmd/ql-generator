@@ -5,9 +5,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listICPs, deleteICP, createICP, getICPTemplateURL, parseICPUpload, ParsedICP } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
 import { ICPConfig } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 const ICPListPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user: authUser } = useAuth();
+  const isAdmin = authUser?.role === 'super_admin';
   const [searchParams, setSearchParams] = useSearchParams();
   const [icps, setIcps] = useState<ICPConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -252,7 +255,14 @@ const ICPListPage: React.FC = () => {
                 >
                   {/* Header: name + ... menu */}
                   <div className="rc-header">
-                    <div className="rc-title">{icp.name}</div>
+                    <div className="rc-title">
+                      {icp.name}
+                      {isAdmin && icp.user_name && (
+                        <span style={{ fontSize: 11, color: 'var(--g400)', fontWeight: 400, marginLeft: 8 }}>
+                          by {icp.user_name}
+                        </span>
+                      )}
+                    </div>
                     <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
                       <button
                         className="menu-toggle"

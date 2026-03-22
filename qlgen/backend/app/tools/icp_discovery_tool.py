@@ -13,6 +13,9 @@ from urllib.parse import urlparse
 import httpx
 from strands import tool
 
+from app.tools.ddg_rate_limiter import ddg_search as _ddg_search, is_rate_limited as _ddg_is_rate_limited
+from app.tools.retry_utils import httpx_get_with_retry
+
 logger = logging.getLogger(__name__)
 
 # Domains to skip — search engines, social media, generic sites
@@ -62,7 +65,7 @@ def _scrape_companies_from_page(url: str) -> list[dict]:
     try:
         from bs4 import BeautifulSoup
 
-        response = httpx.get(
+        response = httpx_get_with_retry(
             url,
             follow_redirects=True,
             timeout=15,
@@ -236,14 +239,29 @@ def _generate_queries(
         queries.append(f"{kw} companies site:crunchbase.com")
         queries.append(f"{kw} companies site:pitchbook.com")
 
-    # Pattern 6: Additional/adjacent terms with size
+    # Pattern 6: G2/Capterra/TrustRadius software directories
+    for kw in industry_keywords[:2]:
+        queries.append(f"{kw} site:g2.com")
+        queries.append(f"{kw} site:capterra.com")
+
+    # Pattern 7: LinkedIn company directory
+    for kw in industry_keywords[:2]:
+        for region in regions[:2]:
+            queries.append(f"site:linkedin.com/company {kw} {region}")
+
+    # Pattern 8: Awards and recognition lists
+    for kw in industry_keywords[:2]:
+        queries.append(f"'{kw}' fastest growing company {current_year}")
+        queries.append(f"'{kw}' top companies award winner {last_year}")
+
+    # Pattern 9: Additional/adjacent terms with size
     for term in additional_terms[:4]:
         if size_lbl:
             queries.append(f"{size_lbl} {term} company")
         else:
             queries.append(f"{term} companies")
 
-    # Pattern 7: YC / accelerator companies in this space (tend to be right size)
+    # Pattern 10: YC / accelerator companies in this space (tend to be right size)
     for kw in industry_keywords[:2]:
         queries.append(f"Y Combinator {kw} startup")
         queries.append(f"{kw} accelerator portfolio company")
@@ -257,9 +275,9 @@ def _generate_queries(
             seen.add(ql)
             unique.append(q)
 
-    # Cap at 15 queries to reduce DuckDuckGo rate-limit risk.
+    # Cap at 20 queries — the shared DDG rate limiter handles throttling.
     # The most important queries are at the top (industry + size + region).
-    return unique[:15]
+    return unique[:20]
 
 
 @tool
@@ -301,11 +319,6 @@ def discover_icp_companies(
         dict with 'companies' list (name, website, snippet, source, size_signals),
         'total_found' count, and 'queries_run' count
     """
-    try:
-        from ddgs import DDGS
-    except ImportError:
-        return {"error": "ddgs not installed", "companies": [], "total_found": 0}
-
     regions = regions or []
     additional_terms = additional_terms or []
 
@@ -320,39 +333,19 @@ def discover_icp_companies(
     companies_by_name: dict[str, dict] = {}
     directory_urls = []
 
-    try:
-        from ddgs.exceptions import RatelimitException
-    except ImportError:
-        RatelimitException = Exception  # Fallback
-
-    consecutive_failures = 0
-    rate_limited = False
     for i, query in enumerate(queries):
-        if rate_limited:
-            # Stop making DDG calls once rate-limited — remaining queries won't help
+        if _ddg_is_rate_limited():
             logger.info(f"ICP Discovery: skipping remaining {len(queries) - i} queries (rate limited)")
             break
 
-        if i > 0:
-            # Base delay of 4s between queries, increasing by 3s per consecutive failure.
-            # DDG detects automated patterns; spacing calls out is the primary defense.
-            delay = 4 + (consecutive_failures * 3)
-            time.sleep(min(delay, 20))
+        results = _ddg_search(query, max_results=10)
 
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=10))
-            consecutive_failures = 0  # Reset on success
-        except RatelimitException:
-            rate_limited = True
+        # Check if result is a rate-limit error
+        if results and isinstance(results[0], dict) and results[0].get("rate_limited"):
             logger.warning(f"DDG rate limited after {i} queries. Stopping DDG calls.")
-            continue
-        except Exception as e:
-            consecutive_failures += 1
-            logger.warning(f"DDG query failed ({consecutive_failures}x): {query} — {e}")
-            if consecutive_failures >= 3:
-                rate_limited = True
-                logger.warning("DDG repeatedly failing, treating as rate limited. Stopping.")
+            break
+        if results and isinstance(results[0], dict) and results[0].get("error"):
+            logger.warning(f"DDG query failed: {query} — {results[0]['error']}")
             continue
 
         for r in results:
@@ -379,7 +372,7 @@ def discover_icp_companies(
                     companies_by_domain[domain] = {
                         "name": name,
                         "website": domain,
-                        "snippet": body[:200],
+                        "snippet": body[:300],
                         "source_url": href,
                         "source_query": query,
                         "size_signals": size_signals,

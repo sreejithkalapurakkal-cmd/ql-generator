@@ -9,6 +9,7 @@ Stage 5: Final Scoring & Ranking (computation)
 import asyncio
 import json
 import logging
+import re
 import traceback
 from uuid import UUID
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from sqlalchemy import select, func
 
 from app.agent.lead_gen_agent import (
     create_industry_discovery_agent,
+    create_discovery_sub_agent_db,
+    create_discovery_sub_agent_web,
     create_firmographic_fit_agent,
     create_signal_agent,
     create_contact_agent,
@@ -26,8 +29,10 @@ from app.agent.lead_gen_agent import (
 )
 from app.agent.prompt_builder import (
     build_industry_discovery_prompt,
+    build_discovery_web_prompt,
     build_firmographic_fit_prompt,
     build_signal_prompt,
+    build_batch_signal_prompt,
     build_contact_discovery_prompt,
 )
 from app.db.session import async_session
@@ -38,18 +43,88 @@ from app.models.contact import Contact
 from app.models.company_stage import CompanyStageResult
 from app.models.pipeline_log import PipelineLog
 from app.services.tool_registry_service import get_disabled_tool_names
+from app.services.validation_service import validate_stage_companies, validate_stage_contacts, compute_data_quality_score
+from app.services.intelligence_service import get_intelligence_for_icp, format_intelligence_for_prompt
+from app.services import event_store
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_int(value) -> int | None:
+    """Coerce a value to int, returning None if it can't be converted.
+
+    The AI agent sometimes returns descriptive strings like
+    'Unknown (estimated 50-200 based on company profile)' for numeric
+    fields. This helper extracts the first number from such strings
+    or returns None so the DB write doesn't fail.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        # Try direct conversion first (e.g. "1500")
+        cleaned = value.replace(",", "").strip()
+        try:
+            return int(cleaned)
+        except ValueError:
+            pass
+        # Try to extract the first number from the string
+        match = re.search(r"[\d,]+", value)
+        if match:
+            try:
+                return int(match.group().replace(",", ""))
+            except ValueError:
+                pass
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────
+# C4: Embedding-powered discovery pre-seeding
+# ──────────────────────────────────────────────────────────────────
+
+async def _preseed_from_embeddings(
+    db,
+    icp: dict,
+    current_run_id: UUID,
+    similarity_threshold: float = 0.7,
+    max_seed: int = 100,
+) -> list[dict]:
+    """Search the Company Knowledge Base via pgvector similarity to the ICP description.
+
+    Generates an embedding from the ICP text and finds semantically similar
+    companies from the KB (canonical golden records). Returns them as dicts
+    compatible with the Stage 1 discovery format.
+    """
+    from app.services.embedding_service import generate_embedding
+    from app.services.company_kb_service import search_kb_semantic
+    from app.agent.prompt_builder import build_industry_discovery_prompt
+
+    icp_text = build_industry_discovery_prompt(icp)
+    icp_text = icp_text[:8000]
+    embedding = generate_embedding(icp_text)
+    if not embedding:
+        logger.warning("Could not generate ICP embedding for pre-seeding")
+        return []
+
+    seed_companies = await search_kb_semantic(
+        query_embedding=embedding,
+        db=db,
+        limit=max_seed,
+        threshold=similarity_threshold,
+    )
+
+    logger.info(f"KB pre-seed: found {len(seed_companies)} similar companies from knowledge base")
+    return seed_companies
 
 
 # ──────────────────────────────────────────────────────────────────
 # Utility functions
 # ──────────────────────────────────────────────────────────────────
 
-def _emit_event(events: dict, run_id: str, event: dict):
-    """Add event to the SSE event list."""
-    if events is not None and run_id in events:
-        events[run_id].append(event)
+async def _emit_event(run_id: str, event: dict):
+    """Push an SSE event to the Redis-backed event store."""
+    await event_store.push_event(run_id, event)
 
 
 def _repair_truncated_json(text: str) -> str:
@@ -151,14 +226,13 @@ def parse_json_from_agent_result(result) -> dict:
 def _normalize_score_to_100(score: float | None) -> float | None:
     """Normalize a score to the 0-100 range.
 
-    If the LLM returns a score on a 0-10 scale, multiply by 10.
-    Clamp to [0, 100].
+    Clamps to [0, 100]. Does NOT auto-scale scores <= 10 because
+    genuinely low scores (e.g., 5/100 or 8/100) were being inflated
+    to 50 or 80. All stage prompts now explicitly require 0-100 scale.
     """
     if score is None:
         return None
     score = float(score)
-    if score <= 10:
-        score = score * 10
     return min(100.0, max(0.0, score))
 
 
@@ -168,20 +242,416 @@ def _chunk(lst, size):
         yield lst[i:i + size]
 
 
+# Company name suffixes to strip for normalization
+_COMPANY_SUFFIXES = re.compile(
+    r"\b(inc\.?|llc\.?|ltd\.?|limited|corp\.?|corporation|co\.?|"
+    r"ag|gmbh|sa|s\.a\.?|plc|pty\.?|pvt\.?|bv|b\.v\.?|nv|n\.v\.?|"
+    r"s\.r\.l\.?|s\.l\.?|aps|a/s|ab|oy|as)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_domain(domain: str) -> str:
+    """Normalize a domain for dedup: strip scheme, www, trailing slash."""
+    d = domain.lower().strip()
+    for prefix in ("https://", "http://", "www."):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+    return d.rstrip("/")
+
+
+def _normalize_company_name(name: str) -> str:
+    """Normalize a company name for dedup: strip suffixes, punctuation, lowercase."""
+    n = name.strip()
+    n = _COMPANY_SUFFIXES.sub("", n).strip()
+    n = re.sub(r"[,.\-\(\)]", " ", n)
+    n = re.sub(r"\s+", " ", n).strip().lower()
+    return n
+
+
+def _deduplicate_companies(companies: list[dict]) -> list[dict]:
+    """Multi-layer company deduplication.
+
+    Layer 1: Exact normalized domain match.
+    Layer 2: Exact normalized name match.
+    Layer 3: Fuzzy name matching (>85% similarity) via rapidfuzz.
+
+    When duplicates are found, the entry with more non-null fields wins
+    and gets metadata merged from the duplicate.
+    """
+    from rapidfuzz import fuzz
+
+    # Track unique companies by index into result list
+    result: list[dict] = []
+    domain_index: dict[str, int] = {}  # normalized domain -> result index
+    name_index: dict[str, int] = {}    # normalized name -> result index
+
+    def _field_count(c: dict) -> int:
+        """Count non-null, non-empty fields (more fields = richer data)."""
+        return sum(1 for v in c.values() if v is not None and v != "" and v != [])
+
+    def _merge_into(target: dict, source: dict):
+        """Merge non-null fields from source into target."""
+        for k, v in source.items():
+            if v is not None and v != "" and v != [] and not target.get(k):
+                target[k] = v
+
+    for company in companies:
+        domain_raw = company.get("website") or ""
+        name_raw = company.get("name") or ""
+        domain_norm = _normalize_domain(domain_raw) if domain_raw else ""
+        name_norm = _normalize_company_name(name_raw) if name_raw else ""
+
+        # Layer 1: Domain match
+        if domain_norm and domain_norm in domain_index:
+            idx = domain_index[domain_norm]
+            existing = result[idx]
+            if _field_count(company) > _field_count(existing):
+                _merge_into(company, existing)
+                result[idx] = company
+            else:
+                _merge_into(existing, company)
+            continue
+
+        # Layer 2: Exact name match
+        if name_norm and name_norm in name_index:
+            idx = name_index[name_norm]
+            existing = result[idx]
+            if _field_count(company) > _field_count(existing):
+                _merge_into(company, existing)
+                result[idx] = company
+            else:
+                _merge_into(existing, company)
+            # Also register domain for this entry
+            if domain_norm:
+                domain_index[domain_norm] = idx
+            continue
+
+        # Layer 3: Fuzzy name match
+        matched = False
+        if name_norm and len(name_norm) > 3:
+            for existing_name, idx in name_index.items():
+                if fuzz.ratio(name_norm, existing_name) > 85:
+                    existing = result[idx]
+                    if _field_count(company) > _field_count(existing):
+                        _merge_into(company, existing)
+                        result[idx] = company
+                    else:
+                        _merge_into(existing, company)
+                    if domain_norm:
+                        domain_index[domain_norm] = idx
+                    matched = True
+                    break
+
+        if matched:
+            continue
+
+        # No match found — add as new
+        idx = len(result)
+        result.append(company)
+        if domain_norm:
+            domain_index[domain_norm] = idx
+        if name_norm:
+            name_index[name_norm] = idx
+
+    logger.info(f"Deduplication: {len(companies)} → {len(result)} unique companies")
+    return result
+
+
+def _soft_filter_discovered(companies: list[dict], icp: dict, label: str = "discovery") -> list[dict]:
+    """Remove companies CLEARLY outside ICP hard bounds before saving to DB.
+
+    Only filters when explicit numeric data is available (employee_count or
+    revenue_estimate). Companies with no size data pass through unchanged
+    (benefit of doubt). Uses generous hard bounds so only obvious mismatches
+    are removed:
+      - Employee: 0.3x min to 3x max
+      - Revenue: 0.2x min to 5x max
+    """
+    fd = icp.get("firmographic_details", {})
+    emp_range = fd.get("employee_range", {})
+    rev_range = fd.get("revenue_range", {})
+
+    emp_min = emp_range.get("min")
+    emp_max = emp_range.get("max")
+    rev_min = rev_range.get("min")
+    rev_max = rev_range.get("max")
+
+    # If ICP has no size criteria, skip filtering entirely
+    if not emp_min and not emp_max and not rev_min and not rev_max:
+        return companies
+
+    # Compute hard bounds with generous margins
+    emp_hard_min = int(emp_min * 0.3) if emp_min else None
+    emp_hard_max = int(emp_max * 3) if emp_max else None
+    rev_hard_min = int(rev_min * 0.2) if rev_min else None
+    rev_hard_max = int(rev_max * 5) if rev_max else None
+
+    kept = []
+    removed = 0
+    for c in companies:
+        emp = _safe_int(c.get("employee_count"))
+        rev = _safe_int(c.get("revenue_estimate"))
+
+        # Only reject if we have data AND it's clearly outside hard bounds
+        emp_outside = False
+        if emp is not None:
+            if emp_hard_min and emp < emp_hard_min:
+                emp_outside = True
+            if emp_hard_max and emp > emp_hard_max:
+                emp_outside = True
+
+        rev_outside = False
+        if rev is not None:
+            if rev_hard_min and rev < rev_hard_min:
+                rev_outside = True
+            if rev_hard_max and rev > rev_hard_max:
+                rev_outside = True
+
+        # Soft filter logic:
+        # - If BOTH metrics are known and BOTH are outside → reject (clear mismatch)
+        # - If only ONE metric is known and outside → keep (Stage 2 will verify)
+        # - If neither is known → keep (benefit of doubt)
+        # This is intentionally lenient to avoid dropping companies that Stage 2
+        # might pass after deeper research.
+        both_known = (emp is not None) and (rev is not None)
+        if both_known and emp_outside and rev_outside:
+            removed += 1
+            continue
+        # Single metric wildly outside bounds (>10x over max or <0.1x min) → reject
+        if emp is not None and emp_outside and rev is None:
+            if emp_hard_max and emp > emp_hard_max * 3:
+                removed += 1
+                continue
+            if emp_hard_min and emp_hard_min > 0 and emp < emp_hard_min / 3:
+                removed += 1
+                continue
+        if rev is not None and rev_outside and emp is None:
+            if rev_hard_max and rev > rev_hard_max * 3:
+                removed += 1
+                continue
+            if rev_hard_min and rev_hard_min > 0 and rev < rev_hard_min / 3:
+                removed += 1
+                continue
+
+        kept.append(c)
+
+    if removed:
+        logger.info(f"[{label}] Soft filter: removed {removed} clearly out-of-range companies ({len(kept)} kept)")
+    return kept
+
+
+async def _carry_forward_from_previous_runs(
+    db,
+    icp_config_id: UUID,
+    user_id: UUID | None,
+    current_run_id: UUID,
+    current_domains: set[str],
+    current_names: set[str],
+) -> list[dict]:
+    """Carry forward non-disqualified companies from previous completed/reviewed runs of the same ICP.
+
+    This ensures that repeated pipeline runs for the same ICP produce monotonically
+    increasing company counts: all previously discovered companies are included
+    alongside newly discovered ones.
+
+    Args:
+        db: Database session
+        icp_config_id: The ICP config being run
+        user_id: The user running the pipeline (multi-tenant safety)
+        current_run_id: Current run ID (excluded from query)
+        current_domains: Normalized domains already discovered in this run
+        current_names: Normalized names already discovered in this run
+
+    Returns:
+        List of company dicts (discovery format) with source="carried_forward"
+    """
+    # Find previous completed or awaiting_review runs for the same ICP + user
+    filters = [
+        PipelineRun.icp_config_id == icp_config_id,
+        PipelineRun.id != current_run_id,
+        PipelineRun.status.in_(["completed", "awaiting_review"]),
+    ]
+    if user_id:
+        filters.append(PipelineRun.user_id == user_id)
+
+    prev_runs_result = await db.execute(
+        select(PipelineRun.id).where(*filters)
+    )
+    prev_run_ids = [row[0] for row in prev_runs_result.all()]
+
+    if not prev_run_ids:
+        return []
+
+    # Fetch non-disqualified companies from those runs
+    prev_companies_result = await db.execute(
+        select(Company).where(
+            Company.pipeline_run_id.in_(prev_run_ids),
+            Company.qualification != "disqualified",
+        )
+    )
+    prev_companies = prev_companies_result.scalars().all()
+
+    if not prev_companies:
+        return []
+
+    # Deduplicate against current discovery set
+    carried = []
+    seen_domains = set(current_domains)
+    seen_names = set(current_names)
+
+    for c in prev_companies:
+        domain_norm = _normalize_domain(c.website) if c.website else ""
+        name_norm = _normalize_company_name(c.name) if c.name else ""
+
+        # Skip if already in current discovery set
+        if domain_norm and domain_norm in seen_domains:
+            continue
+        if name_norm and name_norm in seen_names:
+            continue
+
+        # Mark as seen
+        if domain_norm:
+            seen_domains.add(domain_norm)
+        if name_norm:
+            seen_names.add(name_norm)
+
+        carried.append({
+            "name": c.name,
+            "website": c.website,
+            "industry": c.industry,
+            "sub_industry": c.sub_industry,
+            "city": c.city,
+            "state_region": c.state_region,
+            "country": c.country,
+            "employee_count": c.employee_count,
+            "revenue_estimate": c.revenue_estimate,
+            "asset_value": c.asset_value,
+            "description": c.description,
+            "source": "carried_forward",
+            "carried_forward": True,
+        })
+
+    logger.info(
+        f"Carrying forward {len(carried)} companies from {len(prev_run_ids)} previous runs "
+        f"(out of {len(prev_companies)} non-disqualified candidates)"
+    )
+    return carried
+
+
+def _deduplicate_contacts(contacts: list[dict]) -> list[dict]:
+    """Deduplicate contacts by LinkedIn URL, email, and normalized name.
+
+    When duplicates are found, merge data from all instances (take the richer record
+    and fill in missing fields from duplicates).
+    """
+    result: list[dict] = []
+    linkedin_index: dict[str, int] = {}   # linkedin_url -> result index
+    email_index: dict[str, int] = {}      # email -> result index
+    name_index: dict[str, int] = {}       # normalized name -> result index
+
+    def _contact_richness(c: dict) -> int:
+        """Score contact by number of useful fields."""
+        score = 0
+        if c.get("email"): score += 3
+        if c.get("phone"): score += 3
+        if c.get("linkedin_url"): score += 2
+        if c.get("full_name"): score += 1
+        if c.get("designation"): score += 1
+        if c.get("source"): score += 1
+        return score
+
+    def _merge_contact(target: dict, source: dict):
+        """Merge non-null fields from source into target."""
+        for k, v in source.items():
+            if v is not None and v != "" and not target.get(k):
+                target[k] = v
+        # Take higher confidence
+        src_conf = source.get("confidence") or 0
+        tgt_conf = target.get("confidence") or 0
+        if src_conf > tgt_conf:
+            target["confidence"] = src_conf
+
+    def _normalize_name(name: str) -> str:
+        """Normalize a person name for dedup."""
+        # Remove middle initials, periods, extra whitespace
+        n = re.sub(r"\b[A-Z]\.\s*", "", name.strip())
+        n = re.sub(r"\s+", " ", n).strip().lower()
+        return n
+
+    for contact in contacts:
+        linkedin = (contact.get("linkedin_url") or "").lower().strip().rstrip("/")
+        email = (contact.get("email") or "").lower().strip()
+        name = contact.get("full_name") or ""
+        name_norm = _normalize_name(name) if name else ""
+
+        # Layer 1: LinkedIn URL match
+        if linkedin and linkedin in linkedin_index:
+            idx = linkedin_index[linkedin]
+            _merge_contact(result[idx], contact)
+            if email:
+                email_index[email] = idx
+            continue
+
+        # Layer 2: Email match
+        if email and email in email_index:
+            idx = email_index[email]
+            _merge_contact(result[idx], contact)
+            if linkedin:
+                linkedin_index[linkedin] = idx
+            continue
+
+        # Layer 3: Name match (same name at same company)
+        if name_norm and name_norm in name_index:
+            idx = name_index[name_norm]
+            existing = result[idx]
+            if _contact_richness(contact) > _contact_richness(existing):
+                _merge_contact(contact, existing)
+                result[idx] = contact
+            else:
+                _merge_contact(existing, contact)
+            if linkedin:
+                linkedin_index[linkedin] = idx
+            if email:
+                email_index[email] = idx
+            continue
+
+        # No match — add as new
+        idx = len(result)
+        result.append(contact)
+        if linkedin:
+            linkedin_index[linkedin] = idx
+        if email:
+            email_index[email] = idx
+        if name_norm:
+            name_index[name_norm] = idx
+
+    if len(contacts) != len(result):
+        logger.info(f"Contact dedup: {len(contacts)} → {len(result)} unique contacts")
+    return result
+
+
 # ──────────────────────────────────────────────────────────────────
 # Data reuse / caching
 # ──────────────────────────────────────────────────────────────────
 
-async def find_cached_company(domain: str, db) -> Company | None:
-    """Find the most recent, most enriched version of a company by domain."""
+async def find_cached_company(domain: str, db, max_age_days: int = 30) -> Company | None:
+    """Find the most recent, most enriched version of a company by domain.
+
+    Only returns cached data that is less than max_age_days old (default 30 days).
+    Stale data should be re-verified by the pipeline rather than blindly reused.
+    """
     domain_clean = domain.lower().strip().removeprefix("www.").removeprefix("http://").removeprefix("https://").rstrip("/")
     if not domain_clean:
         return None
+
+    cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(days=max_age_days)
 
     result = await db.execute(
         select(Company)
         .where(func.lower(Company.website).contains(domain_clean))
         .where(Company.final_score.isnot(None))
+        .where(Company.created_at >= cutoff)
         .order_by(Company.created_at.desc())
         .limit(1)
     )
@@ -215,7 +685,12 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
     """Fast filter using data already available from Stage 1.
 
     Returns (passed, failed_with_reasons, needs_agent).
-    Uses generous margins to avoid wrongly excluding.
+
+    Confidence tiers:
+    - GREEN: Both metrics in range from reliable source → auto-pass
+    - YELLOW: One metric known → needs agent verification
+    - RED: Both known and both clearly outside range → auto-fail
+    - GRAY: Both unknown → needs agent, capped at score 50
     """
     fd = icp.get("firmographic_details", {})
     emp_range = fd.get("employee_range", {})
@@ -226,6 +701,21 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
     rev_min = rev_range.get("min")
     rev_max = rev_range.get("max")
 
+    # Extract geography and industry keywords for pre-filtering
+    geo = fd.get("geography", {})
+    target_countries = {c.lower().strip() for c in geo.get("countries", [])}
+    industry_keywords = set()
+    for item in fd.get("industry_types", []):
+        if isinstance(item, dict):
+            v = item.get("vertical", "").lower().strip()
+            sv = item.get("sub_vertical", "").lower().strip()
+            if v:
+                industry_keywords.add(v)
+            if sv:
+                industry_keywords.add(sv)
+        elif isinstance(item, str):
+            industry_keywords.add(item.lower().strip())
+
     passed = []
     failed = []
     needs_agent = []
@@ -234,23 +724,77 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
         emp = c.employee_count
         rev = c.revenue_estimate
 
-        # If employee count known and clearly outside range (generous margins)
+        # Geography pre-filter: if ICP specifies countries and company has a country,
+        # check if it matches. Skip filter if no countries specified or company country unknown.
+        if target_countries and c.country:
+            company_country = c.country.lower().strip()
+            if company_country and not any(
+                tc in company_country or company_country in tc
+                for tc in target_countries
+            ):
+                failed.append((c, f"Country '{c.country}' not in target geography: {', '.join(target_countries)}"))
+                continue
+
+        # Industry pre-filter: if company has an industry field, check if it overlaps
+        # with any ICP industry keyword. Use substring matching for flexibility.
+        if industry_keywords and c.industry:
+            company_industry = c.industry.lower().strip()
+            if company_industry and not any(
+                kw in company_industry or company_industry in kw
+                for kw in industry_keywords
+            ):
+                # Don't hard-fail — some companies have unusual industry labels.
+                # Route to needs_agent instead for a second look.
+                pass  # Industry mismatch is soft — let the agent decide
+
+        emp_in_range = None  # None = unknown
+        rev_in_range = None
+
+        # Check employee range (tighter margins: 0.7x-1.5x)
         if emp and emp_min and emp_max:
-            if emp < emp_min * 0.5 or emp > emp_max * 2:
-                failed.append((c, f"Employee count {emp} outside range {emp_min}-{emp_max} (with 0.5x-2x margin)"))
-                continue
+            if emp < emp_min * 0.7 or emp > emp_max * 1.5:
+                emp_in_range = False
+            else:
+                emp_in_range = True
 
-        # If revenue known and clearly outside range
+        # Check revenue range (tighter margins: 0.5x-2x)
         if rev and rev_min and rev_max:
-            if rev < rev_min * 0.3 or rev > rev_max * 3:
-                failed.append((c, f"Revenue ${rev:,} outside range ${rev_min:,}-${rev_max:,} (with 0.3x-3x margin)"))
-                continue
+            if rev < rev_min * 0.5 or rev > rev_max * 2:
+                rev_in_range = False
+            else:
+                rev_in_range = True
 
-        # If both known and within generous range → pass to agent for deep check
-        if emp and rev:
+        # RED: Both known and both out of range → auto-fail
+        if emp_in_range is False and rev_in_range is False:
+            failed.append((c, f"Employee count {emp} and revenue ${rev:,} both outside range"))
+            continue
+
+        # RED: One known and clearly out of range, other also out or unknown
+        if emp_in_range is False and rev_in_range is None:
+            failed.append((c, f"Employee count {emp} outside range {emp_min}-{emp_max} (with 0.7x-1.5x margin)"))
+            continue
+
+        if rev_in_range is False and emp_in_range is None:
+            failed.append((c, f"Revenue ${rev:,} outside range ${rev_min:,}-${rev_max:,} (with 0.5x-2x margin)"))
+            continue
+
+        # GREEN: Both known and both in range → auto-pass
+        if emp_in_range is True and rev_in_range is True:
             passed.append(c)
-        else:
+            continue
+
+        # GREEN: One in range, other unknown → pass (benefit of doubt)
+        if (emp_in_range is True and rev_in_range is None) or (rev_in_range is True and emp_in_range is None):
+            passed.append(c)
+            continue
+
+        # YELLOW: One in range but other out → needs agent to verify
+        if (emp_in_range is True and rev_in_range is False) or (rev_in_range is True and emp_in_range is False):
             needs_agent.append(c)
+            continue
+
+        # GRAY: Both unknown → needs agent
+        needs_agent.append(c)
 
     return passed, failed, needs_agent
 
@@ -259,7 +803,7 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
 # Shared error handling wrapper
 # ──────────────────────────────────────────────────────────────────
 
-async def _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, error, cancelled=False):
+async def _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, error, cancelled=False):
     """Shared error handling for pipeline execution failures."""
     try:
         await db.rollback()
@@ -290,13 +834,13 @@ async def _handle_pipeline_error(db, run_id, run, event_collector, events, run_i
         logger.error(f"Failed to persist {'cancelled' if cancelled else 'error'} status for pipeline {run_id}: {commit_err}")
 
     if cancelled:
-        _emit_event(events, run_id_str, {
+        await _emit_event(run_id_str, {
             "type": "cancelled",
             "companies_found": run.companies_found or 0 if run else 0,
             "contacts_found": run.contacts_found or 0 if run else 0,
         })
     else:
-        _emit_event(events, run_id_str, {
+        await _emit_event(run_id_str, {
             "type": "error",
             "message": str(error),
         })
@@ -326,7 +870,7 @@ async def _get_existing_log_count(db, run_id) -> int:
 # Main pipeline: Stages 1 + 2 → pause for review
 # ──────────────────────────────────────────────────────────────────
 
-async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: set = None):
+async def execute_pipeline(run_id: UUID):
     """Execute Stages 1 (Industry Discovery) and 2 (Firmographic Fit).
 
     After Stage 2 completes, the pipeline pauses for mandatory user review.
@@ -365,41 +909,224 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             # STAGE 1: Industry Discovery
             # ════════════════════════════════════════
             logger.info(f"[Stage 1] Starting industry discovery for run {run_id}")
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "industry_discovery",
                 "progress": 5,
                 "message": "Stage 1: Starting industry discovery...",
             })
 
-            callback_handler = create_pipeline_callback_handler(
-                events or {}, run_id_str, event_collector,
-                initial_stage="industry_discovery",
-                cancelled_runs=cancelled_runs,
-            )
-            discovery_agent = create_industry_discovery_agent(
-                callback_handler=callback_handler, disabled_tools=disabled_tools,
-            )
-            discovery_prompt = build_industry_discovery_prompt(icp)
+            # ── Pre-seed: Embedding-powered discovery from past runs (C4)
+            preseed_companies = []
+            try:
+                preseed_companies = await _preseed_from_embeddings(db, icp, run_id)
+                if preseed_companies:
+                    await _emit_event(run_id_str, {
+                        "type": "stage_update",
+                        "stage": "industry_discovery",
+                        "progress": 7,
+                        "message": f"Stage 1: Pre-seeded {len(preseed_companies)} companies from past runs...",
+                    })
+            except Exception as preseed_err:
+                logger.warning(f"Embedding pre-seed failed (non-fatal): {preseed_err}")
+                await db.rollback()
+                # Re-fetch run and icp after rollback to reattach to session
+                run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+                run = run_result.scalar_one()
+                run.status = "running"
+                run.current_stage = "industry_discovery"
+                await db.commit()
 
-            discovery_result = await asyncio.to_thread(discovery_agent, discovery_prompt)
-            discovery_json = parse_json_from_agent_result(discovery_result)
-            discovered_raw = discovery_json.get("companies", [])
-            logger.info(f"[Stage 1] Discovered {len(discovered_raw)} companies")
-
-            if not discovered_raw:
-                raise ValueError("Stage 1 discovery returned no companies")
-
-            # Deduplicate by domain
-            seen_domains = set()
-            unique_companies = []
-            for c in discovered_raw:
-                domain = (c.get("website") or "").lower().strip()
-                if domain and domain in seen_domains:
-                    continue
+            # ── Extract KB-known domains from pre-seeded companies
+            kb_known_domains = []
+            for c in preseed_companies:
+                domain = (c.get("website") or "").strip()
                 if domain:
-                    seen_domains.add(domain)
-                unique_companies.append(c)
+                    d = _normalize_domain(domain)
+                    if d and d not in kb_known_domains:
+                        kb_known_domains.append(d)
+            if kb_known_domains:
+                logger.info(f"[Stage 1] {len(kb_known_domains)} KB-known domains passed to discovery agents")
+
+            # ── Sub-run 1: Structured data sources (local DB, APIs, Wikidata, OpenCorporates)
+            await _emit_event(run_id_str, {
+                "type": "stage_update",
+                "stage": "industry_discovery",
+                "progress": 8,
+                "message": "Stage 1a: Searching structured databases...",
+            })
+
+            callback_handler_1 = create_pipeline_callback_handler(
+                run_id_str, event_collector,
+                initial_stage="industry_discovery",
+            )
+            sub_agent_db = create_discovery_sub_agent_db(
+                callback_handler=callback_handler_1, disabled_tools=disabled_tools,
+            )
+            discovery_prompt = build_industry_discovery_prompt(icp, kb_known_domains=kb_known_domains or None)
+
+            # Wire in cross-run discovery intelligence
+            try:
+                fd = icp.get("firmographic_details", {})
+                industry_types = fd.get("industry_types", [])
+                intel_industry = ""
+                if industry_types and isinstance(industry_types[0], dict):
+                    intel_industry = industry_types[0].get("vertical", "")
+                elif industry_types:
+                    intel_industry = str(industry_types[0])
+                intel_countries = fd.get("geography", {}).get("countries", [])
+                intel_country = intel_countries[0] if intel_countries else ""
+                intelligence = await get_intelligence_for_icp(db, intel_industry, intel_country)
+                intel_text = format_intelligence_for_prompt(intelligence)
+                if intel_text:
+                    discovery_prompt += "\n" + intel_text
+                    logger.info(f"[Stage 1] Injected discovery intelligence for {intel_industry}/{intel_country}")
+            except Exception as intel_err:
+                logger.debug(f"Discovery intelligence injection failed (non-fatal): {intel_err}")
+
+            sub_result_1 = await asyncio.to_thread(sub_agent_db, discovery_prompt)
+            sub_json_1 = parse_json_from_agent_result(sub_result_1)
+            discovered_sub1_raw = sub_json_1.get("companies", [])
+            discovered_sub1 = _soft_filter_discovered(discovered_sub1_raw, icp, "Stage 1a")
+            logger.info(
+                f"[Stage 1a] Structured sources: agent output {len(discovered_sub1_raw)} companies, "
+                f"after soft filter {len(discovered_sub1)} kept"
+            )
+
+            # ── Sub-run 2: Web search discovery (DDG, Tavily, YC, scraping)
+            await _emit_event(run_id_str, {
+                "type": "stage_update",
+                "stage": "industry_discovery",
+                "progress": 15,
+                "message": f"Stage 1b: Web search discovery ({len(discovered_sub1)} already found)...",
+            })
+
+            callback_handler_2 = create_pipeline_callback_handler(
+                run_id_str, event_collector,
+                initial_stage="industry_discovery",
+            )
+            sub_agent_web = create_discovery_sub_agent_web(
+                callback_handler=callback_handler_2, disabled_tools=disabled_tools,
+            )
+            # Extract domains from sub-run 1 to help web sub-agent avoid duplicates
+            # Note: KB domains are NOT included here — the carry-forward logic handles
+            # historical company inclusion deterministically after discovery.
+            known_domains = []
+            for c in discovered_sub1:
+                domain = (c.get("website") or "").strip()
+                if domain:
+                    d = _normalize_domain(domain)
+                    if d and d not in known_domains:
+                        known_domains.append(d)
+            web_prompt = build_discovery_web_prompt(icp, already_found_count=len(discovered_sub1), known_domains=known_domains[:300])
+
+            sub_result_2 = await asyncio.to_thread(sub_agent_web, web_prompt)
+            sub_json_2 = parse_json_from_agent_result(sub_result_2)
+            discovered_sub2_raw = sub_json_2.get("companies", [])
+            discovered_sub2 = _soft_filter_discovered(discovered_sub2_raw, icp, "Stage 1b")
+            logger.info(
+                f"[Stage 1b] Web search: agent output {len(discovered_sub2_raw)} companies, "
+                f"after soft filter {len(discovered_sub2)} kept"
+            )
+
+            # ── Sub-run 3: Gap Analysis & Similarity Expansion
+            discovered_so_far = preseed_companies + discovered_sub1 + discovered_sub2
+
+            # Analyze geographic coverage gaps
+            fd = icp.get("firmographic_details", {})
+            target_countries = [c.lower().strip() for c in fd.get("geography", {}).get("countries", [])]
+            gap_expansion_companies = []
+
+            if target_countries and len(discovered_so_far) > 10:
+                country_counts = {}
+                for c in discovered_so_far:
+                    country = (c.get("country") or "").lower().strip()
+                    if country:
+                        for tc in target_countries:
+                            if tc in country or country in tc:
+                                country_counts[tc] = country_counts.get(tc, 0) + 1
+                                break
+
+                # Identify underrepresented countries
+                total = len(discovered_so_far)
+                gaps = [c for c in target_countries if country_counts.get(c, 0) < total * 0.1]
+
+                if gaps:
+                    logger.info(f"[Stage 1c] Gap analysis: underrepresented countries: {gaps}")
+                    await _emit_event(run_id_str, {
+                        "type": "stage_update",
+                        "stage": "industry_discovery",
+                        "progress": 22,
+                        "message": f"Stage 1c: Filling geographic gaps ({', '.join(gaps)})...",
+                    })
+
+                    # Run targeted Exa searches for each gap country
+                    try:
+                        from app.tools.exa_tool import exa_search as _exa_search_fn
+                        kw = icp.get("firmographic_details", {}).get("industry_types", [])
+                        industry_text = ""
+                        for item in kw:
+                            if isinstance(item, dict):
+                                industry_text = item.get("vertical", "")
+                                break
+                            elif isinstance(item, str):
+                                industry_text = item
+                                break
+
+                        for gap_country in gaps[:3]:
+                            try:
+                                result = _exa_search_fn(
+                                    query=f"{industry_text} companies in {gap_country}",
+                                    num_results=30,
+                                    category="company",
+                                )
+                                if isinstance(result, dict):
+                                    for r in result.get("results", []):
+                                        gap_expansion_companies.append({
+                                            "name": r.get("title", ""),
+                                            "website": r.get("url", ""),
+                                            "country": gap_country,
+                                            "source": "exa_gap_fill",
+                                            "description": (r.get("text") or "")[:300],
+                                        })
+                            except Exception as gap_err:
+                                logger.debug(f"Gap fill for {gap_country} failed: {gap_err}")
+                    except Exception as gap_outer_err:
+                        logger.debug(f"Gap analysis failed (non-fatal): {gap_outer_err}")
+
+                    if gap_expansion_companies:
+                        logger.info(f"[Stage 1c] Gap fill: {len(gap_expansion_companies)} additional companies")
+
+            # ── Merge all sub-runs
+            discovered_raw = discovered_so_far + gap_expansion_companies
+            logger.info(f"[Stage 1] Total discovered: {len(discovered_raw)} companies (raw, incl. {len(preseed_companies)} pre-seeded, {len(gap_expansion_companies)} gap-fill)")
+
+            # Validate company data
+            discovered_validated = validate_stage_companies(discovered_raw)
+            logger.info(f"[Stage 1] After validation: {len(discovered_validated)} companies")
+
+            if not discovered_validated:
+                raise ValueError("Stage 1 discovery returned no valid companies")
+
+            # Multi-layer deduplication: domain + name normalization + fuzzy matching
+            unique_companies = _deduplicate_companies(discovered_validated)
+
+            # Carry forward non-disqualified companies from previous runs of this ICP
+            current_domains = {_normalize_domain(c.get("website", "")) for c in unique_companies if c.get("website")}
+            current_names = {_normalize_company_name(c.get("name", "")) for c in unique_companies if c.get("name")}
+
+            carried_forward = await _carry_forward_from_previous_runs(
+                db, run.icp_config_id, run.user_id, run_id, current_domains, current_names,
+            )
+            carried_forward_count = len(carried_forward)
+            if carried_forward:
+                unique_companies = _deduplicate_companies(unique_companies + carried_forward)
+                await _emit_event(run_id_str, {
+                    "type": "stage_update",
+                    "stage": "industry_discovery",
+                    "progress": 24,
+                    "message": f"Carried forward {carried_forward_count} companies from previous runs...",
+                })
 
             # Save all discovered companies to DB
             companies_saved = 0
@@ -413,20 +1140,22 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     city=disc.get("city"),
                     state_region=disc.get("state") or disc.get("state_region"),
                     country=disc.get("country"),
-                    employee_count=disc.get("employee_count"),
-                    revenue_estimate=disc.get("revenue_estimate"),
-                    asset_value=disc.get("asset_value"),
+                    employee_count=_safe_int(disc.get("employee_count")),
+                    revenue_estimate=_safe_int(disc.get("revenue_estimate")),
+                    asset_value=_safe_int(disc.get("asset_value")),
                     description=disc.get("description"),
                     source=disc.get("source"),
                     current_stage="industry_discovery",
+                    carried_forward=disc.get("carried_forward", False),
                 )
                 db.add(company)
 
-                # Check cache
+                # Check knowledge base for enriched data
                 if disc.get("website"):
-                    cached = await find_cached_company(disc["website"], db)
-                    if cached:
-                        clone_company_data(cached, company)
+                    from app.services.company_kb_service import lookup_from_kb, clone_from_kb
+                    kb_record = await lookup_from_kb(disc["website"], db)
+                    if kb_record:
+                        clone_from_kb(kb_record, company)
 
                 await db.flush()
 
@@ -442,7 +1171,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
             await db.flush()
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "industry_discovery",
                 "progress": 25,
@@ -456,7 +1185,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             await db.commit()
 
             logger.info(f"[Stage 2] Starting firmographic fit for run {run_id}")
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "firmographic_fit",
                 "progress": 30,
@@ -493,12 +1222,34 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                 f"{len(needs_agent)} need agent verification"
             )
 
-            # Pass 2: Agent verification in batches of 8
-            companies_to_verify = passed + needs_agent
+            # Pass 2: Priority-based agent verification with variable batch sizes
+            # GREEN (passed): batch size 15 — agent just confirms pre-existing data
+            # YELLOW (needs_agent with some data): batch size 8 — moderate research
+            # GRAY (needs_agent with no data): batch size 5 — full per-company research
+            green_companies = sorted(passed, key=lambda c: compute_data_quality_score(c), reverse=True)
+            yellow_companies = [c for c in needs_agent if c.employee_count or c.revenue_estimate]
+            gray_companies = [c for c in needs_agent if not c.employee_count and not c.revenue_estimate]
+            yellow_companies.sort(key=lambda c: compute_data_quality_score(c), reverse=True)
+            gray_companies.sort(key=lambda c: compute_data_quality_score(c), reverse=True)
+
+            prioritized_batches = []
+            for batch in _chunk(green_companies, 15):
+                prioritized_batches.append(batch)
+            for batch in _chunk(yellow_companies, 8):
+                prioritized_batches.append(batch)
+            for batch in _chunk(gray_companies, 5):
+                prioritized_batches.append(batch)
+
+            logger.info(
+                f"[Stage 2] Priority batching: {len(green_companies)} GREEN (batch=15), "
+                f"{len(yellow_companies)} YELLOW (batch=8), {len(gray_companies)} GRAY (batch=5) "
+                f"= {len(prioritized_batches)} total batches"
+            )
+
             companies_passed = 0
             companies_failed_agent = 0
 
-            for batch_idx, batch in enumerate(_chunk(companies_to_verify, 8)):
+            for batch_idx, batch in enumerate(prioritized_batches):
                 batch_dicts = []
                 batch_map = {}
                 for c in batch:
@@ -518,18 +1269,17 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                     batch_dicts.append(cdict)
                     batch_map[(c.website or "").lower()] = c
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "stage_update",
                     "stage": "firmographic_fit",
-                    "progress": 35 + int(25 * (batch_idx + 1) / max(len(list(_chunk(companies_to_verify, 8))), 1)),
+                    "progress": 35 + int(25 * (batch_idx + 1) / max(len(prioritized_batches), 1)),
                     "message": f"Stage 2: Evaluating batch {batch_idx + 1} ({len(batch)} companies)...",
                 })
 
                 try:
                     fit_callback = create_pipeline_callback_handler(
-                        events or {}, run_id_str, event_collector,
+                        run_id_str, event_collector,
                         initial_stage="firmographic_fit",
-                        cancelled_runs=cancelled_runs,
                     )
                     fit_agent = create_firmographic_fit_agent(
                         callback_handler=fit_callback, disabled_tools=disabled_tools,
@@ -559,11 +1309,17 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
                         # Update employee/revenue/asset_value if agent found better data
                         if evaluated.get("employee_count"):
-                            company.employee_count = evaluated["employee_count"]
+                            parsed = _safe_int(evaluated["employee_count"])
+                            if parsed is not None:
+                                company.employee_count = parsed
                         if evaluated.get("revenue_estimate"):
-                            company.revenue_estimate = evaluated["revenue_estimate"]
+                            parsed = _safe_int(evaluated["revenue_estimate"])
+                            if parsed is not None:
+                                company.revenue_estimate = parsed
                         if evaluated.get("asset_value"):
-                            company.asset_value = evaluated["asset_value"]
+                            parsed = _safe_int(evaluated["asset_value"])
+                            if parsed is not None:
+                                company.asset_value = parsed
 
                         if recommendation == "pass":
                             company.qualification = "qualified"
@@ -624,12 +1380,31 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
             run.current_stage = "review_firmographic"
             run.stage_details = {
                 "total_discovered": companies_saved,
+                "newly_discovered": companies_saved - carried_forward_count,
+                "carried_forward": carried_forward_count,
                 "pre_filter_passed": len(passed),
                 "pre_filter_failed": len(failed),
                 "agent_passed": companies_passed,
                 "agent_failed": companies_failed_agent,
             }
             await db.commit()
+
+            # Record early intelligence (post-Stage 2) for future runs
+            try:
+                from app.services.intelligence_service import record_early_intelligence
+                fd = icp.get("firmographic_details", {})
+                industry_types = fd.get("industry_types", [])
+                intel_industry = ""
+                if industry_types and isinstance(industry_types[0], dict):
+                    intel_industry = industry_types[0].get("vertical", "")
+                elif industry_types:
+                    intel_industry = str(industry_types[0])
+                intel_countries = fd.get("geography", {}).get("countries", [])
+                intel_country = intel_countries[0] if intel_countries else ""
+                await record_early_intelligence(db, run_id, run.icp_config_id, intel_industry, intel_country)
+                await db.commit()
+            except Exception as intel_err:
+                logger.warning(f"Early intelligence recording failed (non-fatal): {intel_err}")
 
             # Generate embeddings
             try:
@@ -645,7 +1420,7 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
                 logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
             total_failed = len(failed) + companies_failed_agent
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "awaiting_firmographic_review",
                 "companies_passed": companies_passed,
                 "companies_failed": total_failed,
@@ -659,13 +1434,12 @@ async def execute_pipeline(run_id: UUID, events: dict = None, cancelled_runs: se
 
         except PipelineCancelled:
             logger.info(f"Pipeline {run_id} cancelled by user")
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
 
         except Exception as e:
             logger.error(f"Pipeline {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -676,8 +1450,6 @@ async def resume_after_firmographic(
     run_id: UUID,
     company_ids: list[UUID],
     signal_mode: str,
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume pipeline after firmographic review. Runs signal research (Stage 3).
 
@@ -752,7 +1524,7 @@ async def resume_after_firmographic(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             log_offset = await _get_existing_log_count(db, run_id)
@@ -764,7 +1536,7 @@ async def resume_after_firmographic(
 
                 await _run_signal_research(
                     db, run, promoted_companies, icp, "both",
-                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                    run_id_str, event_collector, disabled_tools,
                 )
 
                 await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -775,7 +1547,7 @@ async def resume_after_firmographic(
                 avg_budget = sum(c.budget_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
                 avg_urgency = sum(c.urgency_signal_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "awaiting_signal_review",
                     "companies_scored": len(promoted_companies),
                     "avg_budget": round(avg_budget, 1),
@@ -790,7 +1562,7 @@ async def resume_after_firmographic(
 
                 await _run_signal_research(
                     db, run, promoted_companies, icp, first_type,
-                    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                    run_id_str, event_collector, disabled_tools,
                 )
 
                 await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -802,7 +1574,7 @@ async def resume_after_firmographic(
                 score_attr = "budget_signal_score" if first_type == "budget_signals" else "urgency_signal_score"
                 avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-                _emit_event(events, run_id_str, {
+                await _emit_event(run_id_str, {
                     "type": "awaiting_first_signal_review",
                     "signal_type": first_type,
                     "companies_scored": len(promoted_companies),
@@ -810,12 +1582,11 @@ async def resume_after_firmographic(
                 })
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -825,8 +1596,6 @@ async def resume_after_firmographic(
 async def resume_after_first_signal(
     run_id: UUID,
     company_ids: list[UUID],
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume after reviewing first signal results in serial mode.
     Runs the second signal type."""
@@ -893,14 +1662,14 @@ async def resume_after_first_signal(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             log_offset = await _get_existing_log_count(db, run_id)
 
             await _run_signal_research(
                 db, run, promoted_companies, icp, second_type,
-                events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+                run_id_str, event_collector, disabled_tools,
             )
 
             await _persist_logs(db, run_id, event_collector, offset=log_offset)
@@ -912,7 +1681,7 @@ async def resume_after_first_signal(
             score_attr = "budget_signal_score" if second_type == "budget_signals" else "urgency_signal_score"
             avg_score = sum(getattr(c, score_attr) or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "awaiting_second_signal_review",
                 "signal_type": second_type,
                 "companies_scored": len(promoted_companies),
@@ -920,12 +1689,11 @@ async def resume_after_first_signal(
             })
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -935,8 +1703,6 @@ async def resume_after_first_signal(
 async def resume_after_signals(
     run_id: UUID,
     company_ids: list[UUID],
-    events: dict = None,
-    cancelled_runs: set = None,
 ):
     """Resume after final signal review. Runs Stages 4 (contacts) + 5 (scoring)."""
     run_id_str = str(run_id)
@@ -990,7 +1756,7 @@ async def resume_after_signals(
                 run.current_stage = "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                _emit_event(events, run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
+                await _emit_event(run_id_str, {"type": "completed", "companies_found": 0, "contacts_found": 0})
                 return
 
             total_companies = len(promoted_companies)
@@ -999,7 +1765,7 @@ async def resume_after_signals(
             # ════════════════════════════════════════
             # STAGE 4: Contact Discovery
             # ════════════════════════════════════════
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "contact_discovery",
                 "progress": 60,
@@ -1007,24 +1773,19 @@ async def resume_after_signals(
             })
 
             contacts_total = 0
-            for i, company in enumerate(promoted_companies):
-                # Update stage_details for polling-based progress
-                run.stage_details = {
-                    **(run.stage_details or {}),
-                    "current_company_index": i + 1,
-                    "total_companies_in_stage": total_companies,
-                    "current_company_name": company.name,
-                    "contacts_found_so_far": contacts_total,
-                }
-                await db.commit()
+            CONTACT_PARALLEL_BATCH = 5
 
-                _emit_event(events, run_id_str, {
+            async def _process_contact_company(company, index):
+                """Process a single company's contact discovery."""
+                nonlocal contacts_total
+
+                await _emit_event(run_id_str, {
                     "type": "company_start",
                     "company_name": company.name,
-                    "company_index": i + 1,
+                    "company_index": index + 1,
                     "total_companies": total_companies,
                     "stage": "contact_discovery",
-                    "progress": 60 + int(25 * (i + 1) / total_companies),
+                    "progress": 60 + int(25 * (index + 1) / total_companies),
                 })
 
                 try:
@@ -1048,9 +1809,8 @@ async def resume_after_signals(
                             ]
 
                     contact_callback = create_pipeline_callback_handler(
-                        events or {}, run_id_str, event_collector,
+                        run_id_str, event_collector,
                         initial_stage="contact_discovery",
-                        cancelled_runs=cancelled_runs,
                     )
                     contact_agent = create_contact_agent(
                         callback_handler=contact_callback, disabled_tools=disabled_tools,
@@ -1068,7 +1828,13 @@ async def resume_after_signals(
                     contact_json = parse_json_from_agent_result(contact_result)
 
                     contacts_saved = 0
-                    for cd in contact_json.get("contacts", []):
+                    raw_contacts = contact_json.get("contacts", [])
+                    validated_contacts = validate_stage_contacts(
+                        raw_contacts, company.website or ""
+                    )
+                    # Deduplicate contacts before saving
+                    validated_contacts = _deduplicate_contacts(validated_contacts)
+                    for cd in validated_contacts:
                         contact = Contact(
                             company_id=company.id,
                             full_name=cd.get("full_name"),
@@ -1097,7 +1863,7 @@ async def resume_after_signals(
                     db.add(stage_result)
                     contacts_total += contacts_saved
 
-                    _emit_event(events, run_id_str, {
+                    await _emit_event(run_id_str, {
                         "type": "company_stage_result",
                         "company_name": company.name,
                         "stage": "contact_discovery",
@@ -1111,7 +1877,37 @@ async def resume_after_signals(
                     logger.warning(f"[Stage 4] Contact discovery failed for {company.name}: {err}")
                     company.current_stage = "contact_discovery"
 
+            # Process contacts in parallel batches
+            for batch_start in range(0, total_companies, CONTACT_PARALLEL_BATCH):
+                batch = promoted_companies[batch_start:batch_start + CONTACT_PARALLEL_BATCH]
+
+                run.stage_details = {
+                    **(run.stage_details or {}),
+                    "current_company_index": batch_start + 1,
+                    "total_companies_in_stage": total_companies,
+                    "contacts_found_so_far": contacts_total,
+                }
+                await db.commit()
+
+                tasks = [
+                    _process_contact_company(company, batch_start + i)
+                    for i, company in enumerate(batch)
+                ]
+                await asyncio.gather(*tasks, return_exceptions=True)
                 await db.flush()
+
+            # Post-Stage-4: Server-side contact deduplication
+            try:
+                from app.services.contact_dedup_service import deduplicate_company_contacts
+                total_deduped = 0
+                for company in promoted_companies:
+                    removed = await deduplicate_company_contacts(db, company.id)
+                    total_deduped += removed
+                if total_deduped > 0:
+                    await db.commit()
+                    logger.info(f"Contact dedup removed {total_deduped} duplicates across {len(promoted_companies)} companies")
+            except Exception as dedup_err:
+                logger.warning(f"Contact dedup failed (non-fatal): {dedup_err}")
 
             # ════════════════════════════════════════
             # STAGE 5: Final Scoring & Ranking
@@ -1119,7 +1915,7 @@ async def resume_after_signals(
             run.current_stage = "final_scoring"
             await db.commit()
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "stage_update",
                 "stage": "final_scoring",
                 "progress": 90,
@@ -1135,13 +1931,27 @@ async def resume_after_signals(
             )
             promoted_companies = list(promoted_result.scalars().unique().all())
 
+            from app.agent.lead_gen_agent import compute_deal_hotness
             for company in promoted_companies:
-                company.final_score = compute_final_score(company)
+                company.final_score = compute_final_score(company, icp=icp)
+                hotness, tier = compute_deal_hotness(
+                    company.budget_signal_score,
+                    company.urgency_signal_score,
+                    company.recency_adjusted_budget_score,
+                    company.recency_adjusted_urgency_score,
+                    company.avg_evidence_age_months,
+                )
+                company.deal_hotness_score = hotness
+                company.deal_hotness_tier = tier
                 company.current_stage = "final_scoring"
                 company.data_freshness = datetime.now(timezone.utc)
 
-            # Rank by final score
-            ranked = sorted(promoted_companies, key=lambda c: c.final_score or 0, reverse=True)
+            # Rank by blended final score (70%) + hotness (30%)
+            ranked = sorted(
+                promoted_companies,
+                key=lambda c: (c.final_score or 0) * 0.7 + (c.deal_hotness_score or 0) * 0.3,
+                reverse=True,
+            )
             for i, c in enumerate(ranked):
                 c.final_rank = i + 1
 
@@ -1164,9 +1974,44 @@ async def resume_after_signals(
             except Exception as embed_err:
                 logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
+            # Upsert scored companies into the Knowledge Base
+            try:
+                from app.services.company_kb_service import upsert_company_to_kb
+                for company in promoted_companies:
+                    await upsert_company_to_kb(
+                        company,
+                        list(company.contacts) if company.contacts else [],
+                        run_id,
+                        db,
+                    )
+                await db.commit()
+                logger.info(f"KB upsert: {len(promoted_companies)} companies written to knowledge base")
+            except Exception as kb_err:
+                logger.warning(f"KB upsert failed (non-fatal): {kb_err}")
+
+            # Record cross-run discovery intelligence
+            try:
+                from app.services.intelligence_service import record_discovery_intelligence
+                fd = icp.get("firmographic_details", {})
+                industry_types = fd.get("industry_types", [])
+                industry_name = ""
+                if industry_types and isinstance(industry_types[0], dict):
+                    industry_name = industry_types[0].get("vertical", "")
+                elif industry_types:
+                    industry_name = str(industry_types[0])
+                countries = fd.get("geography", {}).get("countries", [])
+                country_name = countries[0] if countries else ""
+                await record_discovery_intelligence(
+                    db, run_id, run.icp_config_id,
+                    industry=industry_name, country=country_name,
+                )
+                await db.commit()
+            except Exception as intel_err:
+                logger.warning(f"Discovery intelligence recording failed (non-fatal): {intel_err}")
+
             avg_final = sum(c.final_score or 0 for c in promoted_companies) / max(len(promoted_companies), 1)
 
-            _emit_event(events, run_id_str, {
+            await _emit_event(run_id_str, {
                 "type": "completed",
                 "companies_found": len(promoted_companies),
                 "contacts_found": contacts_total,
@@ -1179,12 +2024,11 @@ async def resume_after_signals(
             )
 
         except PipelineCancelled:
-            if cancelled_runs is not None:
-                cancelled_runs.discard(run_id_str)
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, None, cancelled=True)
+            await event_store.clear_cancelled(run_id_str)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, None, cancelled=True)
         except Exception as e:
             logger.error(f"Pipeline resume {run_id} failed: {e}\n{traceback.format_exc()}")
-            await _handle_pipeline_error(db, run_id, run, event_collector, events, run_id_str, e)
+            await _handle_pipeline_error(db, run_id, run, event_collector, run_id_str, e)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1193,9 +2037,13 @@ async def resume_after_signals(
 
 async def _run_signal_research(
     db, run, companies, icp, signal_type,
-    events, run_id_str, event_collector, cancelled_runs, disabled_tools,
+    run_id_str, event_collector, disabled_tools,
 ):
     """Run signal research for a list of companies.
+
+    Groups companies by industry (up to 5 per group) for batch processing.
+    Companies in the same industry share signal research context (regulatory
+    changes, market trends) reducing redundant tool calls by 50-70%.
 
     signal_type: "budget_signals", "urgency_signals", or "both"
     """
@@ -1205,114 +2053,203 @@ async def _run_signal_research(
         "both": "Budget & Urgency Signal Research",
     }.get(signal_type, signal_type)
 
-    _emit_event(events, run_id_str, {
+    await _emit_event(run_id_str, {
         "type": "stage_update",
         "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
         "progress": 40,
         "message": f"Stage 3: {stage_name} for {len(companies)} companies...",
     })
 
-    for i, company in enumerate(companies):
-        # Update stage_details for polling-based progress
-        run.stage_details = {
-            **(run.stage_details or {}),
-            "current_company_index": i + 1,
-            "total_companies_in_stage": len(companies),
-            "current_company_name": company.name,
-        }
-        await db.commit()
+    stage_label = signal_type if signal_type != "both" else "budget_urgency_signals"
+    BATCH_GROUP_SIZE = 4  # Max companies per batch agent call
 
-        _emit_event(events, run_id_str, {
-            "type": "company_start",
-            "company_name": company.name,
-            "company_index": i + 1,
-            "total_companies": len(companies),
-            "stage": signal_type if signal_type != "both" else "budget_urgency_signals",
-            "progress": 40 + int(20 * (i + 1) / len(companies)),
-        })
+    # Group companies by industry for batch processing (C3)
+    industry_groups: dict[str, list] = {}
+    for company in companies:
+        industry_key = (company.industry or "unknown").lower().strip()
+        industry_groups.setdefault(industry_key, []).append(company)
+
+    # Flatten into batches: keep same-industry companies together, max BATCH_GROUP_SIZE per batch
+    batches = []
+    for industry, group in industry_groups.items():
+        for i in range(0, len(group), BATCH_GROUP_SIZE):
+            batches.append(group[i:i + BATCH_GROUP_SIZE])
+
+    logger.info(
+        f"[Stage 3] Grouped {len(companies)} companies into {len(batches)} "
+        f"industry batches across {len(industry_groups)} industries"
+    )
+
+    def _apply_signal_result(company, signal_json):
+        """Apply signal research results to a single company."""
+        if signal_type in ("budget_signals", "both"):
+            budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
+            company.budget_signal_score = _normalize_score_to_100(float(budget_score) if budget_score else None)
+
+        if signal_type in ("urgency_signals", "both"):
+            urgency_score = signal_json.get("urgency_signal_score") or signal_json.get("composite_score", 0)
+            company.urgency_signal_score = _normalize_score_to_100(float(urgency_score) if urgency_score else None)
+
+        signals_data = signal_json.get("signals", [])
+
+        if signal_type in ("budget_signals", "both"):
+            budget_signals = [s for s in signals_data if s.get("type") == "budget"] if signal_type == "both" else signals_data
+            stage_result = CompanyStageResult(
+                company_id=company.id,
+                stage="budget_signals",
+                status="passed",
+                score=company.budget_signal_score,
+                reasoning=f"Budget signal score: {company.budget_signal_score}/100",
+                evidence=budget_signals[:10] if budget_signals else None,
+            )
+            db.add(stage_result)
+
+        if signal_type in ("urgency_signals", "both"):
+            urgency_signals = [s for s in signals_data if s.get("type") == "urgency"] if signal_type == "both" else signals_data
+            stage_result = CompanyStageResult(
+                company_id=company.id,
+                stage="urgency_signals",
+                status="passed",
+                score=company.urgency_signal_score,
+                reasoning=f"Urgency signal score: {company.urgency_signal_score}/100",
+                evidence=urgency_signals[:10] if urgency_signals else None,
+            )
+            db.add(stage_result)
+
+        if signal_type == "both":
+            company.current_stage = "budget_urgency_signals"
+        else:
+            company.current_stage = signal_type
+
+        # Compute recency-adjusted scores from evidence
+        from app.agent.lead_gen_agent import compute_recency_adjusted_scores
+        all_signals = signal_json.get("signals", [])
+        recency_result = compute_recency_adjusted_scores(all_signals)
+        if recency_result["recency_adjusted_budget_score"] is not None:
+            company.recency_adjusted_budget_score = recency_result["recency_adjusted_budget_score"]
+        if recency_result["recency_adjusted_urgency_score"] is not None:
+            company.recency_adjusted_urgency_score = recency_result["recency_adjusted_urgency_score"]
+        if recency_result["avg_evidence_age_months"] is not None:
+            company.avg_evidence_age_months = recency_result["avg_evidence_age_months"]
+
+    async def _process_signal_batch(batch, batch_index):
+        """Process a batch of companies (same industry) via a single agent call."""
+        for i, company in enumerate(batch):
+            await _emit_event(run_id_str, {
+                "type": "company_start",
+                "company_name": company.name,
+                "company_index": batch_index + i + 1,
+                "total_companies": len(companies),
+                "stage": stage_label,
+                "progress": 40 + int(20 * (batch_index + i + 1) / len(companies)),
+            })
 
         try:
             signal_callback = create_pipeline_callback_handler(
-                events or {}, run_id_str, event_collector,
-                initial_stage=signal_type if signal_type != "both" else "budget_urgency_signals",
-                cancelled_runs=cancelled_runs,
+                run_id_str, event_collector,
+                initial_stage=stage_label,
             )
             agent = create_signal_agent(
                 callback_handler=signal_callback, disabled_tools=disabled_tools,
             )
 
-            company_dict = {
-                "name": company.name,
-                "website": company.website,
-                "description": company.description,
-                "employee_count": company.employee_count,
-                "revenue_estimate": company.revenue_estimate,
-                "cached_from_run_id": str(company.cached_from_run_id) if company.cached_from_run_id else None,
-                "data_freshness": str(company.data_freshness) if company.data_freshness else None,
-            }
+            if len(batch) == 1:
+                # Single company — use standard prompt
+                company = batch[0]
+                company_dict = {
+                    "name": company.name,
+                    "website": company.website,
+                    "description": company.description,
+                    "employee_count": company.employee_count,
+                    "revenue_estimate": company.revenue_estimate,
+                    "cached_from_run_id": str(company.cached_from_run_id) if company.cached_from_run_id else None,
+                    "data_freshness": str(company.data_freshness) if company.data_freshness else None,
+                }
+                prompt = build_signal_prompt(company_dict, icp, signal_type)
+                result = await asyncio.to_thread(agent, prompt)
+                signal_json = parse_json_from_agent_result(result)
+                _apply_signal_result(company, signal_json)
 
-            prompt = build_signal_prompt(company_dict, icp, signal_type)
-            result = await asyncio.to_thread(agent, prompt)
-            signal_json = parse_json_from_agent_result(result)
-
-            # Update scores (normalize to 0-100 scale)
-            if signal_type in ("budget_signals", "both"):
-                budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
-                company.budget_signal_score = _normalize_score_to_100(float(budget_score) if budget_score else None)
-
-            if signal_type in ("urgency_signals", "both"):
-                urgency_score = signal_json.get("urgency_signal_score") or signal_json.get("composite_score", 0)
-                company.urgency_signal_score = _normalize_score_to_100(float(urgency_score) if urgency_score else None)
-
-            # Create stage results
-            signals_data = signal_json.get("signals", [])
-
-            if signal_type in ("budget_signals", "both"):
-                budget_signals = [s for s in signals_data if s.get("type") == "budget"] if signal_type == "both" else signals_data
-                stage_result = CompanyStageResult(
-                    company_id=company.id,
-                    stage="budget_signals",
-                    status="passed",
-                    score=company.budget_signal_score,
-                    reasoning=f"Budget signal score: {company.budget_signal_score}/100",
-                    evidence=budget_signals[:10] if budget_signals else None,
-                )
-                db.add(stage_result)
-
-            if signal_type in ("urgency_signals", "both"):
-                urgency_signals = [s for s in signals_data if s.get("type") == "urgency"] if signal_type == "both" else signals_data
-                stage_result = CompanyStageResult(
-                    company_id=company.id,
-                    stage="urgency_signals",
-                    status="passed",
-                    score=company.urgency_signal_score,
-                    reasoning=f"Urgency signal score: {company.urgency_signal_score}/100",
-                    evidence=urgency_signals[:10] if urgency_signals else None,
-                )
-                db.add(stage_result)
-
-            # Update current_stage to reflect signal completion
-            if signal_type == "both":
-                company.current_stage = "budget_urgency_signals"
+                await _emit_event(run_id_str, {
+                    "type": "company_stage_result",
+                    "company_name": company.name,
+                    "stage": signal_type,
+                    "status": "passed",
+                    "score": _normalize_score_to_100(signal_json.get("composite_score", 0)),
+                })
             else:
-                company.current_stage = signal_type
+                # Multiple companies — use batch prompt
+                company_dicts = []
+                for company in batch:
+                    company_dicts.append({
+                        "name": company.name,
+                        "website": company.website,
+                        "description": company.description,
+                        "industry": company.industry,
+                        "employee_count": company.employee_count,
+                        "revenue_estimate": company.revenue_estimate,
+                    })
 
-            _emit_event(events, run_id_str, {
-                "type": "company_stage_result",
-                "company_name": company.name,
-                "stage": signal_type,
-                "status": "passed",
-                "score": _normalize_score_to_100(signal_json.get("composite_score", 0)),
-            })
+                prompt = build_batch_signal_prompt(company_dicts, icp, signal_type)
+                result = await asyncio.to_thread(agent, prompt)
+                batch_json = parse_json_from_agent_result(result)
+
+                # Parse batch results
+                company_results = batch_json.get("companies", [])
+                # Build lookup by name for matching
+                result_by_name = {}
+                for cr in company_results:
+                    name = (cr.get("name") or "").lower().strip()
+                    result_by_name[name] = cr
+
+                for company in batch:
+                    company_name_key = company.name.lower().strip()
+                    signal_json = result_by_name.get(company_name_key)
+
+                    if signal_json:
+                        _apply_signal_result(company, signal_json)
+                        await _emit_event(run_id_str, {
+                            "type": "company_stage_result",
+                            "company_name": company.name,
+                            "stage": signal_type,
+                            "status": "passed",
+                            "score": _normalize_score_to_100(signal_json.get("composite_score", 0)),
+                        })
+                    else:
+                        # Batch didn't include this company — mark with default
+                        logger.warning(f"[Stage 3] Batch result missing for {company.name}, assigning default score")
+                        if signal_type == "both":
+                            company.current_stage = "budget_urgency_signals"
+                        else:
+                            company.current_stage = signal_type
 
         except PipelineCancelled:
             raise
         except Exception as err:
-            logger.warning(f"[Stage 3] Signal research failed for {company.name}: {err}")
-            # Still update current_stage so the company is visible at this stage
-            if signal_type == "both":
-                company.current_stage = "budget_urgency_signals"
-            else:
-                company.current_stage = signal_type
+            logger.warning(f"[Stage 3] Signal batch failed for {[c.name for c in batch]}: {err}")
+            for company in batch:
+                if signal_type == "both":
+                    company.current_stage = "budget_urgency_signals"
+                else:
+                    company.current_stage = signal_type
 
+    # Process industry batches in parallel (3 concurrent batches)
+    PARALLEL_BATCHES = 3
+    processed = 0
+    for parallel_start in range(0, len(batches), PARALLEL_BATCHES):
+        parallel_group = batches[parallel_start:parallel_start + PARALLEL_BATCHES]
+
+        run.stage_details = {
+            **(run.stage_details or {}),
+            "current_company_index": processed + 1,
+            "total_companies_in_stage": len(companies),
+        }
+        await db.commit()
+
+        tasks = [
+            _process_signal_batch(batch, processed + sum(len(batches[j]) for j in range(parallel_start, parallel_start + k)))
+            for k, batch in enumerate(parallel_group)
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
         await db.flush()
+        processed += sum(len(b) for b in parallel_group)
