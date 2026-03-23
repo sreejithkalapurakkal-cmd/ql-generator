@@ -49,8 +49,8 @@ async def invite_user(
             )
 
     # Validate role
-    if request.role not in ("user", "super_admin"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'user' or 'super_admin'")
+    if request.role not in ("user", "admin", "super_admin"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'user', 'admin', or 'super_admin'")
 
     # Check for existing user
     result = await db.execute(select(User).where(User.email == email))
@@ -84,8 +84,8 @@ async def update_user(
 
     changed_fields = []
     if request.role is not None:
-        if request.role not in ("user", "super_admin"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'user' or 'super_admin'")
+        if request.role not in ("user", "admin", "super_admin"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be 'user', 'admin', or 'super_admin'")
         user.role = request.role
         changed_fields.append("role")
     if request.is_active is not None:

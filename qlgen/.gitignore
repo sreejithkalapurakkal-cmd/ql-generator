@@ -110,6 +110,7 @@ postgres_data/
 
 # Environment
 .env
+**/.env
 .env.local
 .env.*.local
 

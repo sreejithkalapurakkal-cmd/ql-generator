@@ -167,6 +167,10 @@ export interface Company {
   deal_hotness_score?: number | null;
   deal_hotness_tier?: string | null;
   avg_evidence_age_months?: number | null;
+
+  // Cross-run context (populated by /all/companies endpoint)
+  pipeline_run_id?: string | null;
+  run_icp_name?: string | null;
 }
 
 export interface StageSummary {
@@ -207,6 +211,23 @@ export interface ToolAttribution {
 export interface ToolAttributionResponse {
   run_id: string;
   tools: ToolAttribution[];
+}
+
+// Tool Effectiveness aggregate types (cross-run)
+export interface ToolEffectivenessAggregate {
+  tool_name: string;
+  industry: string;
+  country: string;
+  total_companies_sourced: number;
+  companies_passed_stage2: number;
+  pass_rate: number;
+  avg_score: number;
+  effectiveness_score: number;
+  total_runs_used: number;
+}
+
+export interface ToolEffectivenessResponse {
+  tools: ToolEffectivenessAggregate[];
 }
 
 // Co-pilot Chat types
@@ -266,6 +287,10 @@ export interface ToolRegistryItem {
   success_rate: number | null;
   last_used_at: string | null;
   last_error: string | null;
+  // Effectiveness-based priority
+  priority: number | null;
+  effectiveness_threshold: number | null;
+  auto_disabled: boolean | null;
 }
 
 export interface ToolMetricsSummary {
