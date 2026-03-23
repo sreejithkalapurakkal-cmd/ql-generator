@@ -10,7 +10,7 @@ import { useAuth } from '../context/AuthContext';
 const ICPListPage: React.FC = () => {
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
-  const isAdmin = authUser?.role === 'super_admin';
+  const isAdmin = authUser?.role === 'super_admin' || authUser?.role === 'admin';
   const [searchParams, setSearchParams] = useSearchParams();
   const [icps, setIcps] = useState<ICPConfig[]>([]);
   const [loading, setLoading] = useState(true);

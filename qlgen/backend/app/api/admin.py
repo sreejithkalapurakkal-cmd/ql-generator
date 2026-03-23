@@ -12,7 +12,7 @@ from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.models.icp import ICPConfig
 from app.models.pipeline import PipelineRun
-from app.auth.dependencies import get_current_super_admin
+from app.auth.dependencies import get_current_super_admin, get_current_admin_or_above
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -64,7 +64,7 @@ async def get_audit_logs(
 
 @router.get("/activity")
 async def get_admin_activity(
-    _admin: User = Depends(get_current_super_admin),
+    _admin: User = Depends(get_current_admin_or_above),
     db: AsyncSession = Depends(get_db),
 ):
     """Get admin activity overview: user summaries, recent runs, recent ICPs."""

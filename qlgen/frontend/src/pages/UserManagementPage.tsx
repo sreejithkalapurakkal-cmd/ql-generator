@@ -103,8 +103,8 @@ const UserManagementPage: React.FC = () => {
       render: (role: string, record: AuthUser) => {
         const isSelf = record.id === currentUser?.id;
         return isSelf ? (
-          <Tag color={role === 'super_admin' ? 'purple' : 'blue'}>
-            {role === 'super_admin' ? 'Super Admin' : 'User'}
+          <Tag color={role === 'super_admin' ? 'purple' : role === 'admin' ? 'blue' : 'default'}>
+            {role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User'}
           </Tag>
         ) : (
           <Select
@@ -114,6 +114,7 @@ const UserManagementPage: React.FC = () => {
             onChange={(val) => handleRoleChange(record.id, val)}
             options={[
               { label: 'User', value: 'user' },
+              { label: 'Admin', value: 'admin' },
               { label: 'Super Admin', value: 'super_admin' },
             ]}
           />
@@ -215,6 +216,7 @@ const UserManagementPage: React.FC = () => {
             <Select
               options={[
                 { label: 'User', value: 'user' },
+                { label: 'Admin', value: 'admin' },
                 { label: 'Super Admin', value: 'super_admin' },
               ]}
             />

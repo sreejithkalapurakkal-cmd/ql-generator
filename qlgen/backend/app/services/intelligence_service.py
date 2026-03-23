@@ -13,8 +13,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.discovery_intelligence import DiscoveryQuery, ToolEffectiveness
 from app.models.company import Company
+from app.models.pipeline_log import PipelineLog
 
 logger = logging.getLogger(__name__)
+
+
+async def _extract_query_texts(db: AsyncSession, run_id: UUID) -> dict[str, str]:
+    """Extract tool call context/parameters from pipeline logs for each tool."""
+    result = await db.execute(
+        select(PipelineLog)
+        .where(PipelineLog.pipeline_run_id == run_id)
+        .where(PipelineLog.event_type == "tool_start")
+        .order_by(PipelineLog.sequence_number)
+    )
+    logs = result.scalars().all()
+
+    tool_queries: dict[str, list[str]] = {}
+    for log in logs:
+        data = log.event_data or {}
+        tool_name = data.get("tool_name", "")
+        context = data.get("context", "")
+        if tool_name and context:
+            tool_queries.setdefault(tool_name, []).append(context[:500])
+
+    # Join all contexts per tool (deduplicated)
+    return {
+        tool: " | ".join(dict.fromkeys(contexts))[:1000]
+        for tool, contexts in tool_queries.items()
+    }
 
 
 async def record_discovery_intelligence(
@@ -41,6 +67,9 @@ async def record_discovery_intelligence(
         if not companies:
             return
 
+        # Extract query texts from pipeline logs
+        query_texts = await _extract_query_texts(db, run_id)
+
         # Group companies by source tool
         by_source: dict[str, list[Company]] = {}
         for c in companies:
@@ -60,6 +89,7 @@ async def record_discovery_intelligence(
                 pipeline_run_id=run_id,
                 icp_config_id=icp_config_id,
                 tool_name=tool_name,
+                query_text=query_texts.get(tool_name, ""),
                 industry=industry,
                 country=country,
                 companies_found=total,
@@ -80,6 +110,9 @@ async def record_discovery_intelligence(
             f"Recorded discovery intelligence for run {run_id}: "
             f"{len(by_source)} tools across {len(companies)} companies"
         )
+
+        # Update tool priorities based on accumulated effectiveness data
+        await update_tool_priorities(db)
 
     except Exception as e:
         logger.warning(f"Failed to record discovery intelligence: {e}")
@@ -162,6 +195,9 @@ async def record_early_intelligence(
         if not companies:
             return
 
+        # Extract query texts from pipeline logs
+        query_texts = await _extract_query_texts(db, run_id)
+
         # Group companies by source tool
         by_source: dict[str, list[Company]] = {}
         for c in companies:
@@ -180,6 +216,7 @@ async def record_early_intelligence(
                 pipeline_run_id=run_id,
                 icp_config_id=icp_config_id,
                 tool_name=tool_name,
+                query_text=query_texts.get(tool_name, ""),
                 industry=industry,
                 country=country,
                 companies_found=total,
@@ -317,3 +354,51 @@ def format_intelligence_for_prompt(intelligence: dict) -> str:
                 )
 
     return "\n".join(lines)
+
+
+async def update_tool_priorities(db: AsyncSession):
+    """Update tool registry priorities based on aggregate effectiveness data.
+
+    Tools with enough data (>=5 effectiveness records across runs) will have
+    their priority score updated. Tools that fall below their effectiveness
+    threshold will be auto-disabled.
+    """
+    from app.models.tool_registry import ToolRegistry
+
+    try:
+        result = await db.execute(
+            select(ToolEffectiveness)
+            .where(ToolEffectiveness.total_runs_used >= 3)
+        )
+        effectiveness_records = result.scalars().all()
+
+        # Aggregate by tool_name across all industries/countries
+        tool_scores: dict[str, list[float]] = {}
+        for te in effectiveness_records:
+            tool_scores.setdefault(te.tool_name, []).append(te.effectiveness_score)
+
+        for tool_name, scores in tool_scores.items():
+            avg_effectiveness = sum(scores) / len(scores) if scores else 0
+            priority = min(100, max(0, int(avg_effectiveness)))
+
+            tool_result = await db.execute(
+                select(ToolRegistry).where(ToolRegistry.tool_name == tool_name)
+            )
+            tool = tool_result.scalar_one_or_none()
+            if tool:
+                tool.priority = priority
+                threshold = tool.effectiveness_threshold or 20.0
+                if avg_effectiveness < threshold and len(scores) >= 5:
+                    tool.auto_disabled = True
+                    logger.info(
+                        f"Auto-disabled {tool_name}: avg effectiveness {avg_effectiveness:.1f} "
+                        f"below threshold {threshold}"
+                    )
+                elif tool.auto_disabled and avg_effectiveness >= threshold:
+                    tool.auto_disabled = False
+
+        await db.flush()
+        logger.info(f"Updated priorities for {len(tool_scores)} tools")
+
+    except Exception as e:
+        logger.warning(f"Failed to update tool priorities: {e}")

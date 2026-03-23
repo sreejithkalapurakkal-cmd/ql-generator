@@ -27,7 +27,7 @@ const relativeTime = (dateStr: string | null): string => {
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
-  const isAdmin = authUser?.role === 'super_admin';
+  const isAdmin = authUser?.role === 'super_admin' || authUser?.role === 'admin';
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [adminActivity, setAdminActivity] = useState<AdminActivityResponse | null>(null);
   const [adminTab, setAdminTab] = useState<'users' | 'searches' | 'icps'>('users');
@@ -666,7 +666,7 @@ const DashboardPage: React.FC = () => {
                   style={{ maxWidth: 260, width: 220 }}
                 />
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {(['all', 'super_admin', 'user'] as const).map((role) => (
+                  {(['all', 'super_admin', 'admin', 'user'] as const).map((role) => (
                     <div
                       key={role}
                       onClick={() => setAdminRoleFilter(role)}
@@ -681,7 +681,7 @@ const DashboardPage: React.FC = () => {
                         transition: 'all 0.2s',
                       }}
                     >
-                      {role === 'all' ? 'All' : role === 'super_admin' ? 'Admin' : 'User'}
+                      {role === 'all' ? 'All' : role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User'}
                     </div>
                   ))}
                 </div>
@@ -710,7 +710,7 @@ const DashboardPage: React.FC = () => {
                   },
                   {
                     title: 'Role', dataIndex: 'role', key: 'role', width: 100,
-                    render: (role: string) => <Tag color={role === 'super_admin' ? 'purple' : 'default'}>{role === 'super_admin' ? 'Admin' : 'User'}</Tag>,
+                    render: (role: string) => <Tag color={role === 'super_admin' ? 'purple' : role === 'admin' ? 'blue' : 'default'}>{role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User'}</Tag>,
                   },
                   { title: 'ICPs', dataIndex: 'icp_count', key: 'icp_count', width: 70 },
                   { title: 'Searches', dataIndex: 'pipeline_count', key: 'pipeline_count', width: 90 },
@@ -827,7 +827,11 @@ const DashboardPage: React.FC = () => {
         title={MODAL_TITLES[statsModalTile]}
         open={statsModalOpen}
         onCancel={() => setStatsModalOpen(false)}
-        footer={null}
+        footer={
+          <Button type="primary" onClick={() => { setStatsModalOpen(false); navigate('/all-leads'); }}>
+            View All Leads
+          </Button>
+        }
         width={800}
       >
         {statsModalTile === 'pipeline_runs' ? (

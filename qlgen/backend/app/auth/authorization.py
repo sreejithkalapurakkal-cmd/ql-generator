@@ -1,7 +1,9 @@
 """Reusable RBAC helpers for data isolation.
 
-Normal users see only their own data. Super admins see everything
-(including legacy records with NULL user_id).
+3-tier role system: user, admin, super_admin.
+- user: sees only own data.
+- admin: sees all users' data (read-only oversight) but cannot delete others' resources.
+- super_admin: full access including deletion, user management, tools, and audit logs.
 """
 from fastapi import HTTPException
 from sqlalchemy import true
@@ -10,7 +12,12 @@ from app.models.user import User
 
 
 def is_admin(user: User) -> bool:
-    """Check if the user has super_admin role."""
+    """Check if the user has admin or super_admin role (data visibility)."""
+    return user.role in ("admin", "super_admin")
+
+
+def is_super_admin(user: User) -> bool:
+    """Check if the user has super_admin role (full system access)."""
     return user.role == "super_admin"
 
 
@@ -48,8 +55,10 @@ def check_edit_permission(resource_user_id, user: User) -> None:
 
 
 def check_delete_permission(resource_user_id, user: User) -> None:
-    """Allow owner OR admin to delete. Raise 404 for non-owner non-admins."""
-    if is_admin(user):
+    """Allow owner OR super_admin to delete. Admin cannot delete others' resources."""
+    if is_super_admin(user):
         return
     if resource_user_id is None or resource_user_id != user.id:
+        if is_admin(user):
+            raise HTTPException(status_code=403, detail="Admin cannot delete another user's resource")
         raise HTTPException(status_code=404, detail="Resource not found")

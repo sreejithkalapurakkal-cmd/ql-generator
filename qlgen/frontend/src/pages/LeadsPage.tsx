@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   Card, Table, Tag, Button, Space, Tooltip, Descriptions, Select, Typography,
-  Popconfirm, message, Badge, Collapse,
+  Popconfirm, message, Badge, Collapse, Dropdown,
 } from 'antd';
 import {
   DownloadOutlined, ToolOutlined, DeleteOutlined, PlayCircleOutlined,
@@ -10,15 +10,12 @@ import {
   CloseCircleOutlined, ArrowUpOutlined, MinusOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getLeadCompanies, getStageSummary, getExportUrl, getToolAttribution } from '../api/leadsApi';
+import { getLeadCompanies, getStageSummary, getExportUrl } from '../api/leadsApi';
 import { getPipelineStatus, getPipelineLogs, deletePipelineRun, startPipeline, getCompaniesByStage } from '../api/pipelineApi';
 import {
   Company, CompanyStageResult, PipelineRun, PipelineLogEntry,
-  StageSummaryResponse, StageSummary, ToolAttribution,
+  StageSummaryResponse, StageSummary,
 } from '../types';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RechartsTooltip,
-} from 'recharts';
 import { usePageContext } from '../context/PageContextProvider';
 
 const { Text } = Typography;
@@ -389,49 +386,63 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
 // ICP Config Panel
 // ---------------------------------------------------------------------------
 
-const ICPConfigPanel: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+const ICPConfigPanel: React.FC<{ config: Record<string, unknown>; name?: string | null; description?: string | null }> = ({ config, name, description }) => {
   const cfg = config as any;
+  const fd = cfg?.firmographic_details ?? {};
+  const offerings: string[] = cfg?.target_capability?.offerings ?? [];
+  const offeringCondition: string = cfg?.target_capability?.condition ?? '';
+  const urgencySignals: string[] = cfg?.urgency_signals?.signals ?? [];
+  const urgencyCondition: string = cfg?.urgency_signals?.condition ?? '';
+  const budgetSignals: string[] = cfg?.budget_signals?.signals ?? [];
+  const budgetCondition: string = cfg?.budget_signals?.condition ?? '';
+  const targetRoles: string[] = cfg?.authority_roles?.target_roles ?? [];
+  const industries: any[] = fd?.industry_types ?? [];
+  const countries: string[] = fd?.geography?.countries ?? [];
+
   return (
     <Descriptions bordered size="small" column={2}>
-      <Descriptions.Item label="Target Offerings" span={2}>
-        {cfg?.target_offering?.join(', ') || cfg?.target_capability?.offerings?.join(', ') || '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="Countries" span={2}>
-        {cfg?.regions?.countries?.join(', ') || cfg?.firmographic_details?.geography?.countries?.join(', ') || '-'}
-      </Descriptions.Item>
+      {name && (
+        <Descriptions.Item label="Name" span={2}>{name}</Descriptions.Item>
+      )}
+      {description && (
+        <Descriptions.Item label="Description" span={2}>{description}</Descriptions.Item>
+      )}
       <Descriptions.Item label="Industries" span={2}>
-        {(cfg?.industry_types || cfg?.firmographic_details?.industry_types)?.map((i: any) =>
-          `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`
-        ).join(', ') || '-'}
+        {industries.map((i: any) => `${i.vertical}${i.sub_vertical ? ` / ${i.sub_vertical}` : ''}`).join(', ') || '-'}
+      </Descriptions.Item>
+      <Descriptions.Item label="Countries">
+        {countries.join(', ') || '-'}
       </Descriptions.Item>
       <Descriptions.Item label="Employees">
-        {cfg?.company_size?.employees_min?.toLocaleString() || cfg?.firmographic_details?.employee_range?.min?.toLocaleString() || '?'}
-        &ndash;
-        {cfg?.company_size?.employees_max?.toLocaleString() || cfg?.firmographic_details?.employee_range?.max?.toLocaleString() || '?'}
+        {fd?.employee_range?.min?.toLocaleString() ?? '?'}&ndash;{fd?.employee_range?.max?.toLocaleString() ?? '?'}
       </Descriptions.Item>
       <Descriptions.Item label="Revenue">
-        {cfg?.company_size?.revenue_currency || cfg?.firmographic_details?.revenue_range?.currency || 'USD'}{' '}
-        {cfg?.company_size?.revenue_min?.toLocaleString() || cfg?.firmographic_details?.revenue_range?.min?.toLocaleString() || '?'}
-        &ndash;
-        {cfg?.company_size?.revenue_max?.toLocaleString() || cfg?.firmographic_details?.revenue_range?.max?.toLocaleString() || '?'}
+        {fd?.revenue_range?.currency ?? 'USD'}{' '}
+        {fd?.revenue_range?.min?.toLocaleString() ?? '?'}&ndash;{fd?.revenue_range?.max?.toLocaleString() ?? '?'}
       </Descriptions.Item>
-      <Descriptions.Item label="Tech Signals (Positive)">
-        {cfg?.technology_maturity?.signals?.join(', ') || cfg?.firmographic_details?.technology_maturity?.positive_signals?.join(', ') || '-'}
+      <Descriptions.Item label="Low Cost Center">
+        {fd?.low_cost_center ? 'Yes' : 'No'}
       </Descriptions.Item>
-      <Descriptions.Item label="Tech Signals (Negative)">
-        {cfg?.technology_maturity?.negative_signals?.join(', ') || cfg?.firmographic_details?.technology_maturity?.negative_signals?.join(', ') || '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="Infrastructure" span={2}>
-        {cfg?.infrastructure_readiness?.indicators?.join(', ') || cfg?.firmographic_details?.infrastructure_readiness?.indicators?.join(', ') || '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="Budget Signals" span={2}>
-        {cfg?.budget_signals?.signals?.join(', ') || '-'}
+      <Descriptions.Item label="Target Offerings" span={2}>
+        {offerings.join(', ') || '-'}
+        {offerings.length > 1 && offeringCondition && (
+          <Tag color="purple" style={{ marginLeft: 8 }}>{offeringCondition}</Tag>
+        )}
       </Descriptions.Item>
       <Descriptions.Item label="Urgency Signals" span={2}>
-        {cfg?.urgency_signals?.signals?.join(', ') || '-'}
+        {urgencySignals.join(', ') || '-'}
+        {urgencySignals.length > 1 && urgencyCondition && (
+          <Tag color="orange" style={{ marginLeft: 8 }}>{urgencyCondition}</Tag>
+        )}
+      </Descriptions.Item>
+      <Descriptions.Item label="Budget Signals" span={2}>
+        {budgetSignals.join(', ') || '-'}
+        {budgetSignals.length > 1 && budgetCondition && (
+          <Tag color="green" style={{ marginLeft: 8 }}>{budgetCondition}</Tag>
+        )}
       </Descriptions.Item>
       <Descriptions.Item label="Target Roles" span={2}>
-        {cfg?.leadership_traits?.target_roles?.join(', ') || cfg?.authority_roles?.target_roles?.join(', ') || '-'}
+        {targetRoles.join(', ') || '-'}
       </Descriptions.Item>
     </Descriptions>
   );
@@ -442,13 +453,16 @@ const ICPConfigPanel: React.FC<{ config: Record<string, unknown> }> = ({ config 
 // ---------------------------------------------------------------------------
 
 const FUNNEL_COLORS: Record<string, string> = {
-  company_discovery: '#1677ff',
-  firmographic_filter: '#722ed1',
-  budget_signal: '#52c41a',
-  urgency_signal: '#fa8c16',
-  contact_discovery: '#13c2c2',
-  contact_enrichment: '#eb2f96',
-  scoring: '#f5222d',
+  company_discovery:   '#1677ff',
+  firmographic_filter: '#5C2D8F',
+  firmographic_fit:    '#5C2D8F',
+  budget_signal:       '#1E9B6B',
+  budget_signals:      '#1E9B6B',
+  urgency_signal:      '#E0820A',
+  urgency_signals:     '#E0820A',
+  contact_discovery:   '#0891B2',
+  contact_enrichment:  '#7C3AED',
+  scoring:             '#D93025',
 };
 
 // ---------------------------------------------------------------------------
@@ -856,133 +870,198 @@ const PipelineFunnelTab: React.FC<{ runId: string }> = ({ runId }) => {
   }
 
   const maxTotal = Math.max(...data.stages.map(s => s.total), 1);
+  const firstTotal = data.stages[0]?.total ?? 0;
+  const lastPassed = data.stages[data.stages.length - 1]?.passed ?? 0;
+  const overallRate = firstTotal > 0 ? Math.round((lastPassed / firstTotal) * 100) : 0;
 
   return (
     <div>
-      {/* Header info */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+      {/* ── Summary header ── */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 28, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        {[
+          { label: 'DISCOVERED', value: firstTotal, color: 'var(--g800)', unit: 'companies' },
+          { label: 'QUALIFIED', value: lastPassed, color: 'var(--green)', unit: 'companies' },
+          {
+            label: 'CONVERSION',
+            value: `${overallRate}%`,
+            color: overallRate >= 50 ? 'var(--green)' : overallRate >= 25 ? 'var(--amber)' : 'var(--red)',
+            unit: 'overall',
+          },
+        ].map((stat) => (
+          <div key={stat.label} style={{
+            background: 'var(--g50)', borderRadius: 'var(--radius)',
+            border: '1px solid var(--g200)', padding: '12px 20px', minWidth: 110,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', letterSpacing: '0.06em', marginBottom: 4 }}>
+              {stat.label}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
+            <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 3 }}>{stat.unit}</div>
+          </div>
+        ))}
         {data.signal_mode && (
           <div style={{
-            background: 'var(--g50, #fafafa)', borderRadius: 8,
-            padding: '10px 16px', border: '1px solid var(--g100, #f0f0f0)',
+            background: 'var(--g50)', borderRadius: 'var(--radius)',
+            border: '1px solid var(--g200)', padding: '12px 20px', minWidth: 110,
           }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>Signal Mode</Text>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>
-              <Tag color="purple">{data.signal_mode}</Tag>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', letterSpacing: '0.06em', marginBottom: 4 }}>
+              SIGNAL MODE
             </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--purple)', lineHeight: 1 }}>
+              {data.signal_mode.charAt(0).toUpperCase() + data.signal_mode.slice(1)}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 3 }}>pipeline type</div>
           </div>
         )}
         {data.cached_companies > 0 && (
           <div style={{
-            background: 'var(--g50, #fafafa)', borderRadius: 8,
-            padding: '10px 16px', border: '1px solid var(--g100, #f0f0f0)',
+            background: 'var(--g50)', borderRadius: 'var(--radius)',
+            border: '1px solid var(--g200)', padding: '12px 20px', minWidth: 110,
           }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>Cached Companies</Text>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>
-              <Badge count={data.cached_companies} style={{ backgroundColor: '#1677ff' }} />
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', letterSpacing: '0.06em', marginBottom: 4 }}>
+              CACHED
             </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#1677ff', lineHeight: 1 }}>{data.cached_companies}</div>
+            <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 3 }}>companies</div>
           </div>
         )}
       </div>
 
-      {/* Funnel visualization */}
-      <div style={{ maxWidth: 700 }}>
+      {/* ── Funnel stages ── */}
+      <div style={{ maxWidth: 860 }}>
         {data.stages.map((stage, idx) => {
           const display = getStageDisplay(stage.stage);
-          const barWidth = Math.max((stage.total / maxTotal) * 100, 8);
+          const barWidth = Math.max((stage.total / maxTotal) * 100, 4);
           const passRate = stage.total > 0 ? Math.round((stage.passed / stage.total) * 100) : 0;
-          const funnelColor = FUNNEL_COLORS[stage.stage] || '#8c8c8c';
+          const stageColor = FUNNEL_COLORS[stage.stage] || '#8c8c8c';
           const isExpanded = expandedStage === stage.stage;
+          const nextStage = idx < data.stages.length - 1 ? data.stages[idx + 1] : null;
+          const droppedOff = nextStage ? Math.max(stage.passed - nextStage.total, 0) : 0;
+          const continuedRate = stage.passed > 0 && nextStage
+            ? Math.round((nextStage.total / stage.passed) * 100) : 0;
 
           return (
-            <div key={stage.stage} style={{ marginBottom: 20 }}>
-              {/* Stage header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{
-                    width: 24, height: 24, borderRadius: '50%', background: funnelColor,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#fff', fontWeight: 700, fontSize: 11,
-                  }}>
-                    {idx + 1}
-                  </div>
-                  <Text style={{ fontWeight: 600, fontSize: 13, color: 'var(--g800)' }}>
-                    {display.label}
-                  </Text>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  {stage.avg_score != null && (
-                    <Text style={{ fontSize: 12, color: getScoreColor(stage.avg_score) }}>
-                      Avg Score: {Math.round(stage.avg_score)}
-                    </Text>
-                  )}
-                </div>
-              </div>
-
-              {/* Funnel bar (clickable) */}
+            <div key={stage.stage}>
+              {/* ── Stage row ── */}
               <div
                 onClick={() => handleExpandStage(stage.stage)}
                 style={{
-                  width: `${barWidth}%`, background: funnelColor, borderRadius: 6,
-                  padding: '8px 14px', color: '#fff', fontSize: 12, fontWeight: 600,
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  minHeight: 36, transition: 'width 0.3s ease',
-                  marginLeft: `${((100 - barWidth) / 2)}%`,
-                  cursor: 'pointer',
-                  opacity: isExpanded ? 1 : 0.85,
-                  boxShadow: isExpanded ? `0 2px 8px ${funnelColor}40` : 'none',
+                  display: 'flex', alignItems: 'center', gap: 14,
+                  padding: '12px 14px', borderRadius: 'var(--radius)',
+                  border: `1px solid ${isExpanded ? 'var(--g200)' : 'transparent'}`,
+                  background: isExpanded ? 'var(--g50)' : 'transparent',
+                  cursor: 'pointer', transition: 'all 0.15s',
                 }}
               >
-                <span>{stage.total} companies</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {passRate}% passed
-                  {isExpanded ? <UpOutlined style={{ fontSize: 10 }} /> : <DownOutlined style={{ fontSize: 10 }} />}
-                </span>
+                {/* Step badge */}
+                <div style={{
+                  width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+                  background: stageColor, color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 700, fontSize: 11,
+                }}>
+                  {idx + 1}
+                </div>
+
+                {/* Stage name + bar */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--g800)' }}>{display.label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: stageColor }}>{stage.total}</span>
+                    {stage.avg_score != null && (
+                      <span style={{
+                        fontSize: 11, color: getScoreColor(stage.avg_score),
+                        background: 'var(--g100)', padding: '1px 7px', borderRadius: 10,
+                      }}>
+                        avg {Math.round(stage.avg_score)}
+                      </span>
+                    )}
+                  </div>
+                  {/* Track */}
+                  <div style={{ height: 8, background: 'var(--g100)', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+                    {/* Pass fill */}
+                    <div style={{
+                      position: 'absolute', left: 0, top: 0, height: '100%',
+                      width: `${barWidth * (stage.passed / Math.max(stage.total, 1))}%`,
+                      background: stageColor, borderRadius: 4, transition: 'width 0.4s ease',
+                    }} />
+                    {/* Fail fill */}
+                    {stage.failed > 0 && (
+                      <div style={{
+                        position: 'absolute', top: 0, height: '100%',
+                        left: `${barWidth * (stage.passed / Math.max(stage.total, 1))}%`,
+                        width: `${barWidth * (stage.failed / Math.max(stage.total, 1))}%`,
+                        background: 'var(--red)', opacity: 0.55,
+                      }} />
+                    )}
+                  </div>
+                </div>
+
+                {/* Stat pills */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                    background: '#E6F7F0', color: 'var(--green)',
+                  }}>✓ {stage.passed}</span>
+                  {stage.failed > 0 && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                      background: '#FDECEA', color: 'var(--red)',
+                    }}>✗ {stage.failed}</span>
+                  )}
+                  {stage.promoted > 0 && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                      background: '#EEF2FF', color: '#4F46E5',
+                    }}>↑ {stage.promoted}</span>
+                  )}
+                  {stage.excluded > 0 && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                      background: 'var(--g100)', color: 'var(--g500)',
+                    }}>— {stage.excluded}</span>
+                  )}
+                  <span style={{
+                    fontSize: 12, fontWeight: 700, minWidth: 40, textAlign: 'right',
+                    color: passRate >= 75 ? 'var(--green)' : passRate >= 50 ? 'var(--amber)' : 'var(--red)',
+                  }}>{passRate}%</span>
+                  <span style={{ color: 'var(--g300)', fontSize: 10, marginLeft: 2 }}>
+                    {isExpanded ? <UpOutlined /> : <DownOutlined />}
+                  </span>
+                </div>
               </div>
 
-              {/* Stage metrics */}
-              <div style={{
-                display: 'flex', gap: 16, marginTop: 6, justifyContent: 'center', flexWrap: 'wrap',
-              }}>
-                <Text style={{ fontSize: 11, color: '#52c41a' }}>
-                  Passed: {stage.passed}
-                </Text>
-                <Text style={{ fontSize: 11, color: '#ff4d4f' }}>
-                  Failed: {stage.failed}
-                </Text>
-                {stage.promoted > 0 && (
-                  <Text style={{ fontSize: 11, color: '#1677ff' }}>
-                    Promoted: {stage.promoted}
-                  </Text>
-                )}
-                {stage.excluded > 0 && (
-                  <Text style={{ fontSize: 11, color: '#8c8c8c' }}>
-                    Excluded: {stage.excluded}
-                  </Text>
-                )}
-              </div>
-
-              {/* Expanded stage detail */}
+              {/* ── Expanded company list ── */}
               {isExpanded && (
                 <div style={{
-                  marginTop: 12,
-                  padding: '12px 0',
-                  borderTop: `2px solid ${funnelColor}20`,
+                  margin: '0 14px 4px 56px',
+                  paddingLeft: 16,
+                  borderLeft: `2px solid ${stageColor}30`,
                 }}>
                   {stageCompaniesLoading ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--g400)' }}>
-                      Loading companies...
-                    </div>
+                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--g400)' }}>Loading companies…</div>
                   ) : (
                     <StageCompanyList companies={stageCompanies} stageKey={stage.stage} />
                   )}
                 </div>
               )}
 
-              {/* Connector arrow */}
-              {idx < data.stages.length - 1 && (
-                <div style={{ textAlign: 'center', color: 'var(--g300)', fontSize: 16, margin: '4px 0' }}>
-                  |
+              {/* ── Drop-off connector ── */}
+              {nextStage && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 14px 2px 56px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{ width: 1, height: 6, background: 'var(--g200)' }} />
+                    <span style={{ color: 'var(--g300)', fontSize: 11, lineHeight: 1 }}>↓</span>
+                    <div style={{ width: 1, height: 6, background: 'var(--g200)' }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: 'var(--green)', fontWeight: 600 }}>
+                    {nextStage.total} continued ({continuedRate}%)
+                  </span>
+                  {droppedOff > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--g400)' }}>
+                      · {droppedOff} dropped off
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -1210,206 +1289,6 @@ const RunSummaryPanel: React.FC<{ logs: PipelineLogEntry[]; companies: Company[]
 };
 
 // ---------------------------------------------------------------------------
-// Tool Effectiveness Tab
-// ---------------------------------------------------------------------------
-
-const getEfficiencyColor = (eff: number | null): string => {
-  if (eff == null) return '#d9d9d9';
-  if (eff >= 70) return '#52c41a';
-  if (eff >= 40) return '#faad14';
-  return '#ff4d4f';
-};
-
-const ToolEffectivenessTab: React.FC<{ runId: string }> = ({ runId }) => {
-  const [data, setData] = useState<ToolAttribution[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    getToolAttribution(runId)
-      .then(res => setData(res.data.tools || []))
-      .catch(() => setData([]))
-      .finally(() => setLoading(false));
-  }, [runId]);
-
-  const discoveryTools = useMemo(
-    () => data.filter(t => t.companies_discovered > 0).sort((a, b) => b.companies_discovered - a.companies_discovered),
-    [data],
-  );
-
-  const enrichmentTools = useMemo(
-    () => data.filter(t => t.companies_discovered === 0 && t.total_calls > 0),
-    [data],
-  );
-
-  const columns = [
-    {
-      title: 'Tool',
-      dataIndex: 'tool_name',
-      key: 'tool_name',
-      render: (v: string) => <Text strong>{v}</Text>,
-    },
-    {
-      title: 'Discovered',
-      dataIndex: 'companies_discovered',
-      key: 'discovered',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => a.companies_discovered - b.companies_discovered,
-    },
-    {
-      title: 'Qualified',
-      dataIndex: 'companies_qualified',
-      key: 'qualified',
-      render: (v: number) => <span style={{ color: '#52c41a', fontWeight: 600 }}>{v}</span>,
-    },
-    {
-      title: 'Disqualified',
-      dataIndex: 'companies_disqualified',
-      key: 'disqualified',
-      render: (v: number) => <span style={{ color: '#ff4d4f' }}>{v}</span>,
-    },
-    {
-      title: 'High Fit',
-      dataIndex: 'high_fit_count',
-      key: 'high_fit',
-      render: (v: number) => <Tag color="green">{v}</Tag>,
-    },
-    {
-      title: 'Medium Fit',
-      dataIndex: 'medium_fit_count',
-      key: 'medium_fit',
-      render: (v: number) => <Tag color="gold">{v}</Tag>,
-    },
-    {
-      title: 'Low Fit',
-      dataIndex: 'low_fit_count',
-      key: 'low_fit',
-      render: (v: number) => <Tag color="red">{v}</Tag>,
-    },
-    {
-      title: 'Efficiency',
-      dataIndex: 'efficiency',
-      key: 'efficiency',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.efficiency ?? 0) - (b.efficiency ?? 0),
-      render: (v: number | null) => v != null ? (
-        <Tag color={getEfficiencyColor(v) === '#52c41a' ? 'green' : getEfficiencyColor(v) === '#faad14' ? 'gold' : 'red'}>
-          {v}%
-        </Tag>
-      ) : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Avg Score',
-      dataIndex: 'avg_icp_match_score',
-      key: 'avg_score',
-      sorter: (a: ToolAttribution, b: ToolAttribution) => (a.avg_icp_match_score ?? 0) - (b.avg_icp_match_score ?? 0),
-      render: (v: number | null) => v != null ? (
-        <span style={{ color: getScoreColor(v), fontWeight: 600 }}>{v}</span>
-      ) : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Calls',
-      dataIndex: 'total_calls',
-      key: 'calls',
-    },
-    {
-      title: 'Success Rate',
-      dataIndex: 'success_rate',
-      key: 'success_rate',
-      render: (v: number | null) => v != null ? `${v}%` : <Text type="secondary">-</Text>,
-    },
-    {
-      title: 'Top Companies',
-      dataIndex: 'sample_companies',
-      key: 'samples',
-      width: 200,
-      render: (v: string[]) => v && v.length > 0 ? (
-        <Tooltip title={v.join(', ')}>
-          <Text ellipsis style={{ maxWidth: 180 }}>{v.join(', ')}</Text>
-        </Tooltip>
-      ) : <Text type="secondary">-</Text>,
-    },
-  ];
-
-  const enrichmentColumns = [
-    { title: 'Tool', dataIndex: 'tool_name', key: 'tool_name', render: (v: string) => <Text strong>{v}</Text> },
-    { title: 'Total Calls', dataIndex: 'total_calls', key: 'calls' },
-    {
-      title: 'Successful',
-      dataIndex: 'successful_calls',
-      key: 'success',
-      render: (v: number) => <span style={{ color: '#52c41a' }}>{v}</span>,
-    },
-    {
-      title: 'Failed',
-      dataIndex: 'failed_calls',
-      key: 'failed',
-      render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}</span>,
-    },
-    {
-      title: 'Success Rate',
-      dataIndex: 'success_rate',
-      key: 'success_rate',
-      render: (v: number | null) => v != null ? `${v}%` : '-',
-    },
-  ];
-
-  if (loading) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>Loading tool effectiveness data...</div>;
-  }
-
-  if (discoveryTools.length === 0 && enrichmentTools.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>No tool attribution data available for this run.</div>;
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Stacked bar chart */}
-      {discoveryTools.length > 0 && (
-        <Card title="Company Discovery by Tool" size="small">
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={discoveryTools} margin={{ bottom: 60 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="tool_name" angle={-35} textAnchor="end" height={80} interval={0} tick={{ fontSize: 11 }} />
-              <YAxis />
-              <RechartsTooltip />
-              <Legend />
-              <Bar dataKey="high_fit_count" stackId="a" fill="#52c41a" name="High Fit (70+)" />
-              <Bar dataKey="medium_fit_count" stackId="a" fill="#faad14" name="Medium Fit (40-69)" />
-              <Bar dataKey="low_fit_count" stackId="a" fill="#ff4d4f" name="Low Fit (<40)" />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-
-      {/* Discovery tools table */}
-      {discoveryTools.length > 0 && (
-        <Card title="Discovery Tool Breakdown" size="small">
-          <Table
-            columns={columns}
-            dataSource={discoveryTools}
-            rowKey="tool_name"
-            pagination={false}
-            size="small"
-            scroll={{ x: 1200 }}
-          />
-        </Card>
-      )}
-
-      {/* Enrichment/support tools table */}
-      {enrichmentTools.length > 0 && (
-        <Card title="Enrichment & Support Tools (no direct company attribution)" size="small">
-          <Table
-            columns={enrichmentColumns}
-            dataSource={enrichmentTools}
-            rowKey="tool_name"
-            pagination={false}
-            size="small"
-          />
-        </Card>
-      )}
-    </div>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // Main LeadsPage Component
 // ---------------------------------------------------------------------------
 
@@ -1420,11 +1299,10 @@ const LeadsPage: React.FC = () => {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('final_score');
-  const [expandedRowKeys, setExpandedRowKeys] = useState<(string | number)[]>([]);
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null);
   const [agentLogs, setAgentLogs] = useState<PipelineLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary' | 'tools'>('companies');
+  const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary'>('companies');
   const [promotedFilter, setPromotedFilter] = useState<'promoted' | 'all' | 'skipped'>('promoted');
 
   useEffect(() => {
@@ -1444,14 +1322,6 @@ const LeadsPage: React.FC = () => {
     getLeadCompanies(runId, { sort_by: sortBy })
       .then((res) => {
         setCompanies(res.data);
-        if (res.data.length > 0) {
-          const firstCompany = res.data[0];
-          if (firstCompany.contacts.length > 0) {
-            setExpandedRowKeys([`${firstCompany.id}-${firstCompany.contacts[0].id}`]);
-          } else {
-            setExpandedRowKeys([firstCompany.id]);
-          }
-        }
       })
       .finally(() => setLoading(false));
   }, [runId, sortBy]);
@@ -1471,7 +1341,7 @@ const LeadsPage: React.FC = () => {
     }
   }, [companies, promotedFilter, isMultiStepRun]);
 
-  // Flatten companies + contacts into rows for the main table
+  // One row per company — contacts are shown in the company detail view
   const flatRows: Array<{
     key: string | number;
     serial: number;
@@ -1487,73 +1357,33 @@ const LeadsPage: React.FC = () => {
     urgency_signal_score: number | null | undefined;
     deal_hotness_score: number | null | undefined;
     deal_hotness_tier: string | null | undefined;
-    contact_name: string;
-    designation: string | null;
-    linkedin: string | null;
-    email: string | null;
-    phone: string | null;
+    contacts_count: number;
     qualification: string | null;
     source: string | null;
     company: Company;
-    contact: any;
   }> = [];
   let serial = 1;
   filteredCompanies.forEach((company) => {
-    if (company.contacts.length > 0) {
-      company.contacts.forEach((contact) => {
-        flatRows.push({
-          key: `${company.id}-${contact.id}`,
-          serial: serial++,
-          company_name: company.name,
-          website: company.website,
-          industry: company.industry,
-          country: company.country,
-          revenue_estimate: company.revenue_estimate,
-          asset_value: company.asset_value,
-          final_score: company.final_score,
-          final_rank: company.final_rank,
-          budget_signal_score: company.budget_signal_score,
-          urgency_signal_score: company.urgency_signal_score,
-          deal_hotness_score: company.deal_hotness_score,
-          deal_hotness_tier: company.deal_hotness_tier,
-          contact_name: contact.full_name || '',
-          designation: contact.designation,
-          linkedin: contact.linkedin_url,
-          email: contact.email,
-          phone: contact.phone,
-          qualification: company.qualification,
-          source: contact.source || company.source,
-          company,
-          contact,
-        });
-      });
-    } else {
-      flatRows.push({
-        key: company.id,
-        serial: serial++,
-        company_name: company.name,
-        website: company.website,
-        industry: company.industry,
-        country: company.country,
-        revenue_estimate: company.revenue_estimate,
-        asset_value: company.asset_value,
-        final_score: company.final_score,
-        final_rank: company.final_rank,
-        budget_signal_score: company.budget_signal_score,
-        urgency_signal_score: company.urgency_signal_score,
-        deal_hotness_score: company.deal_hotness_score,
-        deal_hotness_tier: company.deal_hotness_tier,
-        contact_name: '-',
-        designation: '-',
-        linkedin: null,
-        email: null,
-        phone: null,
-        qualification: company.qualification,
-        source: company.source,
-        company,
-        contact: null,
-      });
-    }
+    flatRows.push({
+      key: company.id,
+      serial: serial++,
+      company_name: company.name,
+      website: company.website,
+      industry: company.industry,
+      country: company.country,
+      revenue_estimate: company.revenue_estimate,
+      asset_value: company.asset_value,
+      final_score: company.final_score,
+      final_rank: company.final_rank,
+      budget_signal_score: company.budget_signal_score,
+      urgency_signal_score: company.urgency_signal_score,
+      deal_hotness_score: company.deal_hotness_score,
+      deal_hotness_tier: company.deal_hotness_tier,
+      contacts_count: company.contacts.length,
+      qualification: company.qualification,
+      source: company.source,
+      company,
+    });
   });
 
   // Summary stats
@@ -1667,39 +1497,13 @@ const LeadsPage: React.FC = () => {
       ),
     },
     {
-      title: 'Contact',
-      dataIndex: 'contact_name',
-      width: 140,
-      render: (name: string) => name === '-' ? <Text type="secondary">--</Text> : name,
-    },
-    { title: 'Title', dataIndex: 'designation', width: 150, render: (v: string | null) => v || '-' },
-    {
-      title: 'Email',
-      dataIndex: 'email',
-      width: 180,
-      render: (e: string | null) => e || '-',
-    },
-    {
-      title: 'LinkedIn',
-      dataIndex: 'linkedin',
+      title: 'Contacts',
+      dataIndex: 'contacts_count',
       width: 90,
-      render: (url: string | null) =>
-        url ? (
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: 'var(--purple)', fontSize: 12 }}>
-            Profile
-          </a>
-        ) : '-',
-    },
-    {
-      title: 'Phone',
-      dataIndex: 'phone',
-      width: 120,
-      render: (p: string | null) =>
-        p ? (
-          <a href={`tel:${p}`} style={{ color: 'var(--purple)', fontSize: 12 }}>
-            {p}
-          </a>
-        ) : '-',
+      render: (count: number) =>
+        count > 0
+          ? <Tag color="blue" style={{ fontSize: 12 }}>{count}</Tag>
+          : <Text type="secondary">--</Text>,
     },
   ];
 
@@ -1853,12 +1657,6 @@ const LeadsPage: React.FC = () => {
         >
           Search Summary
         </div>
-        <div
-          className={`tab ${activeTab === 'tools' ? 'active' : ''}`}
-          onClick={() => setActiveTab('tools')}
-        >
-          Tool Effectiveness
-        </div>
       </div>
 
       {/* Tab: Companies */}
@@ -1882,12 +1680,29 @@ const LeadsPage: React.FC = () => {
                 <Select.Option value="qualification">Sort by Category</Select.Option>
                 <Select.Option value="company_name">Sort by Company</Select.Option>
               </Select>
-              <Button icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'csv'))}>
-                CSV
-              </Button>
-              <Button type="primary" icon={<DownloadOutlined />} onClick={() => window.open(getExportUrl(runId!, 'xlsx'))}>
-                Export Excel
-              </Button>
+              <Dropdown.Button
+                icon={<DownOutlined />}
+                onClick={() => window.open(getExportUrl(runId!, 'csv', 'final'))}
+                menu={{
+                  items: [
+                    { key: 'csv-all', label: 'All Companies (CSV)', onClick: () => window.open(getExportUrl(runId!, 'csv', 'all')) },
+                  ],
+                }}
+              >
+                <DownloadOutlined /> CSV
+              </Dropdown.Button>
+              <Dropdown.Button
+                type="primary"
+                icon={<DownOutlined />}
+                onClick={() => window.open(getExportUrl(runId!, 'xlsx', 'final'))}
+                menu={{
+                  items: [
+                    { key: 'xlsx-all', label: 'All Companies (Excel)', onClick: () => window.open(getExportUrl(runId!, 'xlsx', 'all')) },
+                  ],
+                }}
+              >
+                <DownloadOutlined /> Export Excel
+              </Dropdown.Button>
             </Space>
           }
         >
@@ -1896,33 +1711,15 @@ const LeadsPage: React.FC = () => {
             dataSource={flatRows}
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
-            scroll={{ x: 1660 }}
-            expandable={{
-              expandedRowKeys,
-              onExpandedRowsChange: (keys) => {
-                setExpandedRowKeys(keys as (string | number)[]);
-                const lastKey = keys.length > 0 ? String(keys[keys.length - 1]) : null;
-                if (lastKey) {
-                  const companyId = lastKey.includes('-') ? lastKey.split('-')[0] : lastKey;
-                  setCompanyId(companyId);
-                } else {
-                  setCompanyId(null);
-                }
+            scroll={{ x: 1200 }}
+            onRow={(record) => ({
+              onClick: () => {
+                const companyId = record.company.id;
+                setCompanyId(companyId);
+                navigate(`/leads/${runId}/company/${companyId}`, { state: { company: record.company, icp_name: pipelineRun?.icp_name ?? null } });
               },
-              expandedRowRender: (record) => (
-                <div>
-                  {record.company && <CompanyInsightsPanel company={record.company} />}
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, marginTop: 12, color: 'var(--g800)' }}>
-                    Stage Results
-                  </div>
-                  {record.company?.stage_results && record.company.stage_results.length > 0 ? (
-                    <SignalDetailPanel company={record.company} />
-                  ) : (
-                    <Text type="secondary">No stage-level results available for this company.</Text>
-                  )}
-                </div>
-              ),
-            }}
+              style: { cursor: 'pointer' },
+            })}
             size="small"
           />
         </Card>
@@ -1949,7 +1746,11 @@ const LeadsPage: React.FC = () => {
       {activeTab === 'criteria' && (
         <Card title="Search Criteria">
           {pipelineRun?.icp_config ? (
-            <ICPConfigPanel config={pipelineRun.icp_config as unknown as Record<string, unknown>} />
+            <ICPConfigPanel
+              config={pipelineRun.icp_config as unknown as Record<string, unknown>}
+              name={pipelineRun.icp_name ?? null}
+              description={(pipelineRun.icp_config as any)?.description ?? null}
+            />
           ) : (
             <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
               No search criteria available
@@ -1977,17 +1778,6 @@ const LeadsPage: React.FC = () => {
             <RunSummaryPanel logs={agentLogs} companies={companies} />
           )}
         </Card>
-      )}
-
-      {/* Tab: Tool Effectiveness */}
-      {activeTab === 'tools' && (
-        runId ? (
-          <ToolEffectivenessTab runId={runId} />
-        ) : (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--g400)' }}>
-            No pipeline run selected.
-          </div>
-        )
       )}
 
     </div>

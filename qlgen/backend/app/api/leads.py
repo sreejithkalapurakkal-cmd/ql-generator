@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +18,8 @@ from app.models.user import User
 from app.schemas.company import CompanyResponse, CompanyStageResultResponse, ContactResponse
 from app.services.export_service import generate_xlsx, generate_csv
 from app.auth.dependencies import get_current_user, get_user_from_token_param
-from app.auth.authorization import check_resource_access
+from app.auth.authorization import check_resource_access, ownership_filter
+from app.models.icp import ICPConfig
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -79,6 +82,334 @@ async def _get_run_with_access_check(run_id: UUID, db: AsyncSession, user: User)
         raise HTTPException(status_code=404, detail="Pipeline run not found")
     check_resource_access(run.user_id, user)
     return run
+
+
+@router.get("/all/filters")
+async def get_all_company_filters(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return distinct industry and country values for filter dropdowns."""
+    base = (
+        select(Company)
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+    )
+
+    industry_result = await db.execute(
+        select(Company.industry)
+        .where(Company.id.in_(base.with_only_columns(Company.id).subquery().select()))
+        .where(Company.industry.isnot(None))
+        .where(Company.industry != "")
+        .distinct()
+        .order_by(Company.industry)
+    )
+    industries = [r[0] for r in industry_result.all()]
+
+    country_result = await db.execute(
+        select(Company.country)
+        .where(Company.id.in_(base.with_only_columns(Company.id).subquery().select()))
+        .where(Company.country.isnot(None))
+        .where(Company.country != "")
+        .distinct()
+        .order_by(Company.country)
+    )
+    countries = [r[0] for r in country_result.all()]
+
+    return {"industries": industries, "countries": countries}
+
+
+@router.get("/all/companies")
+async def get_all_companies(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    industry_filter: Optional[str] = Query(None),
+    country_filter: Optional[str] = Query(None),
+    qualification_filter: Optional[str] = Query(None),
+    min_final_score: Optional[float] = Query(None),
+    max_final_score: Optional[float] = Query(None),
+    sort_by: Optional[str] = Query("final_score"),
+    sort_order: Optional[str] = Query("desc"),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Cross-run unified company list for the current user."""
+    base_query = (
+        select(Company)
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+        .options(
+            selectinload(Company.contacts),
+            selectinload(Company.stage_results),
+        )
+    )
+
+    if industry_filter:
+        base_query = base_query.where(Company.industry.ilike(f"%{industry_filter}%"))
+    if country_filter:
+        base_query = base_query.where(Company.country.ilike(f"%{country_filter}%"))
+    if qualification_filter:
+        base_query = base_query.where(Company.qualification == qualification_filter)
+    if min_final_score is not None:
+        base_query = base_query.where(Company.final_score >= min_final_score)
+    if max_final_score is not None:
+        base_query = base_query.where(Company.final_score <= max_final_score)
+    if search:
+        base_query = base_query.where(
+            Company.name.ilike(f"%{search}%") | Company.website.ilike(f"%{search}%")
+        )
+
+    sort_column_map = {
+        "final_score": Company.final_score,
+        "icp_match_score": Company.icp_match_score,
+        "company_name": Company.name,
+        "created_at": Company.created_at,
+        "deal_hotness_score": Company.deal_hotness_score,
+        "budget_signal_score": Company.budget_signal_score,
+        "urgency_signal_score": Company.urgency_signal_score,
+    }
+    sort_col = sort_column_map.get(sort_by, Company.final_score)
+
+    if sort_order == "asc":
+        base_query = base_query.order_by(sort_col.asc().nullslast())
+    else:
+        base_query = base_query.order_by(sort_col.desc().nullslast())
+
+    # Total count
+    count_q = (
+        select(func.count(Company.id))
+        .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .where(ownership_filter(PipelineRun.user_id, user))
+        .where(Company.qualification != "disqualified")
+    )
+    if industry_filter:
+        count_q = count_q.where(Company.industry.ilike(f"%{industry_filter}%"))
+    if country_filter:
+        count_q = count_q.where(Company.country.ilike(f"%{country_filter}%"))
+    if qualification_filter:
+        count_q = count_q.where(Company.qualification == qualification_filter)
+    if min_final_score is not None:
+        count_q = count_q.where(Company.final_score >= min_final_score)
+    if max_final_score is not None:
+        count_q = count_q.where(Company.final_score <= max_final_score)
+    if search:
+        count_q = count_q.where(
+            Company.name.ilike(f"%{search}%") | Company.website.ilike(f"%{search}%")
+        )
+
+    total_result = await db.execute(count_q)
+    total_count = total_result.scalar() or 0
+
+    # Paginate
+    offset = (page - 1) * page_size
+    base_query = base_query.offset(offset).limit(page_size)
+
+    result = await db.execute(base_query)
+    companies = result.scalars().unique().all()
+
+    # Enrich with run/ICP metadata
+    run_ids = list(set(c.pipeline_run_id for c in companies))
+    run_map: dict = {}
+    if run_ids:
+        run_result = await db.execute(
+            select(PipelineRun)
+            .where(PipelineRun.id.in_(run_ids))
+            .options(selectinload(PipelineRun.icp_config))
+        )
+        run_map = {r.id: r for r in run_result.scalars().all()}
+
+    response_companies = []
+    for c in companies:
+        resp = _build_company_response(c)
+        resp.pipeline_run_id = c.pipeline_run_id
+        run = run_map.get(c.pipeline_run_id)
+        resp.run_icp_name = run.icp_config.name if run and run.icp_config else None
+        response_companies.append(resp)
+
+    return {
+        "companies": [r.model_dump() for r in response_companies],
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# On-demand single-company discovery endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/{run_id}/companies/{company_id}")
+async def get_single_company(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get a single company with all stage results and contacts."""
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company)
+        .where(Company.id == company_id, Company.pipeline_run_id == run_id)
+        .options(
+            selectinload(Company.contacts),
+            selectinload(Company.stage_results),
+        )
+    )
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    return _build_company_response(company)
+
+
+@router.post("/{run_id}/companies/{company_id}/discover-signals")
+async def discover_company_signals(
+    run_id: UUID,
+    company_id: UUID,
+    signal_type: str = Query("both"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Trigger on-demand signal discovery for a single company."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.pipeline_service import discover_signals_for_company
+
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company).where(Company.id == company_id, Company.pipeline_run_id == run_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Company not found in this pipeline run")
+
+    if signal_type not in ("budget_signals", "urgency_signals", "both"):
+        raise HTTPException(status_code=400, detail="signal_type must be 'budget_signals', 'urgency_signals', or 'both'")
+
+    event_key = f"signal_discovery:{company_id}"
+    from app.services import event_store
+    await event_store.init_run(event_key)
+
+    # Launch as background coroutine
+    asyncio.ensure_future(discover_signals_for_company(company_id, signal_type))
+
+    return {
+        "status": "started",
+        "company_id": str(company_id),
+        "signal_type": signal_type,
+        "stream_key": event_key,
+    }
+
+
+@router.post("/{run_id}/companies/{company_id}/discover-contacts")
+async def discover_company_contacts(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Trigger on-demand contact discovery for a single company."""
+    from app.services.pipeline_service import discover_contacts_for_company
+
+    await _get_run_with_access_check(run_id, db, user)
+
+    result = await db.execute(
+        select(Company).where(Company.id == company_id, Company.pipeline_run_id == run_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Company not found in this pipeline run")
+
+    event_key = f"contact_discovery:{company_id}"
+    from app.services import event_store
+    await event_store.init_run(event_key)
+
+    asyncio.ensure_future(discover_contacts_for_company(company_id))
+
+    return {
+        "status": "started",
+        "company_id": str(company_id),
+        "stream_key": event_key,
+    }
+
+
+@router.get("/{run_id}/companies/{company_id}/discovery-status")
+async def get_discovery_status(
+    run_id: UUID,
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Check whether a signal or contact discovery is currently active for a company."""
+    await _get_run_with_access_check(run_id, db, user)
+
+    from app.services import event_store
+
+    terminal_types = {"completed", "error"}
+    result = {}
+    for kind, key_prefix in [("signals", "signal_discovery"), ("contacts", "contact_discovery")]:
+        event_key = f"{key_prefix}:{company_id}"
+        events = await event_store.get_events(event_key)
+        if not events:
+            result[kind] = "idle"
+        elif any(e.get("type") in terminal_types for e in events):
+            result[kind] = "completed"
+        else:
+            result[kind] = "running"
+    return result
+
+
+@router.get("/{run_id}/companies/{company_id}/discovery-stream")
+async def stream_company_discovery(
+    run_id: UUID,
+    company_id: UUID,
+    type: str = Query("signals"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_user_from_token_param),
+):
+    """SSE stream for single-company signal or contact discovery progress."""
+    run_result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+    run = run_result.scalar_one_or_none()
+    if run:
+        check_resource_access(run.user_id, user)
+
+    if type == "contacts":
+        event_key = f"contact_discovery:{company_id}"
+    else:
+        event_key = f"signal_discovery:{company_id}"
+
+    from app.services import event_store
+    import json as _json
+
+    async def event_generator():
+        last_index = 0
+        no_event_cycles = 0
+        terminal_events = {"completed", "error"}
+        while True:
+            new_events = await event_store.get_events(event_key, last_index)
+            if new_events:
+                no_event_cycles = 0
+                for event in new_events:
+                    event_type = event.get("type", "stage_update")
+                    data = _json.dumps(event)
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+                    last_index += 1
+                    if event_type in terminal_events:
+                        return
+            else:
+                no_event_cycles += 1
+                if no_event_cycles % 25 == 0:
+                    yield ": keepalive\n\n"
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{run_id}/companies", response_model=List[CompanyResponse])
@@ -219,24 +550,26 @@ async def get_stage_summary(
 async def export_leads(
     run_id: UUID,
     format: str = Query("xlsx"),
+    scope: str = Query("all", description="Export scope: 'all' for every company, 'final' for qualified/promoted only"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_user_from_token_param),
 ):
     await _get_run_with_access_check(run_id, db, user)
 
+    suffix = "final" if scope == "final" else "all"
     if format == "csv":
-        buffer = await generate_csv(run_id, db)
+        buffer = await generate_csv(run_id, db, scope=scope)
         return StreamingResponse(
             buffer,
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{run_id}.csv"},
+            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{suffix}_{run_id}.csv"},
         )
     else:
-        buffer = await generate_xlsx(run_id, db)
+        buffer = await generate_xlsx(run_id, db, scope=scope)
         return StreamingResponse(
             buffer,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{run_id}.xlsx"},
+            headers={"Content-Disposition": f"attachment; filename=qlgen_leads_{suffix}_{run_id}.xlsx"},
         )
 
 
@@ -334,15 +667,16 @@ async def get_tool_attribution(
         })
 
     # Get tool call stats from pipeline_logs
+    tool_name_col = PipelineLog.event_data["tool_name"].astext
     log_result = await db.execute(
         select(
-            PipelineLog.event_data["tool_name"].astext.label("tool_name"),
+            tool_name_col.label("tool_name"),
             func.count(PipelineLog.id).label("total_calls"),
             func.count(case((PipelineLog.event_type == "tool_error", PipelineLog.id))).label("error_calls"),
         )
         .where(PipelineLog.pipeline_run_id == run_id)
         .where(PipelineLog.event_type.in_(["tool_result", "tool_error"]))
-        .group_by(PipelineLog.event_data["tool_name"].astext)
+        .group_by(tool_name_col)
     )
 
     call_stats = {}

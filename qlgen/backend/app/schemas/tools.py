@@ -20,6 +20,10 @@ class ToolRegistryResponse(BaseModel):
     rate_limit_info: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # Effectiveness-based priority
+    priority: Optional[int] = 50
+    effectiveness_threshold: Optional[float] = 20.0
+    auto_disabled: Optional[bool] = False
     # Computed metrics from pipeline_logs
     total_calls: int = 0
     successful_calls: int = 0
@@ -35,6 +39,7 @@ class ToolRegistryResponse(BaseModel):
 class ToolRegistryUpdate(BaseModel):
     is_enabled: Optional[bool] = None
     notes: Optional[str] = None
+    effectiveness_threshold: Optional[float] = None
 
 
 class ToolHealthCheckResponse(BaseModel):

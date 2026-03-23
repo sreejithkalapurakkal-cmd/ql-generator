@@ -47,7 +47,7 @@ const WelcomePage: React.FC = () => {
           <div style={{ fontWeight: 500 }}>{user?.name || user?.email}</div>
           <div style={{ fontSize: 12, color: '#888' }}>{user?.email}</div>
           <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
-            {user?.role === 'super_admin' ? 'Super Admin' : 'User'}
+            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'User'}
           </div>
         </div>
       ),
@@ -89,9 +89,11 @@ const WelcomePage: React.FC = () => {
                 { key: '/welcome', icon: '✦', label: 'Home' },
                 { key: '/dashboard', icon: '▦', label: 'Dashboard' },
                 { key: '/icp', icon: '◈', label: 'Saved ICPs' },
-                { key: '/tools', icon: '⚙', label: 'Tools' },
                 ...(user?.role === 'super_admin'
-                  ? [{ key: '/admin/users', icon: '👥', label: 'Users' }]
+                  ? [
+                    { key: '/tools', icon: '⚙', label: 'Tools' },
+                    { key: '/admin/users', icon: '👥', label: 'Users' },
+                  ]
                   : []),
               ].map((item) => (
                 <button

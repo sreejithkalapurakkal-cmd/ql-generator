@@ -22,6 +22,7 @@ function derivePageType(pathname: string): string {
   if (pathname.startsWith('/pipeline/')) return 'PipelinePage';
   if (pathname === '/icp/new' || pathname.match(/^\/icp\/[^/]+\/edit$/)) return 'ICPConfigPage';
   if (pathname === '/icp') return 'ICPListPage';
+  if (pathname === '/all-leads') return 'AllLeadsPage';
   if (pathname === '/dashboard') return 'DashboardPage';
   if (pathname === '/welcome' || pathname === '/') return 'WelcomePage';
   return 'Unknown';
