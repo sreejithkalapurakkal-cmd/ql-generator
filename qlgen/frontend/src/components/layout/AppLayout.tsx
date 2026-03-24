@@ -11,7 +11,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
 
   const menuItems = [
-    { key: '/welcome', icon: '✦', label: 'Home' },
+    { key: '/home', icon: '✦', label: 'Home' },
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
     { key: '/all-leads', icon: '◉', label: 'All Leads' },
     { key: '/icp', icon: '◈', label: 'Saved ICPs' },
@@ -25,9 +25,16 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   // Don't highlight "Saved Searches" when on ICP form pages (new or edit)
   const isICPFormPage = location.pathname === '/icp/new' || location.pathname.match(/^\/icp\/[^/]+\/edit$/);
+
+  // For company detail pages, honour the `from` state set by the navigating page
+  const isCompanyDetailPage = /^\/leads\/[^/]+\/company\/[^/]+$/.test(location.pathname);
+  const fromState: string | undefined = (location.state as any)?.from;
+
   const selectedKey = isICPFormPage
     ? null
-    : menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
+    : isCompanyDetailPage && fromState
+      ? menuItems.find((item) => fromState.startsWith(item.key))?.key ?? '/dashboard'
+      : menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
 
   const handleLogout = async () => {
     await logout();

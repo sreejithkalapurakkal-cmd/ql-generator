@@ -534,6 +534,34 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Scores */}
+      {scoreItems.length > 0 && (
+        <Card size="small" title="Scores">
+          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            {scoreItems.map(s => (
+              <Tooltip key={s.label} title={`${s.label}: ${getScoreLabel(s.value as number)}`}>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>{s.label}</Text>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontWeight: 700, fontSize: 22, color: s.color, lineHeight: 1 }}>{s.formatted?.replace('/100', '')}</span>
+                    <Text type="secondary" style={{ fontSize: 12 }}>/100</Text>
+                  </div>
+                  <Tag color={getScoreTagColor(s.value as number)} style={{ fontSize: 10, marginTop: 4 }}>
+                    {getScoreLabel(s.value as number)}
+                  </Tag>
+                </div>
+              </Tooltip>
+            ))}
+            {company.final_rank != null && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>Rank</Text>
+                <div style={{ fontWeight: 700, fontSize: 22, color: 'var(--purple)', lineHeight: 1 }}>#{company.final_rank}</div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* Company Details */}
       <Card size="small" title="Company Details">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
@@ -614,6 +642,39 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
               </div>
             </div>
           )}
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>Deal Hotness</Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+              {company.deal_hotness_tier ? (
+                <>
+                  <Tag
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: '#fff',
+                      background:
+                        company.deal_hotness_tier === 'hot' ? '#f5222d' :
+                        company.deal_hotness_tier === 'warm' ? '#fa8c16' :
+                        company.deal_hotness_tier === 'cool' ? '#1890ff' : '#8c8c8c',
+                      border: 'none',
+                    }}
+                  >
+                    {company.deal_hotness_tier === 'hot' ? '🔥' :
+                     company.deal_hotness_tier === 'warm' ? '☀️' :
+                     company.deal_hotness_tier === 'cool' ? '🌊' : '❄️'}{' '}
+                    {company.deal_hotness_tier.charAt(0).toUpperCase() + company.deal_hotness_tier.slice(1)}
+                  </Tag>
+                  {company.deal_hotness_score != null && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {Math.round(company.deal_hotness_score)}/100
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 13 }}>—</Text>
+              )}
+            </div>
+          </div>
         </div>
         {company.description && (
           <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--g50)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--g700)', lineHeight: 1.7 }}>
@@ -621,34 +682,6 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
           </div>
         )}
       </Card>
-
-      {/* Scores */}
-      {scoreItems.length > 0 && (
-        <Card size="small" title="Scores">
-          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            {scoreItems.map(s => (
-              <Tooltip key={s.label} title={`${s.label}: ${getScoreLabel(s.value as number)}`}>
-                <div>
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>{s.label}</Text>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontWeight: 700, fontSize: 22, color: s.color, lineHeight: 1 }}>{s.formatted?.replace('/100', '')}</span>
-                    <Text type="secondary" style={{ fontSize: 12 }}>/100</Text>
-                  </div>
-                  <Tag color={getScoreTagColor(s.value as number)} style={{ fontSize: 10, marginTop: 4 }}>
-                    {getScoreLabel(s.value as number)}
-                  </Tag>
-                </div>
-              </Tooltip>
-            ))}
-            {company.final_rank != null && (
-              <div>
-                <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>Rank</Text>
-                <div style={{ fontWeight: 700, fontSize: 22, color: 'var(--purple)', lineHeight: 1 }}>#{company.final_rank}</div>
-              </div>
-            )}
-          </div>
-        </Card>
-      )}
 
       {/* Tech Stack */}
       {techItems.length > 0 && (
@@ -674,6 +707,26 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
           </div>
         </Card>
       )}
+
+      {/* Discovery & Fit */}
+      {(() => {
+        const stageOrder = ['industry_discovery', 'company_discovery', 'firmographic_fit'];
+        const results = [...(company.stage_results || [])]
+          .filter(r =>
+            stageOrder.includes(r.stage) &&
+            !r.user_override &&
+            !r.reasoning?.toLowerCase().includes('firmographic review') &&
+            !r.reasoning?.toLowerCase().includes('deselected')
+          )
+          .sort((a, b) => stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage));
+        if (results.length === 0) return null;
+        return (
+          <StageResultsPanel
+            stageResults={results}
+            emptyText="No discovery or firmographic fit results available."
+          />
+        );
+      })()}
     </div>
   );
 };
@@ -791,8 +844,9 @@ const CompanyDetailPage: React.FC = () => {
     (location.state as any)?.company ?? null
   );
   const icpName: string | null = (location.state as any)?.icp_name ?? null;
+  const backTo: string = (location.state as any)?.from ?? `/leads/${runId}`;
   const [loading, setLoading] = useState(!company);
-  const [activeTab, setActiveTab] = useState<'contacts' | 'overview' | 'discovery_fit' | 'budget_signals' | 'urgency_signals'>('contacts');
+  const [activeTab, setActiveTab] = useState<'contacts' | 'overview' | 'signals'>('overview');
 
   // Discovery state
   const [discoveryRunning, setDiscoveryRunning] = useState(false);
@@ -1059,26 +1113,23 @@ const CompanyDetailPage: React.FC = () => {
   if (!company) {
     return (
       <div style={{ padding: '28px 32px' }}>
-        <Button size="small" onClick={() => navigate(`/leads/${runId}`)} style={{ marginBottom: 16 }}>&larr; Back</Button>
+        <Button size="small" onClick={() => navigate(backTo)} style={{ marginBottom: 16 }}>&larr; Back</Button>
         <div style={{ textAlign: 'center', color: 'var(--g400)', padding: 40 }}>Company not found.</div>
       </div>
     );
   }
 
   // Count stage results per tab for badges
-  const fitStages = new Set(['industry_discovery', 'company_discovery', 'firmographic_fit', 'firmographic_filter']);
-  const fitCount = (company.stage_results || []).filter(r => fitStages.has(r.stage) && !r.user_override).length;
   const budgetResults = (company.stage_results || []).filter(r => r.stage === 'budget_signals' || r.stage === 'budget_signal');
   const budgetCount = budgetResults.reduce((sum, r) => sum + Object.keys(r.evidence || {}).length, 0);
   const urgencyResults = (company.stage_results || []).filter(r => r.stage === 'urgency_signals' || r.stage === 'urgency_signal');
   const urgencyCount = urgencyResults.reduce((sum, r) => sum + Object.keys(r.evidence || {}).length, 0);
 
+  const signalsCount = budgetCount + urgencyCount;
   const tabs: { key: typeof activeTab; label: string }[] = [
-    { key: 'contacts',       label: `Contacts${company.contacts.length ? ` (${company.contacts.length})` : ''}` },
-    { key: 'overview',       label: 'Overview' },
-    { key: 'discovery_fit',  label: `Discovery & Fit${fitCount ? ` (${fitCount})` : ''}` },
-    { key: 'budget_signals', label: `Budget Signals${budgetCount ? ` (${budgetCount})` : ''}` },
-    { key: 'urgency_signals',label: `Urgency Signals${urgencyCount ? ` (${urgencyCount})` : ''}` },
+    { key: 'overview', label: 'Overview' },
+    { key: 'signals',  label: `Budget & Urgency Signals${signalsCount ? ` (${signalsCount})` : ''}` },
+    { key: 'contacts', label: `Contacts${company.contacts.length ? ` (${company.contacts.length})` : ''}` },
   ];
 
   return (
@@ -1089,10 +1140,10 @@ const CompanyDetailPage: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <Button
             size="small"
-            onClick={() => navigate(`/leads/${runId}`)}
+            onClick={() => navigate(backTo)}
             style={{ fontSize: 12 }}
           >
-            &larr; Back to Results
+            {backTo === '/all-leads' ? '← Back to All Leads' : '← Back to Results'}
           </Button>
           <h1 className="page-title" style={{ margin: 0 }}>{company.name}</h1>
           {icpName && (
@@ -1247,49 +1298,51 @@ const CompanyDetailPage: React.FC = () => {
       {/* Tab content */}
       {activeTab === 'contacts' && (
         <div>
-          {(company.contacts?.length ?? 0) > 0 && !discoveryRunning && (
-            <div style={{ marginBottom: 12, textAlign: 'right' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--g800)' }}>Contacts List</span>
+            {(company.contacts?.length ?? 0) > 0 && !discoveryRunning && (
               <Button size="small" type="text" icon={<TeamOutlined />}
                 onClick={() => handleStartDiscovery('contacts')}
                 style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
               >
                 Re-discover Contacts
               </Button>
-            </div>
-          )}
+            )}
+          </div>
           <ContactsTab contacts={company.contacts} />
         </div>
       )}
-      {activeTab === 'overview'        && <OverviewTab company={company} />}
-      {activeTab === 'discovery_fit'   && <DiscoveryFitTab company={company} />}
-      {activeTab === 'budget_signals' && (
-        <div>
-          {company.budget_signal_score != null && !discoveryRunning && (
-            <div style={{ marginBottom: 12, textAlign: 'right' }}>
-              <Button size="small" type="text" icon={<ThunderboltOutlined />}
-                onClick={() => { setSignalTypeChoice('budget_signals'); handleStartDiscovery('signals'); }}
-                style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
-              >
-                Re-discover
-              </Button>
+      {activeTab === 'overview' && <OverviewTab company={company} />}
+      {activeTab === 'signals' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--g800)' }}>Budget Signals</span>
+              {(company.budget_signal_score != null) && !discoveryRunning && (
+                <Button size="small" type="text" icon={<ThunderboltOutlined />}
+                  onClick={() => { setSignalTypeChoice('budget_signals'); handleStartDiscovery('signals'); }}
+                  style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
+                >
+                  Re-discover Budget
+                </Button>
+              )}
             </div>
-          )}
-          <BudgetSignalsTab company={company} />
-        </div>
-      )}
-      {activeTab === 'urgency_signals' && (
-        <div>
-          {company.urgency_signal_score != null && !discoveryRunning && (
-            <div style={{ marginBottom: 12, textAlign: 'right' }}>
-              <Button size="small" type="text" icon={<ThunderboltOutlined />}
-                onClick={() => { setSignalTypeChoice('urgency_signals'); handleStartDiscovery('signals'); }}
-                style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
-              >
-                Re-discover
-              </Button>
+            <BudgetSignalsTab company={company} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--g800)' }}>Urgency Signals</span>
+              {(company.urgency_signal_score != null) && !discoveryRunning && (
+                <Button size="small" type="text" icon={<ThunderboltOutlined />}
+                  onClick={() => { setSignalTypeChoice('urgency_signals'); handleStartDiscovery('signals'); }}
+                  style={{ fontSize: 11, color: 'var(--g400, #bfbfbf)' }}
+                >
+                  Re-discover Urgency
+                </Button>
+              )}
             </div>
-          )}
-          <UrgencySignalsTab company={company} />
+            <UrgencySignalsTab company={company} />
+          </div>
         </div>
       )}
     </div>

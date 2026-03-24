@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Dropdown, type MenuProps } from 'antd';
 import { SearchOutlined, UnorderedListOutlined, GoogleOutlined, UserOutlined, LogoutOutlined, TeamOutlined } from '@ant-design/icons';
@@ -21,7 +21,15 @@ function buildGoogleAuthUrl() {
 
 const WelcomePage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, isLoading, logout } = useAuth();
+
+  // Redirect authenticated users to dashboard — they shouldn't land on the login page
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      navigate('/home', { replace: true });
+    }
+  }, [isAuthenticated, isLoading, navigate]);
+
 
   const handleGoogleLogin = () => {
     window.location.href = buildGoogleAuthUrl();

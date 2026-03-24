@@ -6,7 +6,7 @@
 - super_admin: full access including deletion, user management, tools, and audit logs.
 """
 from fastapi import HTTPException
-from sqlalchemy import true
+from sqlalchemy import or_, true
 
 from app.models.user import User
 
@@ -24,12 +24,13 @@ def is_super_admin(user: User) -> bool:
 def ownership_filter(user_id_column, user: User):
     """Return a SQLAlchemy WHERE clause for data isolation.
 
-    Admin: no-op (returns all rows).
-    Normal user: filters to rows owned by the user.
+    Admin/super_admin: no-op (returns all rows).
+    Normal user: filters to rows owned by the user OR rows with no owner
+    (user_id IS NULL — legacy data created before the user system).
     """
     if is_admin(user):
         return true()
-    return user_id_column == user.id
+    return or_(user_id_column == user.id, user_id_column.is_(None))
 
 
 def check_resource_access(resource_user_id, user: User) -> None:
