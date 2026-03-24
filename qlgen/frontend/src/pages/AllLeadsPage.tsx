@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Card, Table, Tag, Input, Select, Typography, Space } from 'antd';
-import { SearchOutlined, FilterOutlined } from '@ant-design/icons';
+import { Alert, Card, Modal, Table, Tag, Input, Select, Typography, Space, Row, Col } from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getAllCompanies, getAllCompanyFilters, AllCompaniesParams } from '../api/leadsApi';
+import { getPipelineStatsByICP, ICPStat } from '../api/pipelineApi';
 import { Company } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
 
@@ -43,7 +44,9 @@ const AllLeadsPage: React.FC = () => {
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
+  const [totalContacts, setTotalContacts] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [sortBy, setSortBy] = useState('final_score');
@@ -89,9 +92,14 @@ const AllLeadsPage: React.FC = () => {
       const res = await getAllCompanies(params);
       setCompanies(res.data.companies);
       setTotal(res.data.total);
-    } catch {
+      setTotalContacts(res.data.total_contacts ?? 0);
+      setError(null);
+    } catch (err: any) {
       setCompanies([]);
       setTotal(0);
+      setTotalContacts(0);
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to load companies';
+      setError(detail);
     } finally {
       setLoading(false);
     }
@@ -113,6 +121,74 @@ const AllLeadsPage: React.FC = () => {
   }, [companies]);
 
   const activeFilterCount = [industryFilter, countryFilter].filter(Boolean).length;
+
+  // Stats modal (breakdown by ICP)
+  type TileKey = 'companies' | 'contacts';
+  const [statsModalOpen, setStatsModalOpen] = useState(false);
+  const [statsModalTile, setStatsModalTile] = useState<TileKey>('companies');
+  const [icpStats, setIcpStats] = useState<ICPStat[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  const openStatsModal = async (tile: TileKey) => {
+    setStatsModalTile(tile);
+    setStatsModalOpen(true);
+    setStatsLoading(true);
+    try {
+      const res = await getPipelineStatsByICP();
+      setIcpStats(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setIcpStats([]);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const MODAL_TITLES: Record<TileKey, string> = {
+    companies: 'Total Companies — by Search Criteria',
+    contacts: 'Total Contacts — by Search Criteria',
+  };
+
+  const modalColumns = (tile: TileKey) => {
+    const highlightStyle = { fontWeight: 700, fontSize: 15, color: 'var(--purple)' };
+    if (tile === 'companies') {
+      return [
+        { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 120, render: (v: number) => <span style={highlightStyle}>{v}</span> },
+        { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 110 },
+        { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 70 },
+      ];
+    }
+    return [
+      { title: 'Search Criteria', dataIndex: 'icp_name', key: 'icp_name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+      { title: 'Contacts', dataIndex: 'total_contacts', key: 'total_contacts', width: 110, render: (v: number) => <span style={highlightStyle}>{v}</span> },
+      { title: 'Companies', dataIndex: 'total_companies', key: 'total_companies', width: 120 },
+      { title: 'Runs', dataIndex: 'run_count', key: 'run_count', width: 70 },
+    ];
+  };
+
+  const statusColor: Record<string, string> = {
+    pending: 'default', running: 'processing', completed: 'success', failed: 'error',
+    awaiting_review: 'warning', cancelled: 'default',
+  };
+
+  const expandedRowRender = (stat: ICPStat) => {
+    const runCols = [
+      {
+        title: 'Run', dataIndex: 'id', key: 'id', width: 130,
+        render: (id: string, r: ICPStat['runs'][0]) => (
+          <a onClick={() => { setStatsModalOpen(false); navigate(`/leads/${id}`); }}
+            style={{ color: 'var(--purple)', cursor: 'pointer' }}>
+            {r.status === 'completed' ? `${id.substring(0, 8)}…` : id.substring(0, 8)}
+          </a>
+        ),
+      },
+      { title: 'Status', dataIndex: 'status', key: 'status', width: 110, render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s.toUpperCase()}</Tag> },
+      { title: 'Companies', dataIndex: 'companies_found', key: 'companies_found', width: 100 },
+      { title: 'Contacts', dataIndex: 'contacts_found', key: 'contacts_found', width: 100 },
+      { title: 'Started', dataIndex: 'started_at', key: 'started_at', render: (d: string | null) => d ? new Date(d).toLocaleString() : '—' },
+    ];
+    return <Table columns={runCols} dataSource={Array.isArray(stat.runs) ? stat.runs : []} rowKey="id" pagination={false} size="small" />;
+  };
 
   const columns = [
     {
@@ -226,62 +302,69 @@ const AllLeadsPage: React.FC = () => {
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Lead Management</div>
         <h1 className="page-title">All Leads</h1>
-        <p style={{ color: '#8c8c8c', margin: '4px 0 0' }}>
-          Browse all qualified companies across all your pipeline runs
-        </p>
       </div>
 
       {/* Summary */}
-      <div className="summary-bar" style={{ marginBottom: 24 }}>
-        <div className="summary-item">
-          <div className="val">{total}</div>
-          <div className="lbl">Total Companies</div>
-        </div>
-      </div>
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('companies')}>
+            <div className="metric-icon">🏢</div>
+            <div className="label">Total Companies</div>
+            <div className="value">{total}</div>
+          </div>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile metric-tile-clickable" onClick={() => openStatsModal('contacts')}>
+            <div className="metric-icon">👥</div>
+            <div className="label">Total Contacts</div>
+            <div className="value">{totalContacts}</div>
+          </div>
+        </Col>
+      </Row>
 
-      {/* Filter Bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <FilterOutlined style={{ color: '#8c8c8c' }} />
-        <Select
-          placeholder="Industry"
-          value={industryFilter}
-          onChange={setIndustryFilter}
-          allowClear
-          showSearch
-          style={{ width: 200 }}
-          options={availableIndustries.map(i => ({ label: i, value: i }))}
+      {/* Error banner */}
+      {error && (
+        <Alert
+          type="error"
+          message="Failed to load leads"
+          description={error}
+          showIcon
+          style={{ marginBottom: 16 }}
+          closable
+          onClose={() => setError(null)}
         />
-        <Select
-          placeholder="Country"
-          value={countryFilter}
-          onChange={setCountryFilter}
-          allowClear
-          showSearch
-          style={{ width: 180 }}
-          options={availableCountries.map(c => ({ label: c, value: c }))}
-        />
-        {activeFilterCount > 0 && (
-          <a
-            onClick={() => { setIndustryFilter(undefined); setCountryFilter(undefined); }}
-            style={{ fontSize: 13, color: '#5C2D8F' }}
-          >
-            Clear filters ({activeFilterCount})
-          </a>
-        )}
-      </div>
+      )}
 
       {/* Controls + Table */}
       <Card
         title="Companies"
         extra={
-          <Space>
+          <Space wrap>
             <Input
               placeholder="Search company or website..."
               prefix={<SearchOutlined />}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              style={{ width: 260 }}
+              style={{ width: 220 }}
               allowClear
+            />
+            <Select
+              placeholder="Industry"
+              value={industryFilter}
+              onChange={setIndustryFilter}
+              allowClear
+              showSearch
+              style={{ width: 160 }}
+              options={availableIndustries.map(i => ({ label: i, value: i }))}
+            />
+            <Select
+              placeholder="Country"
+              value={countryFilter}
+              onChange={setCountryFilter}
+              allowClear
+              showSearch
+              style={{ width: 140 }}
+              options={availableCountries.map(c => ({ label: c, value: c }))}
             />
             <Select value={sortBy} onChange={setSortBy} style={{ width: 180 }}>
               <Select.Option value="final_score">Sort by Final Score</Select.Option>
@@ -291,6 +374,14 @@ const AllLeadsPage: React.FC = () => {
               <Select.Option value="company_name">Sort by Company</Select.Option>
               <Select.Option value="created_at">Sort by Date</Select.Option>
             </Select>
+            {activeFilterCount > 0 && (
+              <a
+                onClick={() => { setIndustryFilter(undefined); setCountryFilter(undefined); }}
+                style={{ fontSize: 13, color: '#5C2D8F', whiteSpace: 'nowrap' }}
+              >
+                Clear filters ({activeFilterCount})
+              </a>
+            )}
           </Space>
         }
       >
@@ -313,7 +404,7 @@ const AllLeadsPage: React.FC = () => {
               if (record.pipeline_run_id) {
                 setCompanyId(record.id);
                 navigate(`/leads/${record.pipeline_run_id}/company/${record.id}`, {
-                  state: { company: record, icp_name: record.run_icp_name ?? null },
+                  state: { company: record, icp_name: record.run_icp_name ?? null, from: '/all-leads' },
                 });
               }
             },
@@ -322,6 +413,25 @@ const AllLeadsPage: React.FC = () => {
           size="small"
         />
       </Card>
+      {/* Stats Breakdown Modal */}
+      <Modal
+        title={MODAL_TITLES[statsModalTile]}
+        open={statsModalOpen}
+        onCancel={() => setStatsModalOpen(false)}
+        footer={null}
+        width={760}
+      >
+        <Table
+          columns={modalColumns(statsModalTile) as any}
+          dataSource={icpStats}
+          rowKey="icp_id"
+          loading={statsLoading}
+          expandable={{ expandedRowRender }}
+          pagination={false}
+          size="middle"
+          locale={{ emptyText: 'No data found' }}
+        />
+      </Modal>
     </div>
   );
 };

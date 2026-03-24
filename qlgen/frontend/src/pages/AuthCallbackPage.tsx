@@ -38,7 +38,7 @@ const AuthCallbackPage: React.FC = () => {
       const resp = await googleCallback(code, redirectUri);
       const { access_token, user } = resp.data;
       login(access_token, user);
-      navigate('/dashboard', { replace: true });
+      navigate('/home', { replace: true });
     } catch (err: unknown) {
       const detail =
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||

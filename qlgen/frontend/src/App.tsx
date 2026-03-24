@@ -11,6 +11,7 @@ import PipelinePage from './pages/PipelinePage';
 import LeadsPage from './pages/LeadsPage';
 import CompanyDetailPage from './pages/CompanyDetailPage';
 import AllLeadsPage from './pages/AllLeadsPage';
+import HomePage from './pages/HomePage';
 import ToolsPage from './pages/ToolsPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -50,6 +51,7 @@ function App() {
                   <PageContextProvider>
                     <AppLayout>
                       <Routes>
+                        <Route path="/home" element={<HomePage />} />
                         <Route path="/dashboard" element={<DashboardPage />} />
                         <Route path="/icp/new" element={<ICPConfigPage />} />
                         <Route path="/icp/:id/edit" element={<ICPConfigPage />} />

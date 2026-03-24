@@ -11,6 +11,7 @@ from typing import List, Optional
 from app.db.session import get_db
 from app.models.company import Company
 from app.models.company_stage import CompanyStageResult
+from app.models.contact import Contact
 from app.models.pipeline import PipelineRun
 from app.models.pipeline_log import PipelineLog
 from app.models.discovery_intelligence import ToolEffectiveness
@@ -178,30 +179,37 @@ async def get_all_companies(
     else:
         base_query = base_query.order_by(sort_col.desc().nullslast())
 
-    # Total count
-    count_q = (
-        select(func.count(Company.id))
+    # Single combined query: total companies + total contacts via LEFT JOIN
+    stats_q = (
+        select(
+            func.count(Company.id.distinct()).label("company_count"),
+            func.count(Contact.id).label("contact_count"),
+        )
+        .select_from(Company)
         .join(PipelineRun, Company.pipeline_run_id == PipelineRun.id)
+        .outerjoin(Contact, Contact.company_id == Company.id)
         .where(ownership_filter(PipelineRun.user_id, user))
         .where(Company.qualification != "disqualified")
     )
     if industry_filter:
-        count_q = count_q.where(Company.industry.ilike(f"%{industry_filter}%"))
+        stats_q = stats_q.where(Company.industry.ilike(f"%{industry_filter}%"))
     if country_filter:
-        count_q = count_q.where(Company.country.ilike(f"%{country_filter}%"))
+        stats_q = stats_q.where(Company.country.ilike(f"%{country_filter}%"))
     if qualification_filter:
-        count_q = count_q.where(Company.qualification == qualification_filter)
+        stats_q = stats_q.where(Company.qualification == qualification_filter)
     if min_final_score is not None:
-        count_q = count_q.where(Company.final_score >= min_final_score)
+        stats_q = stats_q.where(Company.final_score >= min_final_score)
     if max_final_score is not None:
-        count_q = count_q.where(Company.final_score <= max_final_score)
+        stats_q = stats_q.where(Company.final_score <= max_final_score)
     if search:
-        count_q = count_q.where(
+        stats_q = stats_q.where(
             Company.name.ilike(f"%{search}%") | Company.website.ilike(f"%{search}%")
         )
 
-    total_result = await db.execute(count_q)
-    total_count = total_result.scalar() or 0
+    stats_result = await db.execute(stats_q)
+    stats_row = stats_result.one()
+    total_count = stats_row.company_count or 0
+    total_contacts_count = stats_row.contact_count or 0
 
     # Paginate
     offset = (page - 1) * page_size
@@ -232,6 +240,7 @@ async def get_all_companies(
     return {
         "companies": [r.model_dump() for r in response_companies],
         "total": total_count,
+        "total_contacts": total_contacts_count,
         "page": page,
         "page_size": page_size,
         "total_pages": (total_count + page_size - 1) // page_size,
