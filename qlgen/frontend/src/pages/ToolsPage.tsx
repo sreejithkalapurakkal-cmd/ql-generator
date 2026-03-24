@@ -824,7 +824,7 @@ const ToolsPage: React.FC = () => {
               >
                 {pipelineRuns.map(run => (
                   <Select.Option key={run.id} value={run.id}>
-                    {run.icp_name || 'Unnamed'} — {new Date(run.started_at || run.created_at).toLocaleDateString()} ({run.companies_found} companies)
+                    {run.icp_name || 'Unnamed'} — {run.started_at ? new Date(run.started_at).toLocaleDateString() : 'Pending'} ({run.companies_found} companies)
                   </Select.Option>
                 ))}
               </Select>

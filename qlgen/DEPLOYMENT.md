@@ -8,7 +8,7 @@ Reference for deploying qlGen to AWS (account `879381242481`, region `us-east-1`
 
 | Component | Service | Details |
 |-----------|---------|---------|
-| Backend | ECS Fargate | Cluster: `qlgen-cluster`, Service: `qlgen-backend`, Port 8000 |
+| Backend | ECS Fargate | Cluster: `qlgen-cluster`, Service: `qlgen-backend`, Port 8000, 2 tasks |
 | Frontend | S3 + CloudFront | Bucket: `qlgen-frontend-prod`, Distribution: `EDR89QBSQMRDD` |
 | Database | RDS PostgreSQL 16 | Host: `qlgen-db.c5q8k2oiqu20.us-east-1.rds.amazonaws.com` (private subnet, not directly accessible) |
 | Container Registry | ECR | `879381242481.dkr.ecr.us-east-1.amazonaws.com/qlgen-backend` |
@@ -51,6 +51,12 @@ sudo docker info
 
 **RDS not directly accessible**: The database is in a private subnet. You cannot connect with `psql` from your local machine. Use ECS exec to run commands inside the container. See [Running Commands in Production](#running-commands-in-production-ecs-exec).
 
+**Python 3.11 f-string limitations**: The Docker image uses `python:3.11-slim`. Python 3.11 does **not** allow backslash characters inside f-string expression parts (e.g., `f'{"\"key\": 1" if x else ""}'`). Python 3.12+ relaxed this restriction. If you develop locally with Python 3.12+, code that passes `python -c "import ast; ast.parse(...)"` locally may still produce `SyntaxError: f-string expression part cannot include a backslash` inside the container. **Fix**: Extract the expression containing backslashes to a variable before the f-string. This was encountered during the 2026-03-23 deployment in `agent/prompt_builder.py`.
+
+**ECS exec unreliable in non-TTY environments**: Even with the `echo "" | timeout 30` pattern, ECS exec sessions frequently connect but hang without producing output in CI/scripting contexts. **Workaround for checking migration state**: Use CloudWatch Logs instead of ECS exec. See [Checking Migration State via Logs](#checking-migration-state-via-logs) below.
+
+**Migrations run before app startup — even on crashes**: The `entrypoint.sh` runs `alembic upgrade head` before `uvicorn`. If the container crashes on startup (e.g., a SyntaxError during import), the migrations may have already been applied to the database. This means re-deploying a fixed image will see "no migrations to run" since they were applied by the crashed container. This is normally fine, but be aware during debugging.
+
 ---
 
 ## 1. Update ECS Task Definition (Environment Variables)
@@ -78,7 +84,7 @@ rm /tmp/qlgen-task-def.json
 
 > **Important**: Also update `infra/modules/backend-ecs/main.tf` and `infra/terraform.tfvars` to keep Terraform in sync. If a variable is sensitive, add it to `infra/modules/backend-ecs/variables.tf`, `infra/variables.tf`, and `infra/main.tf` as well.
 
-### Current Environment Variables (Task Def)
+### Current Environment Variables (Task Def, revision 4)
 
 | Category | Variables |
 |----------|-----------|
@@ -88,6 +94,25 @@ rm /tmp/qlgen-task-def.json
 | API Base URLs | `APOLLO_BASE_URL`, `EXA_BASE_URL`, `HUNTER_BASE_URL`, `LUSHA_BASE_URL`, `CLAY_BASE_URL`, `TAVILY_BASE_URL` |
 | Auth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `ALLOWED_EMAIL_DOMAIN`, `JWT_SECRET_KEY`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `JWT_REFRESH_TOKEN_EXPIRE_DAYS`, `COOKIE_SECURE` |
 | Secrets (from Secrets Manager) | `APOLLO_API_KEY`, `EXA_API_KEY`, `HUNTER_API_KEY`, `LUSHA_API_KEY`, `TAVILY_API_KEY`, `CLAY_API_KEY` |
+
+### Variables NOT in Task Def (use defaults)
+
+These are defined in `backend/app/config.py` with sensible defaults. Add them to the task definition only if you need non-default values:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `REDIS_URL` | `redis://localhost:6379/0` | Falls back to in-memory event store if Redis unavailable |
+| `BEDROCK_EMBEDDING_MODEL_ID` | `amazon.titan-embed-text-v2:0` | Default is correct |
+| `EMBEDDING_DIMENSION` | `1024` | Default is correct |
+| `GOOGLE_PLACES_API_KEY` | `""` | Tool returns error message if missing |
+| `SIMFIN_API_KEY` | `""` | Tool returns error message if missing |
+| `FMP_API_KEY` | `""` | Tool returns error message if missing |
+| `NEWS_API_KEY` | `""` | Tool returns error message if missing |
+| `FRED_API_KEY` | `""` | Tool returns error message if missing |
+| `COMPANIES_HOUSE_API_KEY` | `""` | UK Companies House (free) |
+| `GITHUB_TOKEN` | `""` | 5000 req/hr with token, 60 without |
+| `GOOGLE_CSE_API_KEY` / `GOOGLE_CSE_ID` | `""` | Google Custom Search |
+| `PRODUCTHUNT_TOKEN` | `""` | ProductHunt API |
 
 ---
 
@@ -99,7 +124,7 @@ rm /tmp/qlgen-task-def.json
 sudo docker build --platform linux/amd64 -t qlgen-backend /path/to/qlgen/backend
 ```
 
-The image is ~757MB. The Dockerfile runs on `python:3.11-slim` and the entrypoint (`entrypoint.sh`) automatically runs `alembic upgrade head` before starting uvicorn.
+The image is ~772MB. The Dockerfile runs on `python:3.11-slim` and the entrypoint (`entrypoint.sh`) automatically runs `alembic upgrade head` before starting uvicorn with 2 workers.
 
 ### Push to ECR (use crane, NOT docker push)
 
@@ -166,6 +191,36 @@ curl -s https://qlgen.gadgeon.com/api/v1/health
 # Expected: {"status":"healthy","service":"qlGen API"}
 ```
 
+### Checking Migration State via Logs
+
+Since ECS exec is unreliable in non-TTY environments, the most reliable way to verify which migrations ran is through CloudWatch Logs. The `entrypoint.sh` runs `alembic upgrade head` at container startup, and Alembic logs each migration it applies.
+
+```bash
+# Find the newest task's log stream
+aws logs describe-log-streams --log-group-name /ecs/qlgen-backend --region us-east-1 \
+  --order-by LastEventTime --descending --limit 3 \
+  --query 'logStreams[*].logStreamName' --output json
+
+# Read the startup logs (first N events show alembic output)
+aws logs get-log-events --log-group-name /ecs/qlgen-backend \
+  --log-stream-name "ecs/backend/<TASK_ID>" \
+  --region us-east-1 --start-from-head --limit 20 \
+  --query 'events[*].message' --output text
+```
+
+**What to look for:**
+- `INFO  [alembic.runtime.migration] Running upgrade X -> Y, description` — one line per applied migration
+- If only `Context impl PostgresqlImpl. Will assume transactional DDL.` appears with no `Running upgrade` lines, the database was already at HEAD
+- The last `Running upgrade ... -> Z` line tells you the new HEAD revision
+
+You can also search across all log streams for migration activity:
+```bash
+aws logs filter-log-events --log-group-name /ecs/qlgen-backend --region us-east-1 \
+  --filter-pattern "Running upgrade" \
+  --start-time $(date -d '1 hour ago' +%s000) --limit 20 \
+  --query 'events[*].message' --output text
+```
+
 ---
 
 ## 4. Deploy Frontend
@@ -206,7 +261,9 @@ CloudFront invalidation takes 1-2 minutes to propagate globally.
 
 ### TypeScript Build Errors
 
-If `npm run build` fails with TypeScript errors, fix them before deploying. The build runs `tsc -b` (strict type checking) before `vite build`. Common pattern: Ant Design Table's `rowClassName` callback types `record` as `unknown` - cast to `any` if needed.
+If `npm run build` fails with TypeScript errors, fix them before deploying. The build runs `tsc -b` (strict type checking) before `vite build`. Common patterns:
+- Ant Design Table's `rowClassName` callback types `record` as `unknown` — cast to `any` if needed
+- Property access on interfaces that don't define the property — check `types/index.ts` for the correct field names (e.g., `PipelineRun` has `started_at` but not `created_at`)
 
 ---
 
@@ -290,6 +347,7 @@ echo "" | timeout 15 aws ecs execute-command ... \
 | `SessionManagerPlugin is not found` | SSM plugin not installed | Install the deb package (see Prerequisites) |
 | `TargetNotConnectedException` | SSM agent can't connect (missing IAM policy or stale task) | Add ssmmessages policy to task role, then force new deployment |
 | Session connects but no output | Output buffered / no stdin | Use `echo "" |` pipe + `timeout` + `python -u` |
+| Session connects, hangs, timeout exits | SSM session established but command output never returned | This happens intermittently even with all workarounds applied. Use CloudWatch Logs instead (see [Checking Migration State via Logs](#checking-migration-state-via-logs)). For interactive debugging, try from a real terminal with `--interactive`. |
 | `InvalidParameterException` | ECS exec not enabled on service | Re-deploy with `--enable-execute-command` |
 
 ---
@@ -446,3 +504,82 @@ aws ecs update-service --cluster qlgen-cluster --service qlgen-backend \
 There's no built-in rollback for S3. Options:
 - Rebuild from the previous git commit and re-deploy
 - Restore from S3 versioning if enabled on the bucket
+
+---
+
+## Current Deployment State
+
+Last updated: 2026-03-23
+
+| Item | Value |
+|------|-------|
+| ECS Task Definition | `qlgen-backend:4` |
+| ECS Desired Count | 2 |
+| Alembic Revision (HEAD) | `k1l2m3n4o5p6` (add tool priority and auto-disable) |
+| Docker Base Image | `python:3.11-slim` |
+| Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Git Branch Deployed | `development` |
+
+### Database Tables (16 migrations applied)
+
+```
+alembic_version          companies                 company_knowledge_base
+company_stage_results    contacts                  chat_messages
+chat_sessions            discovery_queries         icp_configs
+pipeline_logs            pipeline_runs             tool_effectiveness
+tool_registry            users                     audit_logs
+```
+
+`bant_scores` was dropped by migration `a1b2c3d4e5f6` (replaced by `company_stage_results`).
+
+### Migration Chain
+
+```
+ad6870bc307f  Initial schema with pgvector
+526a00746466  Add pipeline_logs and BANT sources
+c3a1f8b9d2e4  Add co-pilot chat tables and embeddings
+d4b2e9f1a3c7  Add promoted column to companies
+e5f3a7b2c8d1  Add tool_registry table
+f6a4b8c3d9e2  Add disqualification_stage column
+a1b2c3d4e5f6  Five Stage Pipeline v2 (drops bant_scores, creates company_stage_results)
+b7c5d9e2f4a8  Add rate_limit_info to tool_registry
+c0b6b9bba9b6  Add users table + user_id FKs
+704565025b67  Add asset_value to companies
+g1a2b3c4d5e6  Add audit_logs table
+g7h8i9j0k1l2  Add discovery_queries + tool_effectiveness tables
+h8i9j0k1l2m3  Add recency/hotness columns to companies
+i9j0k1l2m3n4  Add company_knowledge_base table
+j0k1l2m3n4o5  Add carried_forward column to companies
+k1l2m3n4o5p6  Add tool priority and auto-disable (HEAD)
+```
+
+---
+
+## Deployment History
+
+### 2026-03-23 — Full stack redeployment
+
+**Changes deployed**: v2 pipeline code updates, Deal Hotness UI removal, Company Detail page tab reorder, import cleanup in pipeline_service.py, ToolsPage TypeScript fix, prompt_builder.py Python 3.11 syntax fix.
+
+**Migrations applied** (6 new, from `704565025b67` to `k1l2m3n4o5p6`):
+- `g1a2b3c4d5e6` — audit_logs table
+- `g7h8i9j0k1l2` — discovery_queries + tool_effectiveness tables
+- `h8i9j0k1l2m3` — recency/hotness columns on companies
+- `i9j0k1l2m3n4` — company_knowledge_base table
+- `j0k1l2m3n4o5` — carried_forward column on companies
+- `k1l2m3n4o5p6` — tool priority/auto-disable on tool_registry
+
+**Issues encountered and fixed during deployment**:
+1. `SyntaxError` in `agent/prompt_builder.py:758` — f-string with backslash escapes (`\"`) incompatible with Python 3.11. Fixed by extracting expressions to variables before the f-string.
+2. TypeScript error in `pages/ToolsPage.tsx:827` — `created_at` property referenced on `PipelineRun` interface which doesn't have it. Fixed by using `started_at` with a fallback string.
+3. First deployment attempt crashed on startup (workers failed to import `prompt_builder.py`). Migrations applied successfully before the crash. Second deployment with the fix started cleanly.
+
+**Task definition**: No changes (stayed at revision 4). No new env vars needed.
+
+### 2026-03-16 — Backend deployment (auth + tools)
+
+Previous deployment that brought the system to revision `704565025b67`. Added users table, auth, asset_value column.
+
+### 2026-03-03 — Initial production deployment
+
+First deployment via Terraform. Created all AWS infrastructure. Applied initial 2 migrations (`ad6870bc307f`, `526a00746466`).

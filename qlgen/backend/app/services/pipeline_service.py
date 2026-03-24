@@ -545,7 +545,7 @@ def apply_signal_result(db, company, signal_json, signal_type):
     Parses agent JSON, sets budget/urgency scores, creates CompanyStageResult
     entries with evidence, and computes recency-adjusted scores.
     """
-    from app.agent.lead_gen_agent import _normalize_score_to_100, compute_recency_adjusted_scores
+    from app.agent.lead_gen_agent import compute_recency_adjusted_scores
 
     if signal_type in ("budget_signals", "both"):
         budget_score = signal_json.get("budget_signal_score") or signal_json.get("composite_score", 0)
@@ -2286,17 +2286,15 @@ async def discover_signals_for_company(
     Reuses the same agent, prompt, and scoring logic as the batch pipeline
     but operates independently on one company with its own SSE event stream.
     """
-    from app.agent.lead_gen_agent import (
-        compute_deal_hotness,
-        compute_final_score,
-        _normalize_score_to_100,
-    )
-    from sqlalchemy import delete as sa_delete
-    from sqlalchemy.orm import selectinload
-
     event_key = f"signal_discovery:{company_id}"
 
     try:
+        from app.agent.lead_gen_agent import (
+            compute_deal_hotness,
+            compute_final_score,
+        )
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy.orm import selectinload
         async with async_session() as db:
             # Load company
             result = await db.execute(

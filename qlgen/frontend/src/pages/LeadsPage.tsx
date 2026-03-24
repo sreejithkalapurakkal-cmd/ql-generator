@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   DownloadOutlined, ToolOutlined, DeleteOutlined, PlayCircleOutlined,
-  ThunderboltOutlined, DatabaseOutlined, FireOutlined,
+  ThunderboltOutlined, DatabaseOutlined,
   DownOutlined, UpOutlined, LinkOutlined, CheckCircleOutlined,
   CloseCircleOutlined, ArrowUpOutlined, MinusOutlined,
 } from '@ant-design/icons';
@@ -81,35 +81,12 @@ const SignalScoreBar: React.FC<{ score: number | null | undefined; label: string
   );
 };
 
-// ---------------------------------------------------------------------------
-// Deal Hotness helpers
-// ---------------------------------------------------------------------------
-
-const HOTNESS_CONFIG: Record<string, { color: string; label: string; tagColor: string }> = {
-  hot: { color: '#f5222d', label: 'Hot', tagColor: 'red' },
-  warm: { color: '#fa8c16', label: 'Warm', tagColor: 'orange' },
-  cool: { color: '#1677ff', label: 'Cool', tagColor: 'blue' },
-  cold: { color: '#8c8c8c', label: 'Cold', tagColor: 'default' },
-};
-
 const getRecencyBadge = (months: number | null | undefined): { label: string; color: string } => {
   if (months == null) return { label: '', color: 'default' };
   if (months < 1) return { label: 'Fresh', color: 'green' };
   if (months <= 3) return { label: 'Recent', color: 'blue' };
   if (months <= 6) return { label: 'Aging', color: 'orange' };
   return { label: 'Stale', color: 'red' };
-};
-
-const HotnessIndicator: React.FC<{ tier: string | null | undefined; score: number | null | undefined }> = ({ tier, score }) => {
-  if (!tier || score == null) return <Text type="secondary" style={{ fontSize: 11 }}>--</Text>;
-  const cfg = HOTNESS_CONFIG[tier] || HOTNESS_CONFIG.cold;
-  return (
-    <Tooltip title={`Deal Hotness: ${Math.round(score)}/100 (${cfg.label})`}>
-      <Tag color={cfg.tagColor} style={{ fontWeight: 600, fontSize: 11 }} icon={tier === 'hot' ? <FireOutlined /> : undefined}>
-        {cfg.label} {Math.round(score)}
-      </Tag>
-    </Tooltip>
-  );
 };
 
 // ---------------------------------------------------------------------------
@@ -316,18 +293,6 @@ const CompanyInsightsPanel: React.FC<{ company: Company }> = ({ company }) => {
             <Text type="secondary" style={{ fontSize: 11 }}>Urgency Signal</Text>
             <div style={{ fontWeight: 700, fontSize: 16, color: getScoreColor(company.urgency_signal_score) }}>
               {Math.round(company.urgency_signal_score)}/100
-            </div>
-          </div>
-        )}
-        {company.deal_hotness_score != null && (
-          <div>
-            <Text type="secondary" style={{ fontSize: 11 }}>Deal Hotness</Text>
-            <div style={{ fontWeight: 700, fontSize: 16, color: HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.color || '#8c8c8c' }}>
-              {Math.round(company.deal_hotness_score)}/100
-              <Tag color={HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.tagColor || 'default'}
-                style={{ fontSize: 10, marginLeft: 6 }}>
-                {HOTNESS_CONFIG[company.deal_hotness_tier || 'cold']?.label || 'Cold'}
-              </Tag>
             </div>
           </div>
         )}
@@ -1355,8 +1320,6 @@ const LeadsPage: React.FC = () => {
     final_rank: number | null | undefined;
     budget_signal_score: number | null | undefined;
     urgency_signal_score: number | null | undefined;
-    deal_hotness_score: number | null | undefined;
-    deal_hotness_tier: string | null | undefined;
     contacts_count: number;
     qualification: string | null;
     source: string | null;
@@ -1377,8 +1340,6 @@ const LeadsPage: React.FC = () => {
       final_rank: company.final_rank,
       budget_signal_score: company.budget_signal_score,
       urgency_signal_score: company.urgency_signal_score,
-      deal_hotness_score: company.deal_hotness_score,
-      deal_hotness_tier: company.deal_hotness_tier,
       contacts_count: company.contacts.length,
       qualification: company.qualification,
       source: company.source,
@@ -1402,9 +1363,6 @@ const LeadsPage: React.FC = () => {
   }).length;
 
   const cachedCount = filteredCompanies.filter(c => c.cached_from_run_id).length;
-
-  const hotLeadCount = filteredCompanies.filter(c => c.deal_hotness_tier === 'hot').length;
-  const warmLeadCount = filteredCompanies.filter(c => c.deal_hotness_tier === 'warm').length;
 
   // Multi-step summary counts
   const promotedCount = isMultiStepRun ? companies.filter((c) => c.promoted === true).length : 0;
@@ -1486,14 +1444,6 @@ const LeadsPage: React.FC = () => {
       width: 85,
       render: (score: number | null | undefined) => (
         <SignalScoreBar score={score} label="Urgency Signal" />
-      ),
-    },
-    {
-      title: 'Hotness',
-      dataIndex: 'deal_hotness_tier',
-      width: 100,
-      render: (_tier: string | null | undefined, record: any) => (
-        <HotnessIndicator tier={record.deal_hotness_tier} score={record.deal_hotness_score} />
       ),
     },
     {
@@ -1611,16 +1561,6 @@ const LeadsPage: React.FC = () => {
           </div>
           <div className="lbl">High / Med / Low</div>
         </div>
-        {(hotLeadCount > 0 || warmLeadCount > 0) && (
-          <div className="summary-item">
-            <div className="val" style={{ fontSize: 15, fontWeight: 600 }}>
-              <span style={{ color: '#f5222d' }}>{hotLeadCount}</span>
-              {' / '}
-              <span style={{ color: '#fa8c16' }}>{warmLeadCount}</span>
-            </div>
-            <div className="lbl">Hot / Warm Leads</div>
-          </div>
-        )}
         {cachedCount > 0 && (
           <div className="summary-item">
             <div className="val">
@@ -1676,7 +1616,6 @@ const LeadsPage: React.FC = () => {
                 <Select.Option value="final_score">Sort by Final Score</Select.Option>
                 <Select.Option value="budget_signal_score">Sort by Budget Score</Select.Option>
                 <Select.Option value="urgency_signal_score">Sort by Urgency Score</Select.Option>
-                <Select.Option value="deal_hotness_score">Sort by Deal Hotness</Select.Option>
                 <Select.Option value="qualification">Sort by Category</Select.Option>
                 <Select.Option value="company_name">Sort by Company</Select.Option>
               </Select>

@@ -26,13 +26,6 @@ const formatCurrency = (val: number | null | undefined) => {
   return `$${val.toLocaleString()}`;
 };
 
-const hotnessTierConfig: Record<string, { color: string; label: string }> = {
-  hot: { color: '#f5222d', label: 'Hot' },
-  warm: { color: '#fa8c16', label: 'Warm' },
-  cool: { color: '#1890ff', label: 'Cool' },
-  cold: { color: '#8c8c8c', label: 'Cold' },
-};
-
 // ---------------------------------------------------------------------------
 // AllLeadsPage Component
 // ---------------------------------------------------------------------------
@@ -188,17 +181,6 @@ const AllLeadsPage: React.FC = () => {
       },
     },
     {
-      title: 'Hotness',
-      dataIndex: 'deal_hotness_tier',
-      key: 'hotness',
-      width: 90,
-      render: (tier: string | null | undefined) => {
-        if (!tier) return <Text type="secondary">-</Text>;
-        const cfg = hotnessTierConfig[tier] || { color: '#8c8c8c', label: tier };
-        return <Tag color={cfg.color} style={{ margin: 0 }}>{cfg.label}</Tag>;
-      },
-    },
-    {
       title: 'Contacts',
       key: 'contacts',
       width: 85,
@@ -287,7 +269,6 @@ const AllLeadsPage: React.FC = () => {
               <Select.Option value="final_score">Sort by Final Score</Select.Option>
               <Select.Option value="budget_signal_score">Sort by Budget Score</Select.Option>
               <Select.Option value="urgency_signal_score">Sort by Urgency Score</Select.Option>
-              <Select.Option value="deal_hotness_score">Sort by Deal Hotness</Select.Option>
               <Select.Option value="company_name">Sort by Company</Select.Option>
               <Select.Option value="created_at">Sort by Date</Select.Option>
             </Select>

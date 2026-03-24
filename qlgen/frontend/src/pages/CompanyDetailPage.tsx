@@ -792,7 +792,7 @@ const CompanyDetailPage: React.FC = () => {
   );
   const icpName: string | null = (location.state as any)?.icp_name ?? null;
   const [loading, setLoading] = useState(!company);
-  const [activeTab, setActiveTab] = useState<'contacts' | 'overview' | 'discovery_fit' | 'budget_signals' | 'urgency_signals'>('contacts');
+  const [activeTab, setActiveTab] = useState<'contacts' | 'overview' | 'discovery_fit' | 'budget_signals' | 'urgency_signals'>('overview');
 
   // Discovery state
   const [discoveryRunning, setDiscoveryRunning] = useState(false);
@@ -1074,8 +1074,8 @@ const CompanyDetailPage: React.FC = () => {
   const urgencyCount = urgencyResults.reduce((sum, r) => sum + Object.keys(r.evidence || {}).length, 0);
 
   const tabs: { key: typeof activeTab; label: string }[] = [
-    { key: 'contacts',       label: `Contacts${company.contacts.length ? ` (${company.contacts.length})` : ''}` },
     { key: 'overview',       label: 'Overview' },
+    { key: 'contacts',       label: `Contacts${company.contacts.length ? ` (${company.contacts.length})` : ''}` },
     { key: 'discovery_fit',  label: `Discovery & Fit${fitCount ? ` (${fitCount})` : ''}` },
     { key: 'budget_signals', label: `Budget Signals${budgetCount ? ` (${budgetCount})` : ''}` },
     { key: 'urgency_signals',label: `Urgency Signals${urgencyCount ? ` (${urgencyCount})` : ''}` },

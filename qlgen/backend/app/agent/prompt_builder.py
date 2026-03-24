@@ -703,7 +703,11 @@ industry funding rounds, major industry events) that apply to ALL companies.
 Then research company-SPECIFIC signals for each company individually.
 This saves time and provides richer context."""
 
-    return f"""Research {"budget and urgency" if signal_type == "both" else signal_type.replace("_", " ")} signals for {len(companies)} companies in a BATCH.
+    signal_label = "budget and urgency" if signal_type == "both" else signal_type.replace("_", " ")
+    score_line = '"budget_signal_score": 72,' if signal_type != "urgency_signals" else '"urgency_signal_score": 72,'
+    urgency_line = '"urgency_signal_score": 65,' if signal_type == "both" else ""
+
+    return f"""Research {signal_label} signals for {len(companies)} companies in a BATCH.
 
 COMPANIES:
 {companies_block}
@@ -727,8 +731,8 @@ OUTPUT FORMAT (all scores MUST be on 0-100 integer scale, NOT 0-10):
     {{
       "name": "Company Name",
       "website": "domain.com",
-      {"\"budget_signal_score\": 72," if signal_type != "urgency_signals" else "\"urgency_signal_score\": 72,"}
-      {'"urgency_signal_score": 65,' if signal_type == "both" else ""}
+      {score_line}
+      {urgency_line}
       "signals": [
         {{
           "type": "budget",
