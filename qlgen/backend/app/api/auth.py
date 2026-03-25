@@ -140,6 +140,50 @@ async def google_callback(
     )
 
 
+@router.post("/dev-token", response_model=TokenResponse)
+async def dev_token(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue tokens for a user by email. Only available when ALLOW_DEV_AUTH=true."""
+    if not settings.ALLOW_DEV_AUTH:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    body = await request.json()
+    email = body.get("email", "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email is required")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(user)
+
+    user_id_str = str(user.id)
+    access_token = create_access_token(user_id_str)
+    refresh_token = create_refresh_token(user_id_str)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="none" if settings.COOKIE_SECURE else "lax",
+        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/api/v1/auth",
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse.model_validate(user),
+    )
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     """Refresh access token using refresh token from httpOnly cookie."""

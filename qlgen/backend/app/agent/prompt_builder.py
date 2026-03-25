@@ -4,7 +4,7 @@ Each builder constructs the user-facing prompt for one agent invocation,
 injecting ICP criteria, cached data, and stage-specific context.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.tools.query_strategy import get_industry_queries, get_strategy_summary, expand_industry_keywords
 
@@ -362,7 +362,8 @@ STEP 4 — API-BASED DISCOVERY:
 - apollo_company_search: Use for single-page targeted lookups (per_page=100).
 {apollo_guidance}
 - exa_search: Run 8-12 different query angles. Use category="company" to filter for company sites.
-  Vary keywords, regions, adjacent terms. num_results defaults to 30 per call.
+  Vary keywords, regions, adjacent terms. Use num_results=30 for discovery and search_type="neural"
+  for best semantic matching.
 {exa_guidance}
 - exa_find_similar: After finding 3-5 high-quality company matches, use their website URLs to
   discover similar companies. This is very effective for finding companies you wouldn't find by keyword.
@@ -506,8 +507,13 @@ INSTRUCTIONS
 If EXISTING DATA is provided for a company (from prior runs), VERIFY it is still current.
 If data is <30 days old, trust it. If >90 days old, re-verify with tools.
 
-Use tools (apollo_company_search, scrape_webpage, exa_search, duckduckgo_search) to fill
-gaps in company data — especially missing employee counts and revenue estimates.
+Use tools to fill gaps in company data — especially missing employee counts and revenue estimates.
+TOOL PRIORITY:
+  1. apollo_org_enrich_bulk: Batch enrich up to 10 company domains at once (PREFERRED).
+     Returns structured revenue, employee count, tech stack, funding data from Apollo's database.
+  2. apollo_org_enrich: Individual enrichment for remaining companies.
+  3. apollo_company_search: Search-based fallback if enrichment returns no data.
+  4. scrape_webpage / exa_search / duckduckgo_search: Web-based fallback.
 
 For EACH company output (score MUST be on 0-100 integer scale, NOT 0-10):
 ```json
@@ -590,6 +596,8 @@ Also look for ADDITIONAL urgency signals beyond what the user listed.""")
 
     signal_sections = "\n\n".join(sections)
 
+    six_months_ago = (datetime.now(timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00.000Z")
+
     return f"""Research {"budget and urgency" if signal_type == "both" else signal_type.replace("_", " ")} signals for this company.
 
 COMPANY: {name}
@@ -604,6 +612,14 @@ DESCRIPTION: {description[:300]}
 
 Use AT LEAST 3-4 different tools per company. Depth is critical — runtime doesn't matter.
 If existing data is older than 90 days, refresh it with new searches.
+
+EXA DATE FILTERING: When using exa_search for signal research, ALWAYS use date filtering:
+  start_published_date="{six_months_ago}"
+  This ensures you find only RECENT evidence from the last 6 months.
+  Use include_text for precision, e.g. include_text=["funding"] for budget signals.
+
+APOLLO NEWS: Use apollo_news_search for company-specific news — especially useful for
+private companies not covered by SEC/SimFin financial tools.
 
 RECENCY PRIORITY: Always include evidence_date (YYYY-MM-DD) and recency_months for each signal.
 Recent evidence (<3 months) is weighted much more heavily than old evidence (>6 months).
@@ -707,6 +723,8 @@ This saves time and provides richer context."""
     score_line = '"budget_signal_score": 72,' if signal_type != "urgency_signals" else '"urgency_signal_score": 72,'
     urgency_line = '"urgency_signal_score": 65,' if signal_type == "both" else ""
 
+    six_months_ago = (datetime.now(timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00.000Z")
+
     return f"""Research {signal_label} signals for {len(companies)} companies in a BATCH.
 
 COMPANIES:
@@ -719,6 +737,12 @@ INSTRUCTIONS:
 1. Research SHARED industry signals first (1-2 tool calls covering all companies)
 2. Then research per-company signals (2-3 tool calls per company)
 3. Use at least 2 different tools per company
+
+EXA DATE FILTERING: When using exa_search, ALWAYS use date filtering:
+  start_published_date="{six_months_ago}" to find only RECENT evidence.
+  Use include_text for precision, e.g. include_text=["funding"] for budget signals.
+
+APOLLO NEWS: Use apollo_news_search for company-specific news — works for private companies.
 
 RECENCY PRIORITY: Always include evidence_date (YYYY-MM-DD) and recency_months for each signal.
 Recent evidence (<3 months) is weighted much more heavily than old evidence (>6 months).
@@ -826,28 +850,41 @@ STEP 2: TOOL-BASED DISCOVERY & VERIFICATION
 ═══════════════════════════════════════════
 Use ALL of these methods. Do NOT skip any:
 
-A. PAID DATABASE (highest quality):
+A. PAID DATABASE — FIND CONTACTS:
    → apollo_people_search: Search with target roles [{', '.join(target_roles)}]. Paginate (page 1,2,3).
+     NOTE: This finds names/titles but may NOT return emails or phones.
 
-B. MULTI-METHOD EXECUTIVE FINDER:
+B. PAID DATABASE — ENRICH CONTACTS (CRITICAL):
+   → apollo_people_enrich_bulk: AFTER finding contacts, batch enrich up to 10 at once (PREFERRED).
+     Pass: [{{"first_name": "Jane", "last_name": "Doe", "organization_name": "{name}"}}]
+     Or use linkedin_url for higher match rate: [{{"linkedin_url": "https://linkedin.com/in/..."}}]
+   → apollo_people_enrich: Individual enrichment for high-priority contacts.
+   This step is what actually returns verified emails and phone numbers.
+
+C. MULTI-METHOD EXECUTIVE FINDER:
    → find_company_executives: Uses 7 independent methods. Always call this.
    → research_company: Gets contacts + financial/news data in one call.
 
-C. LINKEDIN INTELLIGENCE:
+D. LINKEDIN INTELLIGENCE:
    → find_linkedin_profiles: Batch LinkedIn search for target roles.
    → For contacts from Step 1 (training knowledge), use duckduckgo_search:
      "[Name] {name} LinkedIn" to verify they're still at the company.
 
-D. WEBSITE SCRAPING:
+E. WEBSITE SCRAPING:
    → scrape_team_page: Scan /team, /about, /leadership pages.
    → scrape_webpage: Read specific pages (e.g., press releases naming executives).
 
-E. JOB POSTING INTELLIGENCE:
+F. JOB POSTING INTELLIGENCE:
    → search_job_postings: Check open positions for org structure signals.
 
-F. NEWS & PRESS:
+G. NEWS & PRESS:
    → tavily_search: "{name} CEO interview" or "{name} executive appointment"
    → exa_search: Search for conference speakers, thought leaders at this company.
+
+H. PEOPLE SEARCH (Exa):
+   → exa_search: Use category="people" to search 1B+ indexed profiles.
+     Query: "{target_roles[0]} at {name}" or "{target_roles[0]} {domain}"
+     Finds executives mentioned across the web not in Apollo's database.
 
 ═══════════════════════════════════════════
 STEP 3: CROSS-REFERENCE & CONFIDENCE SCORING

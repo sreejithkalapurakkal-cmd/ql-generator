@@ -22,6 +22,8 @@ from app.services.pipeline_service import (
     resume_after_firmographic,
     resume_after_first_signal,
     resume_after_signals,
+    MAX_CONCURRENT_PIPELINES,
+    _pipeline_semaphore,
 )
 from app.services import event_store
 from app.auth.dependencies import get_current_user, get_user_from_token_param
@@ -64,6 +66,13 @@ async def start_pipeline(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Check pipeline capacity before creating the run
+    if _pipeline_semaphore._value <= 0:  # noqa: SLF001
+        raise HTTPException(
+            status_code=429,
+            detail=f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later.",
+        )
+
     result = await db.execute(select(ICPConfig).where(ICPConfig.id == request.icp_config_id))
     icp = result.scalar_one_or_none()
     if not icp:

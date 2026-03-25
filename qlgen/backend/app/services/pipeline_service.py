@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import traceback
 from uuid import UUID
 from datetime import datetime, timezone
@@ -48,6 +49,63 @@ from app.services.intelligence_service import get_intelligence_for_icp, format_i
 from app.services import event_store
 
 logger = logging.getLogger(__name__)
+
+# ── Concurrency control ────────────────────────────────────────────
+MAX_CONCURRENT_PIPELINES = 10
+_pipeline_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PIPELINES)
+
+
+class PipelineCapacityError(Exception):
+    """Raised when the maximum number of concurrent pipelines is reached."""
+    pass
+
+
+async def _acquire_pipeline_slot(run_id_str: str) -> bool:
+    """Try to acquire a pipeline execution slot (non-blocking).
+
+    Returns True if a slot was acquired, False if all slots are in use.
+    """
+    acquired = _pipeline_semaphore._value > 0  # noqa: SLF001
+    if acquired:
+        await _pipeline_semaphore.acquire()
+    return acquired
+
+
+def _release_pipeline_slot():
+    """Release a pipeline execution slot."""
+    _pipeline_semaphore.release()
+
+
+# ── Bedrock throttle retry wrapper ─────────────────────────────────
+BEDROCK_MAX_RETRIES = 3
+BEDROCK_BASE_DELAY = 2.0  # seconds
+
+
+async def run_agent_with_retry(agent, prompt, max_retries=BEDROCK_MAX_RETRIES):
+    """Run a Strands agent via asyncio.to_thread with retry on Bedrock throttling."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await asyncio.to_thread(agent, prompt)
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            is_throttle = (
+                "throttlingexception" in exc_str
+                or "too many requests" in exc_str
+                or "rate exceeded" in exc_str
+                or "modelerrorexception" in exc_str and "throttl" in exc_str
+            )
+            if is_throttle and attempt < max_retries:
+                delay = BEDROCK_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Bedrock throttled (attempt {attempt + 1}/{max_retries + 1}), "
+                    f"retrying in {delay:.1f}s: {exc}"
+                )
+                await asyncio.sleep(delay)
+                last_exc = exc
+            else:
+                raise
+    raise last_exc
 
 
 def _safe_int(value) -> int | None:
@@ -761,12 +819,12 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
 
     # Extract geography and industry keywords for pre-filtering
     geo = fd.get("geography", {})
-    target_countries = {c.lower().strip() for c in geo.get("countries", [])}
+    target_countries = {c.lower().strip() for c in geo.get("countries", []) if c}
     industry_keywords = set()
     for item in fd.get("industry_types", []):
         if isinstance(item, dict):
-            v = item.get("vertical", "").lower().strip()
-            sv = item.get("sub_vertical", "").lower().strip()
+            v = (item.get("vertical") or "").lower().strip()
+            sv = (item.get("sub_vertical") or "").lower().strip()
             if v:
                 industry_keywords.add(v)
             if sv:
@@ -936,6 +994,31 @@ async def execute_pipeline(run_id: UUID):
     """
     run_id_str = str(run_id)
 
+    # ── Concurrency gate ──────────────────────────────────────
+    slot_acquired = await _acquire_pipeline_slot(run_id_str)
+    if not slot_acquired:
+        logger.warning(f"Pipeline {run_id}: max concurrent pipelines ({MAX_CONCURRENT_PIPELINES}) reached")
+        async with async_session() as db:
+            result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+            run = result.scalar_one_or_none()
+            if run:
+                run.status = "failed"
+                run.error_log = f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later."
+                await db.commit()
+            await _emit_event(run_id_str, {
+                "type": "error",
+                "message": f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later.",
+            })
+        return
+
+    try:
+      await _execute_pipeline_inner(run_id, run_id_str)
+    finally:
+        _release_pipeline_slot()
+
+
+async def _execute_pipeline_inner(run_id: UUID, run_id_str: str):
+    """Inner pipeline execution (Stages 1-2), wrapped by concurrency guard."""
     async with async_session() as db:
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
@@ -1042,7 +1125,7 @@ async def execute_pipeline(run_id: UUID):
             except Exception as intel_err:
                 logger.debug(f"Discovery intelligence injection failed (non-fatal): {intel_err}")
 
-            sub_result_1 = await asyncio.to_thread(sub_agent_db, discovery_prompt)
+            sub_result_1 = await run_agent_with_retry(sub_agent_db, discovery_prompt)
             sub_json_1 = parse_json_from_agent_result(sub_result_1)
             discovered_sub1_raw = sub_json_1.get("companies", [])
             discovered_sub1 = _soft_filter_discovered(discovered_sub1_raw, icp, "Stage 1a")
@@ -1078,7 +1161,7 @@ async def execute_pipeline(run_id: UUID):
                         known_domains.append(d)
             web_prompt = build_discovery_web_prompt(icp, already_found_count=len(discovered_sub1), known_domains=known_domains[:300])
 
-            sub_result_2 = await asyncio.to_thread(sub_agent_web, web_prompt)
+            sub_result_2 = await run_agent_with_retry(sub_agent_web, web_prompt)
             sub_json_2 = parse_json_from_agent_result(sub_result_2)
             discovered_sub2_raw = sub_json_2.get("companies", [])
             discovered_sub2 = _soft_filter_discovered(discovered_sub2_raw, icp, "Stage 1b")
@@ -1343,7 +1426,7 @@ async def execute_pipeline(run_id: UUID):
                         callback_handler=fit_callback, disabled_tools=disabled_tools,
                     )
                     fit_prompt = build_firmographic_fit_prompt(batch_dicts, icp)
-                    fit_result = await asyncio.to_thread(fit_agent, fit_prompt)
+                    fit_result = await run_agent_with_retry(fit_agent, fit_prompt)
                     fit_json = parse_json_from_agent_result(fit_result)
 
                     for evaluated in fit_json.get("companies", []):
@@ -1519,6 +1602,24 @@ async def resume_after_firmographic(
     """
     run_id_str = str(run_id)
 
+    slot_acquired = await _acquire_pipeline_slot(run_id_str)
+    if not slot_acquired:
+        logger.warning(f"Pipeline {run_id}: max concurrent pipelines ({MAX_CONCURRENT_PIPELINES}) reached on resume")
+        await _emit_event(run_id_str, {
+            "type": "error",
+            "message": f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later.",
+        })
+        return
+
+    try:
+      await _resume_after_firmographic_inner(run_id, run_id_str, company_ids, signal_mode)
+    finally:
+        _release_pipeline_slot()
+
+
+async def _resume_after_firmographic_inner(
+    run_id: UUID, run_id_str: str, company_ids: list[UUID], signal_mode: str,
+):
     async with async_session() as db:
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
@@ -1663,6 +1764,24 @@ async def resume_after_first_signal(
     Runs the second signal type."""
     run_id_str = str(run_id)
 
+    slot_acquired = await _acquire_pipeline_slot(run_id_str)
+    if not slot_acquired:
+        logger.warning(f"Pipeline {run_id}: max concurrent pipelines ({MAX_CONCURRENT_PIPELINES}) reached on resume")
+        await _emit_event(run_id_str, {
+            "type": "error",
+            "message": f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later.",
+        })
+        return
+
+    try:
+      await _resume_after_first_signal_inner(run_id, run_id_str, company_ids)
+    finally:
+        _release_pipeline_slot()
+
+
+async def _resume_after_first_signal_inner(
+    run_id: UUID, run_id_str: str, company_ids: list[UUID],
+):
     async with async_session() as db:
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
@@ -1769,6 +1888,24 @@ async def resume_after_signals(
     """Resume after final signal review. Runs Stages 4 (contacts) + 5 (scoring)."""
     run_id_str = str(run_id)
 
+    slot_acquired = await _acquire_pipeline_slot(run_id_str)
+    if not slot_acquired:
+        logger.warning(f"Pipeline {run_id}: max concurrent pipelines ({MAX_CONCURRENT_PIPELINES}) reached on resume")
+        await _emit_event(run_id_str, {
+            "type": "error",
+            "message": f"Server busy: {MAX_CONCURRENT_PIPELINES} pipelines already running. Please try again later.",
+        })
+        return
+
+    try:
+      await _resume_after_signals_inner(run_id, run_id_str, company_ids)
+    finally:
+        _release_pipeline_slot()
+
+
+async def _resume_after_signals_inner(
+    run_id: UUID, run_id_str: str, company_ids: list[UUID],
+):
     async with async_session() as db:
         result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
         run = result.scalar_one_or_none()
@@ -1886,7 +2023,7 @@ async def resume_after_signals(
                     }
                     contact_prompt = build_contact_discovery_prompt(company_dict, icp, cached_contacts)
 
-                    contact_result = await asyncio.to_thread(contact_agent, contact_prompt)
+                    contact_result = await run_agent_with_retry(contact_agent, contact_prompt)
                     contact_json = parse_json_from_agent_result(contact_result)
 
                     contacts_saved = 0
@@ -2184,7 +2321,7 @@ async def _run_signal_research(
                     "data_freshness": str(company.data_freshness) if company.data_freshness else None,
                 }
                 prompt = build_signal_prompt(company_dict, icp, signal_type)
-                result = await asyncio.to_thread(agent, prompt)
+                result = await run_agent_with_retry(agent, prompt)
                 signal_json = parse_json_from_agent_result(result)
                 _apply_signal_result_local(company, signal_json)
 
@@ -2209,7 +2346,7 @@ async def _run_signal_research(
                     })
 
                 prompt = build_batch_signal_prompt(company_dicts, icp, signal_type)
-                result = await asyncio.to_thread(agent, prompt)
+                result = await run_agent_with_retry(agent, prompt)
                 batch_json = parse_json_from_agent_result(result)
 
                 # Parse batch results
@@ -2364,7 +2501,7 @@ async def discover_signals_for_company(
                 "data_freshness": str(company.data_freshness) if company.data_freshness else None,
             }
             prompt = build_signal_prompt(company_dict, icp, signal_type)
-            result = await asyncio.to_thread(agent, prompt)
+            result = await run_agent_with_retry(agent, prompt)
             signal_json = parse_json_from_agent_result(result)
 
             # Apply results
@@ -2485,7 +2622,7 @@ async def discover_contacts_for_company(company_id: UUID) -> None:
                 "employee_count": company.employee_count,
             }
             prompt = build_contact_discovery_prompt(company_dict, icp, cached_contacts if cached_contacts else None)
-            result = await asyncio.to_thread(agent, prompt)
+            result = await run_agent_with_retry(agent, prompt)
             contact_json = parse_json_from_agent_result(result)
 
             # Extract and validate contacts

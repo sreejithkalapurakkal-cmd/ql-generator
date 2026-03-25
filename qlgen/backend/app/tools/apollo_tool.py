@@ -3,7 +3,7 @@ import time
 import httpx
 from strands import tool
 from app.config import get_settings
-from app.tools.retry_utils import httpx_post_with_retry
+from app.tools.retry_utils import httpx_post_with_retry, httpx_get_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,66 @@ RATE_LIMIT_MSG = (
     "Switch immediately to free alternatives: use exa_search, tavily_search, "
     "or duckduckgo_search for company discovery."
 )
+
+# Fields to keep from organization enrichment responses.
+_ORG_ENRICH_KEEP_FIELDS = {
+    "name", "website_url", "industry", "estimated_num_employees",
+    "annual_revenue", "annual_revenue_printed", "founded_year",
+    "city", "state", "country", "short_description",
+    "total_funding", "total_funding_printed", "latest_funding_round_date",
+    "linkedin_url",
+}
+
+
+def _trim_enriched_org(org: dict) -> dict:
+    """Trim an enriched organization record to essential fields."""
+    trimmed = {k: org.get(k) for k in _ORG_ENRICH_KEEP_FIELDS}
+    desc = trimmed.get("short_description") or ""
+    trimmed["short_description"] = desc[:300]
+    tech = org.get("technology_names") or []
+    if tech:
+        trimmed["technology_names"] = tech[:20]
+    return {k: v for k, v in trimmed.items() if v is not None}
+
+
+def _trim_person(person: dict) -> dict:
+    """Trim a person enrichment record to essential contact fields."""
+    trimmed = {
+        "name": person.get("name"),
+        "first_name": person.get("first_name"),
+        "last_name": person.get("last_name"),
+        "title": person.get("title"),
+        "email": person.get("email"),
+        "linkedin_url": person.get("linkedin_url"),
+        "city": person.get("city"),
+        "state": person.get("state"),
+        "country": person.get("country"),
+    }
+    # Phone may come from different fields
+    phone = (
+        person.get("sanitized_phone")
+        or person.get("phone_number")
+        or person.get("first_phone")
+    )
+    if phone:
+        trimmed["phone"] = phone
+    # Organization info
+    org = person.get("organization") or {}
+    if org:
+        trimmed["organization_name"] = org.get("name")
+    # Employment history (last 3 entries)
+    employment = person.get("employment_history") or []
+    if employment:
+        trimmed["employment_history"] = [
+            {
+                "organization_name": e.get("organization_name"),
+                "title": e.get("title"),
+                "start_date": e.get("start_date"),
+                "end_date": e.get("end_date"),
+            }
+            for e in employment[:3]
+        ]
+    return {k: v for k, v in trimmed.items() if v is not None}
 
 
 @tool
@@ -358,3 +418,360 @@ def apollo_people_search(
         return {"error": str(e), "people": []}
     except Exception as e:
         return {"error": str(e), "people": []}
+
+
+# ──────────────────────────────────────────────────────────────────
+# Organization Enrichment
+# ──────────────────────────────────────────────────────────────────
+
+@tool
+def apollo_org_enrich(
+    domain: str = None,
+    name: str = None,
+) -> dict:
+    """
+    Get detailed firmographic data for a company using Apollo.io Organization Enrichment.
+    BEST FOR: Verifying revenue, employee count, tech stack, and funding for a KNOWN company.
+    USE IN STAGE: Firmographic Fit (Stage 2) — much more reliable than apollo_company_search
+    for firmographic verification.
+
+    Returns structured data: revenue, employee count, industry, tech stack,
+    funding details, founding year, and more.
+
+    Args:
+        domain: Company domain (e.g., "acme.com") — preferred identifier, highest match rate
+        name: Company name (fallback if domain unavailable)
+
+    Returns:
+        dict with organization profile including estimated_num_employees,
+        annual_revenue, technology_names, total_funding, etc.
+    """
+    settings = get_settings()
+    if not domain and not name:
+        return {"error": "Provide at least domain or name.", "organization": {}}
+
+    url = f"{settings.APOLLO_BASE_URL}/organizations/enrich"
+    headers = {
+        "X-Api-Key": settings.APOLLO_API_KEY,
+        "Content-Type": "application/json",
+    }
+    params = {}
+    if domain:
+        params["domain"] = domain
+    if name:
+        params["organization_name"] = name
+
+    try:
+        response = httpx_get_with_retry(url, params=params, headers=headers, timeout=30, max_retries=1)
+        response.raise_for_status()
+        data = response.json()
+        org = data.get("organization") or data
+        return {"organization": _trim_enriched_org(org)}
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Apollo org enrich HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "organization": {}}
+        if e.response.status_code in (401, 403):
+            return {"error": f"Apollo authentication error ({e.response.status_code}). Check API key.", "organization": {}}
+        return {"error": f"Apollo org enrich error ({e.response.status_code}): {resp_body}", "organization": {}}
+    except Exception as e:
+        return {"error": str(e), "organization": {}}
+
+
+@tool
+def apollo_org_enrich_bulk(
+    domains: list[str],
+) -> dict:
+    """
+    Enrich up to 10 organizations at once with firmographic data using Apollo.io.
+    BEST FOR: Batch firmographic verification in Stage 2 — much more efficient than
+    individual calls. Pass company domains to get revenue, employees, tech stack, funding.
+
+    Args:
+        domains: List of company domains (max 10, e.g., ["acme.com", "stripe.com"])
+
+    Returns:
+        dict with 'organizations' list containing enriched profiles for each domain
+    """
+    settings = get_settings()
+    if not domains:
+        return {"error": "Provide at least one domain.", "organizations": []}
+
+    domains = domains[:10]  # Apollo bulk limit
+    url = f"{settings.APOLLO_BASE_URL}/organizations/bulk_enrich"
+    headers = {
+        "X-Api-Key": settings.APOLLO_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {"domains": domains}
+
+    try:
+        response = httpx_post_with_retry(url, json=payload, headers=headers, timeout=60, max_retries=1)
+        response.raise_for_status()
+        data = response.json()
+        orgs = data.get("organizations") or []
+        return {
+            "organizations": [_trim_enriched_org(o) for o in orgs],
+            "total_returned": len(orgs),
+            "domains_requested": len(domains),
+        }
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Apollo bulk org enrich HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "organizations": []}
+        if e.response.status_code in (401, 403):
+            return {"error": f"Apollo authentication error ({e.response.status_code}).", "organizations": []}
+        return {"error": f"Apollo bulk org enrich error ({e.response.status_code}): {resp_body}", "organizations": []}
+    except Exception as e:
+        return {"error": str(e), "organizations": []}
+
+
+# ──────────────────────────────────────────────────────────────────
+# People Enrichment
+# ──────────────────────────────────────────────────────────────────
+
+@tool
+def apollo_people_enrich(
+    first_name: str = None,
+    last_name: str = None,
+    name: str = None,
+    email: str = None,
+    linkedin_url: str = None,
+    company_name: str = None,
+    company_domain: str = None,
+    reveal_personal_emails: bool = False,
+    reveal_phone_number: bool = True,
+) -> dict:
+    """
+    Enrich a person's profile with verified emails, phone numbers, and employment history.
+    BEST FOR: Getting actual contact details (email, phone, LinkedIn) for a KNOWN person.
+    USE IN STAGE: Contact Discovery (Stage 4) — call AFTER apollo_people_search finds contacts.
+
+    IMPORTANT: apollo_people_search finds people by name/title but does NOT return emails
+    or phone numbers. You MUST call this tool to get actual contact details.
+
+    Provide at least one identifier combination:
+    - linkedin_url (best match rate)
+    - first_name + last_name + company_domain
+    - email address
+
+    Args:
+        first_name: Person's first name
+        last_name: Person's last name
+        name: Full name (alternative to first_name + last_name)
+        email: Known email address for matching
+        linkedin_url: LinkedIn profile URL (highest match rate)
+        company_name: Company name for disambiguation
+        company_domain: Company domain for disambiguation (e.g., "acme.com")
+        reveal_personal_emails: Request personal emails (uses additional credits)
+        reveal_phone_number: Request phone numbers (uses additional credits, default True)
+
+    Returns:
+        dict with person profile including email, phone, linkedin_url,
+        title, organization, employment_history
+    """
+    settings = get_settings()
+    url = f"{settings.APOLLO_BASE_URL}/people/match"
+    headers = {
+        "X-Api-Key": settings.APOLLO_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    payload = {}
+    if first_name:
+        payload["first_name"] = first_name
+    if last_name:
+        payload["last_name"] = last_name
+    if name:
+        payload["name"] = name
+    if email:
+        payload["email"] = email
+    if linkedin_url:
+        payload["linkedin_url"] = linkedin_url
+    if company_name:
+        payload["organization_name"] = company_name
+    if company_domain:
+        payload["domain"] = company_domain
+    if reveal_personal_emails:
+        payload["reveal_personal_emails"] = True
+    if reveal_phone_number:
+        payload["reveal_phone_number"] = True
+
+    if not any(k in payload for k in ("first_name", "name", "email", "linkedin_url")):
+        return {"error": "Provide at least one identifier: name, email, or linkedin_url.", "person": {}}
+
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        person = data.get("person") or data
+        if not person or person == data:
+            return {"error": "No matching person found.", "person": {}}
+        return {"person": _trim_person(person)}
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Apollo people enrich HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "person": {}}
+        if e.response.status_code == 422:
+            return {"error": f"Apollo rejected request (422). Simplify identifiers. Details: {resp_body}", "person": {}}
+        if e.response.status_code in (401, 403):
+            return {"error": f"Apollo authentication error ({e.response.status_code}).", "person": {}}
+        return {"error": f"Apollo people enrich error ({e.response.status_code}): {resp_body}", "person": {}}
+    except Exception as e:
+        return {"error": str(e), "person": {}}
+
+
+@tool
+def apollo_people_enrich_bulk(
+    people: list[dict],
+    reveal_phone_number: bool = True,
+) -> dict:
+    """
+    Enrich up to 10 people at once with verified emails, phone numbers, and profiles.
+    BEST FOR: Batch contact enrichment after apollo_people_search finds multiple contacts.
+    USE IN STAGE: Contact Discovery (Stage 4) — PREFERRED over individual enrichment.
+
+    Each person dict must contain at least one identifier:
+    - {"first_name": "Jane", "last_name": "Doe", "organization_name": "Acme Inc"}
+    - {"linkedin_url": "https://linkedin.com/in/janedoe"}
+    - {"email": "jane@acme.com"}
+
+    Args:
+        people: List of person identifier dicts (max 10). Each must have identifying fields.
+        reveal_phone_number: Request phone numbers for all people (uses credits per person)
+
+    Returns:
+        dict with 'matches' list containing enriched person profiles with email, phone, title
+    """
+    settings = get_settings()
+    if not people:
+        return {"error": "Provide at least one person.", "matches": []}
+
+    people = people[:10]  # Apollo bulk limit
+    url = f"{settings.APOLLO_BASE_URL}/people/bulk_match"
+    headers = {
+        "X-Api-Key": settings.APOLLO_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "details": people,
+        "reveal_phone_number": reveal_phone_number,
+    }
+
+    try:
+        response = httpx_post_with_retry(url, json=payload, headers=headers, timeout=60, max_retries=1)
+        response.raise_for_status()
+        data = response.json()
+        matches = data.get("matches") or data.get("people") or []
+        return {
+            "matches": [_trim_person(m) for m in matches if m],
+            "total_returned": len([m for m in matches if m]),
+            "people_requested": len(people),
+        }
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Apollo bulk people enrich HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "matches": []}
+        if e.response.status_code in (401, 403):
+            return {"error": f"Apollo authentication error ({e.response.status_code}).", "matches": []}
+        return {"error": f"Apollo bulk enrich error ({e.response.status_code}): {resp_body}", "matches": []}
+    except Exception as e:
+        return {"error": str(e), "matches": []}
+
+
+# ──────────────────────────────────────────────────────────────────
+# News Articles Search
+# ──────────────────────────────────────────────────────────────────
+
+@tool
+def apollo_news_search(
+    company_name: str = None,
+    company_domain: str = None,
+    max_results: int = 10,
+) -> dict:
+    """
+    Search for news articles about a company using Apollo.io News Articles Search.
+    BEST FOR: Finding company-specific news — funding rounds, partnerships, product launches,
+    executive appointments. Works for PRIVATE companies not covered by SEC/SimFin.
+    USE IN STAGE: Signal Research (Stage 3) — budget and urgency signals from news.
+
+    Args:
+        company_name: Name of the company to search news for
+        company_domain: Company domain (e.g., "acme.com")
+        max_results: Maximum number of articles to return (default 10)
+
+    Returns:
+        dict with 'articles' list containing title, url, published_date, source, snippet
+    """
+    settings = get_settings()
+    if not company_name and not company_domain:
+        return {"error": "Provide at least company_name or company_domain.", "articles": []}
+
+    url = f"{settings.APOLLO_BASE_URL}/news_articles/search"
+    headers = {
+        "X-Api-Key": settings.APOLLO_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {}
+    if company_name:
+        payload["q_organization_name"] = company_name
+    if company_domain:
+        payload["organization_domains"] = [company_domain]
+    payload["per_page"] = min(max_results, 25)
+    payload["page"] = 1
+
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        articles = data.get("news_articles") or data.get("articles") or []
+        trimmed = [
+            {
+                "title": a.get("title", ""),
+                "url": a.get("url", ""),
+                "published_date": a.get("published_date") or a.get("date", ""),
+                "source": a.get("source") or a.get("publisher", ""),
+                "snippet": (a.get("snippet") or a.get("description") or "")[:300],
+            }
+            for a in articles[:max_results]
+        ]
+        return {"articles": trimmed, "total_found": len(articles)}
+    except httpx.HTTPStatusError as e:
+        resp_body = ""
+        try:
+            resp_body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.warning(f"Apollo news search HTTP {e.response.status_code}: {resp_body}")
+
+        if e.response.status_code in RATE_LIMIT_CODES:
+            return {"error": RATE_LIMIT_MSG, "rate_limited": True, "articles": []}
+        if e.response.status_code in (401, 403):
+            return {"error": f"Apollo authentication error ({e.response.status_code}).", "articles": []}
+        return {"error": f"Apollo news search error ({e.response.status_code}): {resp_body}", "articles": []}
+    except Exception as e:
+        return {"error": str(e), "articles": []}

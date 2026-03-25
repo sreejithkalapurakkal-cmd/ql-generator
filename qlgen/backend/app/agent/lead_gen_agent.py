@@ -12,8 +12,13 @@ import logging
 from strands import Agent
 from strands.models.bedrock import BedrockModel
 
-from app.tools.apollo_tool import apollo_company_search, apollo_company_search_paginated, apollo_people_search
-from app.tools.exa_tool import exa_search, exa_find_similar
+from app.tools.apollo_tool import (
+    apollo_company_search, apollo_company_search_paginated, apollo_people_search,
+    apollo_people_enrich, apollo_people_enrich_bulk,
+    apollo_org_enrich, apollo_org_enrich_bulk,
+    apollo_news_search,
+)
+from app.tools.exa_tool import exa_search, exa_find_similar, exa_get_contents
 from app.tools.tavily_tool import tavily_search
 from app.tools.duckduckgo_tool import duckduckgo_search
 from app.tools.web_scraper_tool import scrape_webpage
@@ -86,6 +91,12 @@ TOOL_DISPLAY_NAMES = {
     "search_press_releases": "Scanning press releases",
     "search_producthunt": "Searching ProductHunt",
     "get_investor_data": "Analyzing investor & insider data",
+    "apollo_org_enrich": "Enriching company firmographics (Apollo)",
+    "apollo_org_enrich_bulk": "Batch enriching company data (Apollo)",
+    "apollo_people_enrich": "Enriching contact details (Apollo)",
+    "apollo_people_enrich_bulk": "Batch enriching contacts (Apollo)",
+    "apollo_news_search": "Searching Apollo news articles",
+    "exa_get_contents": "Extracting content from URLs (Exa)",
     "find_similar_companies": "Finding similar companies (embedding search)",
 }
 
@@ -435,6 +446,14 @@ Return the results as a JSON object with a "companies" array and "discovery_summ
 STAGE2_FIRMOGRAPHIC_FIT_PROMPT = """You are a firmographic analysis specialist. Evaluate EACH company in the batch against
 the firmographic criteria provided. Use tools to fill missing data.
 
+TOOL PRIORITY for firmographic verification:
+1. apollo_org_enrich_bulk — Batch enrich up to 10 companies by domain at once (PREFERRED,
+   saves API calls). Returns structured revenue, employee count, tech stack, funding data.
+2. apollo_org_enrich — Individual enrichment for remaining companies or when bulk fails.
+3. apollo_company_search — Fallback search if enrichment returns no data for a company.
+4. scrape_webpage / exa_search / duckduckgo_search — Web-based fallback for companies
+   not found in Apollo's database.
+
 If EXISTING DATA is provided for a company (from prior runs), VERIFY it is still current.
 If data is <30 days old, trust it. If >90 days old, re-verify with tools.
 
@@ -484,10 +503,18 @@ Compute composite score as an INTEGER on the 0-100 scale (NOT 0-10). Calibration
 
 TOOL BUDGET: ~15 tool calls per company. Plan your strategy:
   1st: get_financial_statements / get_sec_filings / get_market_data (hard financial data)
-  2nd: get_news_sentiment / search_press_releases (recent activity)
+  2nd: get_news_sentiment / search_press_releases / apollo_news_search (recent activity)
   3rd: search_job_postings / search_patents_by_technology (growth signals)
   4th: tavily_search / exa_search (deep web research)
+  5th: exa_get_contents — extract content from URLs found by other tools (batch up to 10)
 You MUST call at least 3 different tools. Prioritize RECENT data sources.
+
+apollo_news_search: Company-specific news from Apollo's database. Works for PRIVATE
+companies not covered by SEC/SimFin. Good for funding rounds, partnerships, launches.
+
+When using exa_search for signal research, ALWAYS use date filtering:
+  start_published_date to find only RECENT evidence (last 6 months).
+  Use include_text for precision, e.g. include_text=["funding"] for budget signals.
 
 Return the results as a JSON object.
 """
@@ -511,19 +538,30 @@ STEP 3: TOOL-BASED DISCOVERY & VERIFICATION
 Use ALL of these methods (TOOL BUDGET: ~20 calls. You MUST call at least 4 different tools):
 
 PRIORITY 1 (call these first):
-A. apollo_people_search — Paid B2B database (primary). Use seniorities=["c_suite","vp","director"].
-   Paginate (page 1,2,3). Use email_status=["verified"] for high-quality emails.
+A. apollo_people_search — Find contacts by title/seniority. Use seniorities=["c_suite","vp","director"].
+   Paginate (page 1,2,3). NOTE: This finds names/titles but may NOT return emails or phones.
 B. find_company_executives — Multi-method executive finder. Always call this.
 
 PRIORITY 2 (fill gaps):
 C. research_company — Comprehensive single-company research.
 D. find_linkedin_profiles — Batch LinkedIn search.
 E. scrape_team_page — Scan /team, /about, /leadership pages.
+F. exa_search — Use category="people" to search 1B+ indexed profiles.
+   Query: "{target_role} at {company_name}" or "VP Engineering {domain}"
 
 PRIORITY 3 (enrich and verify):
-F. search_job_postings — Job postings for org structure signals.
-I. tavily_search / exa_search — News for executive quotes.
-J. duckduckgo_search — General verification searches.
+G. search_job_postings — Job postings for org structure signals.
+H. tavily_search / exa_search — News for executive quotes.
+I. duckduckgo_search — General verification searches.
+
+STEP 3.5: ENRICH CONTACTS WITH EMAILS/PHONES
+CRITICAL: apollo_people_search finds names/titles but does NOT return email addresses
+or phone numbers. After finding contacts via search and other tools, you MUST enrich them:
+  → apollo_people_enrich_bulk: Batch enrich up to 10 contacts at once (PREFERRED — saves API calls).
+    Pass: [{"first_name": "Jane", "last_name": "Doe", "organization_name": "Company"}]
+    Or use linkedin_url for higher match rate: [{"linkedin_url": "https://linkedin.com/in/janedoe"}]
+  → apollo_people_enrich: Individual enrichment for high-priority contacts or LinkedIn-based matching.
+Only contacts that have been enriched should be marked enrichment_status="enriched".
 
 STEP 4: CROSS-REFERENCE & CONFIDENCE SCORING
 - Contacts found by 3+ sources → confidence 0.95
@@ -1061,6 +1099,8 @@ def create_firmographic_fit_agent(callback_handler=None, disabled_tools: set[str
     )
 
     tools = _filter_tools([
+        apollo_org_enrich,
+        apollo_org_enrich_bulk,
         apollo_company_search,
         scrape_webpage,
         exa_search,
@@ -1093,12 +1133,14 @@ def create_signal_agent(callback_handler=None, disabled_tools: set[str] | None =
         get_market_data,
         get_investor_data,             # Institutional holders, insider trades
         get_news_sentiment,
+        apollo_news_search,            # Apollo company-specific news (private companies too)
         search_press_releases,
         search_job_postings,           # Hiring velocity = urgency
         search_patents_by_technology,  # R&D investment = budget
         search_producthunt,            # Product launches = urgency
         tavily_search,
         exa_search,
+        exa_get_contents,              # Bulk URL content extraction
         google_custom_search,
         duckduckgo_search,
         scrape_webpage,
@@ -1127,6 +1169,8 @@ def create_contact_agent(callback_handler=None, disabled_tools: set[str] | None 
 
     tools = _filter_tools([
         apollo_people_search,
+        apollo_people_enrich,
+        apollo_people_enrich_bulk,
         research_company,
         find_company_executives,
         find_linkedin_profiles,

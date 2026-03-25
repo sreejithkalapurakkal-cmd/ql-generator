@@ -27,8 +27,6 @@ class Settings(BaseSettings):
     HUNTER_BASE_URL: str = "https://api.hunter.io/v2"
     LUSHA_API_KEY: str = ""
     LUSHA_BASE_URL: str = "https://api.lusha.com"
-    CLAY_API_KEY: str = ""
-    CLAY_BASE_URL: str = "https://api.clay.com"
     TAVILY_API_KEY: str = ""
     TAVILY_BASE_URL: str = "https://api.tavily.com"
     GOOGLE_PLACES_API_KEY: str = ""
@@ -51,6 +49,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:3000/auth/callback"
     ALLOWED_EMAIL_DOMAIN: str = "gadgeon.com"
+
+    # Dev auth (for Playwright / testing only)
+    ALLOW_DEV_AUTH: bool = False
 
     # JWT
     JWT_SECRET_KEY: str = "change-me-in-production"

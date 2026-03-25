@@ -19,8 +19,11 @@ from app.tools.copilot_db_tools import (
 )
 
 # Reuse all 19 external tools from lead gen agent
-from app.tools.apollo_tool import apollo_company_search, apollo_people_search
-from app.tools.exa_tool import exa_search
+from app.tools.apollo_tool import (
+    apollo_company_search, apollo_people_search,
+    apollo_people_enrich, apollo_org_enrich, apollo_news_search,
+)
+from app.tools.exa_tool import exa_search, exa_get_contents
 from app.tools.tavily_tool import tavily_search
 from app.tools.duckduckgo_tool import duckduckgo_search
 from app.tools.hunter_tool import hunter_domain_search, hunter_email_finder
@@ -201,6 +204,10 @@ COPILOT_TOOL_DISPLAY_NAMES = {
     "get_news_sentiment": "Analyzing news sentiment",
     "search_knowledge_base": "Searching knowledge base",
     "search_knowledge_base_structured": "Filtering knowledge base",
+    "apollo_people_enrich": "Enriching contact details",
+    "apollo_org_enrich": "Enriching company firmographics",
+    "apollo_news_search": "Searching company news",
+    "exa_get_contents": "Extracting web content",
 }
 
 
@@ -313,7 +320,11 @@ def create_copilot_agent(callback_handler=None, disabled_tools: set[str] | None 
     external_tools = [
         apollo_company_search,
         apollo_people_search,
+        apollo_people_enrich,
+        apollo_org_enrich,
+        apollo_news_search,
         exa_search,
+        exa_get_contents,
         tavily_search,
         duckduckgo_search,
         hunter_domain_search,

@@ -6,15 +6,36 @@ Reference for deploying qlGen to AWS (account `879381242481`, region `us-east-1`
 
 ## Architecture Overview
 
-| Component | Service | Details |
-|-----------|---------|---------|
-| Backend | ECS Fargate | Cluster: `qlgen-cluster`, Service: `qlgen-backend`, Port 8000, 2 tasks |
-| Frontend | S3 + CloudFront | Bucket: `qlgen-frontend-prod`, Distribution: `EDR89QBSQMRDD` |
-| Database | RDS PostgreSQL 16 | Host: `qlgen-db.c5q8k2oiqu20.us-east-1.rds.amazonaws.com` (private subnet, not directly accessible) |
-| Container Registry | ECR | `879381242481.dkr.ecr.us-east-1.amazonaws.com/qlgen-backend` |
-| DNS | CloudFront alias | `https://qlgen.gadgeon.com` |
+```
+                          Internet
+                             |
+                             v
+             CloudFront (HTTPS) ── qlgen.gadgeon.com
+             Distribution: EDR89QBSQMRDD
+             d7i11fjilnvbr.cloudfront.net
+                    /               \
+                   /                 \
+          / (static)              /api/*
+              |                      |
+              v                      v
+         S3 Bucket              ALB (HTTP:80)
+     qlgen-frontend-prod     qlgen-alb-950991417.us-east-1.elb.amazonaws.com
+                                    |
+                                    v
+                            ECS Fargate (x2-8 tasks, autoscaling)
+                            qlgen-cluster / qlgen-backend
+                            4 vCPU, 8 GB RAM per task
+                            Port 8000, 4 uvicorn workers
+                                   / \
+                                  /   \
+                                 v     v
+                  RDS PostgreSQL 16.6   ElastiCache Redis 7.1
+        qlgen-db.c5q8k2oiqu20...        qlgen-redis.pmodat.0001...
+        db.t4g.small, 20 GB gp3        cache.t4g.micro
+        (private subnet)               (private subnet)
+```
 
-CloudFront routes `/api/*` to the ALB (backend) and everything else to S3 (frontend). SPA routing is handled by CloudFront custom error responses (403/404 -> `/index.html`).
+CloudFront routes `/api/*` to the ALB (backend) and everything else to S3 (frontend). SPA routing is handled by CloudFront custom error responses (403/404 -> `/index.html`). SSL terminates at CloudFront; the ALB only listens on HTTP:80.
 
 ---
 
@@ -84,13 +105,14 @@ rm /tmp/qlgen-task-def.json
 
 > **Important**: Also update `infra/modules/backend-ecs/main.tf` and `infra/terraform.tfvars` to keep Terraform in sync. If a variable is sensitive, add it to `infra/modules/backend-ecs/variables.tf`, `infra/variables.tf`, and `infra/main.tf` as well.
 
-### Current Environment Variables (Task Def, revision 4)
+### Current Environment Variables (Task Def, revision 7)
 
 | Category | Variables |
 |----------|-----------|
 | Database | `DATABASE_URL`, `DATABASE_URL_SYNC` |
 | AWS | `AWS_REGION`, `BEDROCK_MODEL_ID` |
 | CORS | `CORS_ALLOWED_ORIGINS` |
+| Redis | `REDIS_URL` |
 | API Base URLs | `APOLLO_BASE_URL`, `EXA_BASE_URL`, `HUNTER_BASE_URL`, `LUSHA_BASE_URL`, `CLAY_BASE_URL`, `TAVILY_BASE_URL` |
 | Auth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `ALLOWED_EMAIL_DOMAIN`, `JWT_SECRET_KEY`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `JWT_REFRESH_TOKEN_EXPIRE_DAYS`, `COOKIE_SECURE` |
 | Secrets (from Secrets Manager) | `APOLLO_API_KEY`, `EXA_API_KEY`, `HUNTER_API_KEY`, `LUSHA_API_KEY`, `TAVILY_API_KEY`, `CLAY_API_KEY` |
@@ -101,7 +123,7 @@ These are defined in `backend/app/config.py` with sensible defaults. Add them to
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `REDIS_URL` | `redis://localhost:6379/0` | Falls back to in-memory event store if Redis unavailable |
+| `REDIS_URL` | `redis://localhost:6379/0` | Production uses ElastiCache (configured in task def); falls back to in-memory if unavailable |
 | `BEDROCK_EMBEDDING_MODEL_ID` | `amazon.titan-embed-text-v2:0` | Default is correct |
 | `EMBEDDING_DIMENSION` | `1024` | Default is correct |
 | `GOOGLE_PLACES_API_KEY` | `""` | Tool returns error message if missing |
@@ -124,7 +146,7 @@ These are defined in `backend/app/config.py` with sensible defaults. Add them to
 sudo docker build --platform linux/amd64 -t qlgen-backend /path/to/qlgen/backend
 ```
 
-The image is ~772MB. The Dockerfile runs on `python:3.11-slim` and the entrypoint (`entrypoint.sh`) automatically runs `alembic upgrade head` before starting uvicorn with 2 workers.
+The image is ~772MB. The Dockerfile runs on `python:3.11-slim` and the entrypoint (`entrypoint.sh`) automatically runs `alembic upgrade head` before starting uvicorn with 4 workers.
 
 ### Push to ECR (use crane, NOT docker push)
 
@@ -509,16 +531,184 @@ There's no built-in rollback for S3. Options:
 
 ## Current Deployment State
 
-Last updated: 2026-03-23
+Last updated: 2026-03-25
 
-| Item | Value |
-|------|-------|
-| ECS Task Definition | `qlgen-backend:4` |
-| ECS Desired Count | 2 |
-| Alembic Revision (HEAD) | `k1l2m3n4o5p6` (add tool priority and auto-disable) |
+### ECS Fargate — Compute
+
+| Setting | Value |
+|---------|-------|
+| Cluster | `qlgen-cluster` |
+| Service | `qlgen-backend` |
+| Task Definition | `qlgen-backend:7` |
+| Launch Type | Fargate |
+| CPU | 4096 (4 vCPU) |
+| Memory | 8192 MB (8 GB) |
+| Desired / Running Tasks | 2 / 2 |
+| Autoscaling | Min 2 / Max 8 tasks, CPU target 70% |
+| Network Mode | awsvpc |
+| Subnets | `subnet-0ebb3d7cf5e036f14`, `subnet-032e0a5ca2449aa6a` (public) |
+| Assign Public IP | Enabled |
+| ECS Exec | Enabled |
+| Container Name | `backend` |
+| Container Port | 8000 |
+| Uvicorn Workers | 4 (configured in `entrypoint.sh`) |
 | Docker Base Image | `python:3.11-slim` |
-| Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Git Branch Deployed | `development` |
+| Execution Role | `qlgen-ecs-execution` (ECR pull + Secrets Manager) |
+| Task Role | `qlgen-ecs-task` (Bedrock InvokeModel + SSM messages) |
+
+### ECR — Container Registry
+
+| Setting | Value |
+|---------|-------|
+| Repository URI | `879381242481.dkr.ecr.us-east-1.amazonaws.com/qlgen-backend` |
+| Image Tag | `latest` |
+| Image Size | ~297 MB (compressed) |
+| Scan on Push | Enabled |
+
+### RDS — Database
+
+| Setting | Value |
+|---------|-------|
+| Engine | PostgreSQL 16.6 |
+| Instance Class | `db.t4g.small` |
+| Storage | 20 GB gp3 (auto-scales to 50 GB) |
+| Endpoint | `qlgen-db.c5q8k2oiqu20.us-east-1.rds.amazonaws.com:5432` |
+| Database Name | `qlgen` |
+| Username | `qlgen` |
+| Multi-AZ | No |
+| Public Access | No (private subnet only) |
+| Backup Retention | 7 days |
+| Alembic Revision | `k1l2m3n4o5p6` (HEAD, 16 migrations) |
+
+### ALB — Load Balancer
+
+| Setting | Value |
+|---------|-------|
+| Name | `qlgen-alb` |
+| DNS | `qlgen-alb-950991417.us-east-1.elb.amazonaws.com` |
+| Scheme | Internet-facing |
+| Listener | HTTP:80 only (no HTTPS — SSL terminates at CloudFront) |
+| Target Group | `qlgen-backend-tg`, port 8000, HTTP |
+| Health Check | `GET /api/v1/health`, interval 30s, timeout 5s, healthy 2, unhealthy 3 |
+| Idle Timeout | 600s (for SSE streaming support) |
+| Deregistration Delay | 300s |
+| Target Group ARN | `arn:aws:elasticloadbalancing:us-east-1:879381242481:targetgroup/qlgen-backend-tg/8f224cf4ebae979b` |
+
+### CloudFront — CDN
+
+| Setting | Value |
+|---------|-------|
+| Distribution ID | `EDR89QBSQMRDD` |
+| Domain | `d7i11fjilnvbr.cloudfront.net` |
+| Custom Domain | `qlgen.gadgeon.com` |
+| ACM Certificate | `arn:aws:acm:us-east-1:879381242481:certificate/602948e0-3a63-43e8-8684-d0625f4930e0` |
+| Status | Deployed |
+| HTTP Version | HTTP/2 |
+| Price Class | PriceClass_100 (NA + Europe) |
+| Default Root Object | `index.html` |
+| Default Origin | `s3-frontend` → `qlgen-frontend-prod.s3.us-east-1.amazonaws.com` |
+| API Behavior | `/api/*` → `alb-backend`, all HTTP methods, no caching, forwards all headers/cookies |
+| Error Pages | 403 → `/index.html` (200), 404 → `/index.html` (200) — SPA routing |
+
+### S3 — Frontend Hosting
+
+| Setting | Value |
+|---------|-------|
+| Bucket | `qlgen-frontend-prod` |
+| Access | CloudFront OAC only (block public access enabled) |
+| Build Env | `VITE_API_BASE_URL=""`, `VITE_GOOGLE_CLIENT_ID="1096888171910-..."` |
+
+### Security Groups
+
+| Security Group | ID | Inbound Rules |
+|---------------|----|---------------|
+| `qlgen-alb-sg` | `sg-02682b888f309679f` | TCP 80 from `0.0.0.0/0`, TCP 443 from `0.0.0.0/0` |
+| `qlgen-ecs-sg` | `sg-04500725bf843b16d` | TCP 8000 from `qlgen-alb-sg` only |
+| `qlgen-rds-sg` | `sg-0ea02caca08c49450` | TCP 5432 from `qlgen-ecs-sg` only |
+| `qlgen-redis-sg` | `sg-01f615465be219bbe` | TCP 6379 from `qlgen-ecs-sg` only |
+
+### IAM Roles
+
+| Role | Permissions |
+|------|-------------|
+| `qlgen-ecs-execution` | `AmazonECSTaskExecutionRolePolicy`, Secrets Manager read (`qlgen/api-keys`) |
+| `qlgen-ecs-task` | Bedrock `InvokeModel` (`anthropic.claude-sonnet-4*`), SSM messages (for ECS exec) |
+
+### Secrets Manager
+
+Secret `qlgen/api-keys` (`arn:aws:secretsmanager:us-east-1:879381242481:secret:qlgen/api-keys-GM1XdJ`) contains:
+`APOLLO_API_KEY`, `EXA_API_KEY`, `HUNTER_API_KEY`, `LUSHA_API_KEY`, `TAVILY_API_KEY`, `CLAY_API_KEY`
+
+### CloudWatch Logs
+
+| Setting | Value |
+|---------|-------|
+| Log Group | `/ecs/qlgen-backend` |
+| Retention | 14 days |
+| Log Driver | `awslogs` |
+| Stream Prefix | `ecs/backend/<task-id>` |
+
+### ElastiCache — Redis
+
+| Setting | Value |
+|---------|-------|
+| Cluster ID | `qlgen-redis` |
+| Endpoint | `qlgen-redis.pmodat.0001.use1.cache.amazonaws.com:6379` |
+| Node Type | `cache.t4g.micro` |
+| Engine | Redis 7.1.0 |
+| Nodes | 1 |
+| Subnet Group | `qlgen-redis-subnet-group` (private subnets, same as RDS) |
+| Security Group | `qlgen-redis-sg` (`sg-01f615465be219bbe`) — TCP 6379 from ECS SG only |
+| Purpose | SSE event store for cross-task pipeline event sharing |
+
+### Bedrock Model
+
+| Setting | Value |
+|---------|-------|
+| Model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` (Claude Sonnet 4.5) |
+| Embedding Model | `amazon.titan-embed-text-v2:0` (default, not in task def) |
+| Region | `us-east-1` |
+| RPM Quota | 10,000 requests/min (cross-region inference profile) |
+| TPM Quota | 5,000,000 tokens/min |
+
+### Not Provisioned
+
+- **Research API keys** (SIMFIN, FMP, NEWS, FRED, GOOGLE_PLACES, etc.) — not configured; tools gracefully degrade
+- **HTTPS on ALB** — SSL terminates at CloudFront; ALB only listens on HTTP:80
+
+### Capacity & Scalability
+
+**Concurrent Users (browsing/UI):** ~50-100 active users comfortably, ~200+ passive. Static assets served via CloudFront (effectively unlimited). Backend API is the bottleneck — 4 uvicorn workers per task, 2-8 tasks = 8-32 async worker processes.
+
+**Concurrent Pipeline Runs:** Up to **10 parallel pipelines** (enforced by application-level semaphore). Attempting to start an 11th pipeline returns HTTP 429. The semaphore gates all pipeline entry points: `execute_pipeline`, `resume_after_firmographic`, `resume_after_first_signal`, and `resume_after_signals`.
+
+**Concurrent Co-pilot Chat Sessions:** ~20-30 without pipelines running, ~10-15 alongside 10 active pipelines. Each chat session uses 1-5 Bedrock calls and 1 SSE connection.
+
+**Key resource limits at 10 concurrent pipelines:**
+
+| Resource | Demand (10 pipelines) | Available | Headroom |
+|----------|----------------------|-----------|----------|
+| Bedrock RPM | ~500 peak burst | 10,000 | 95% free |
+| Bedrock TPM | ~1.5M peak | 5,000,000 | 70% free |
+| DB Connections | ~60-80 active | ~215 (db.t4g.small max) | OK |
+| Memory | ~6 GB peak | 8 GB per task x 2-8 tasks | OK |
+| CPU Threads | ~50 peak (Stage 4) | ~24/task x 2-8 tasks | OK |
+| Redis | ~10K events | cache.t4g.micro | OK |
+
+**Per-pipeline resource profile (100 companies):**
+- ~1,100-1,600 Bedrock API calls over 60-95 minutes
+- Peak 5 concurrent agent threads (Stage 4: Contact Discovery)
+- ~8-12 DB connections at peak
+- ~300-500 MB memory at peak
+
+**Application-level protections:**
+- Pipeline concurrency semaphore (`MAX_CONCURRENT_PIPELINES=10` in `pipeline_service.py`)
+- Bedrock throttle retry with exponential backoff (3 retries, 2s/4s/8s delays) on all agent calls
+- DB connection pool tuned: `pool_size=5, max_overflow=10, pool_recycle=1800, pool_pre_ping=True`
+- DuckDuckGo global rate limiter: 3 tokens max, 60s cooldown on rate limit detection
+- External API rate limit detection (429/402/403) with agent-level tool switching
+
+**Autoscaling:** ECS scales from 2 to 8 tasks based on CPU utilization (target 70%, scale-out cooldown 60s, scale-in cooldown 300s). At current low utilization (~0.2% CPU), autoscaling will only trigger under sustained multi-pipeline load.
 
 ### Database Tables (16 migrations applied)
 
@@ -556,6 +746,48 @@ k1l2m3n4o5p6  Add tool priority and auto-disable (HEAD)
 ---
 
 ## Deployment History
+
+### 2026-03-25 — Infrastructure scale-up for 10 concurrent pipelines
+
+**Goal**: Scale infrastructure and add application-level controls to support up to 10 concurrent pipeline runs.
+
+**Infrastructure changes (AWS CLI, no Terraform):**
+
+| Change | Before | After |
+|--------|--------|-------|
+| Bedrock model | `us.anthropic.claude-sonnet-4-20250514-v1:0` (200 RPM) | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` (10,000 RPM) |
+| ECS task CPU | 2048 (2 vCPU) | 4096 (4 vCPU) |
+| ECS task memory | 4096 MB (4 GB) | 8192 MB (8 GB) |
+| ECS autoscaling max | 4 tasks | 8 tasks |
+| Redis | Not deployed (in-memory fallback) | ElastiCache `cache.t4g.micro`, Redis 7.1 |
+| Task definition | Revision 4 | Revision 7 (5=model, 6=Redis, 7=CPU/memory) |
+
+**Code changes:**
+- `backend/entrypoint.sh` — uvicorn workers: 2 → 4
+- `backend/app/db/session.py` — DB pool tuned: `pool_size=5, max_overflow=10`, added `pool_recycle=1800` and `pool_pre_ping=True` to prevent stale connections
+- `backend/app/services/pipeline_service.py`:
+  - Added `MAX_CONCURRENT_PIPELINES = 10` with `asyncio.Semaphore` gating all 4 pipeline entry points (`execute_pipeline`, `resume_after_firmographic`, `resume_after_first_signal`, `resume_after_signals`)
+  - Added `run_agent_with_retry()` — retries Bedrock `ThrottlingException` with exponential backoff (3 retries, 2s/4s/8s delays); replaced all 9 `asyncio.to_thread(agent, prompt)` calls
+- `backend/app/api/pipeline.py` — pre-check returns HTTP 429 immediately when all pipeline slots are full
+
+**Task definition revisions:**
+- Rev 5: Changed `BEDROCK_MODEL_ID` to Claude Sonnet 4.5
+- Rev 6: Added `REDIS_URL=redis://qlgen-redis.pmodat.0001.use1.cache.amazonaws.com:6379/0`
+- Rev 7: CPU 2048→4096, Memory 4096→8192
+
+**Deployment**: Backend-only redeploy via crane. No migrations. No frontend changes.
+
+### 2026-03-24 — Backend hotfix (NoneType .lower() in firmographic filter)
+
+**Issue**: Pipeline runs failing with `'NoneType' object has no attribute 'lower'` in `quick_firmographic_filter()`.
+
+**Root cause**: ICP config JSON contained `None` values in `countries` list or `vertical`/`sub_vertical` fields. The code called `.lower()` without guarding against `None`. Python's `dict.get("key", "")` returns `None` (not `""`) when the key exists with an explicit `None` value.
+
+**Fix** (3 lines in `pipeline_service.py`):
+- Line 764: Added `if c` filter to skip `None` entries in countries set comprehension
+- Lines 768-769: Changed `item.get("vertical", "")` to `(item.get("vertical") or "")` to handle explicit `None` values
+
+**Deployment**: Backend-only redeploy. No task definition or migration changes.
 
 ### 2026-03-23 — Full stack redeployment
 
