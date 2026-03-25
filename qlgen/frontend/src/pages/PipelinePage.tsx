@@ -40,6 +40,7 @@ import {
 import { PipelineRun, PipelineLogEntry, Company } from '../types';
 import { API_BASE } from '../api/client';
 import { getAccessToken } from '../context/AuthContext';
+import { EvidenceDisplay, EvidenceSignalSummary } from '../components/EvidenceDisplay';
 
 const { Text, Paragraph } = Typography;
 
@@ -2221,6 +2222,7 @@ const PipelinePage: React.FC = () => {
                 >
                   {sr.reasoning || '-'}
                 </Paragraph>
+                <EvidenceSignalSummary evidence={sr.evidence} maxSignals={2} />
               </div>
             ))}
           </div>
@@ -2303,8 +2305,60 @@ const PipelinePage: React.FC = () => {
             rowKey="id"
             loading={reviewLoading}
             pagination={false}
-            scroll={{ x: 900 }}
+            scroll={{ x: 950 }}
             size="small"
+            expandable={{
+              expandedRowRender: (record: Company) => {
+                const stageResults = record.stage_results || [];
+                const relevantResults = stageResults.filter((sr) => {
+                  if (isBothSignals) return sr.stage === 'budget_signals' || sr.stage === 'urgency_signals';
+                  return sr.stage === currentSignalType;
+                });
+                if (relevantResults.length === 0) {
+                  return <Text type="secondary" style={{ fontSize: 12, padding: 8 }}>No evidence details available.</Text>;
+                }
+                return (
+                  <div style={{ padding: '8px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {relevantResults.map((sr, i) => (
+                      <div key={i}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <Tag
+                            color={sr.stage === 'budget_signals' ? 'green' : sr.stage === 'urgency_signals' ? 'orange' : 'blue'}
+                            style={{ fontSize: 11 }}
+                          >
+                            {sr.stage === 'budget_signals' ? 'Budget Signal' : sr.stage === 'urgency_signals' ? 'Urgency Signal' : sr.stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                          </Tag>
+                          {sr.score != null && (
+                            <Text style={{ fontSize: 12, fontWeight: 600, color: getSignalScoreColor(sr.score) }}>
+                              Score: {Math.round(sr.score)}/100
+                            </Text>
+                          )}
+                        </div>
+                        {sr.reasoning && (
+                          <div style={{
+                            background: '#fafafa', padding: '10px 14px',
+                            borderRadius: 6, fontSize: 12, color: 'var(--g700)',
+                            lineHeight: 1.7, marginBottom: 10,
+                            borderLeft: `3px solid ${sr.stage === 'budget_signals' ? '#52c41a' : sr.stage === 'urgency_signals' ? '#fa8c16' : '#1677ff'}`,
+                          }}>
+                            <Text type="secondary" style={{ fontSize: 11, fontWeight: 600 }}>Reasoning: </Text>
+                            {sr.reasoning}
+                          </div>
+                        )}
+                        {sr.evidence != null && (
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, display: 'block' }}>
+                              Evidence
+                            </Text>
+                            <EvidenceDisplay evidence={sr.evidence} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              },
+            }}
           />
         </Card>
 

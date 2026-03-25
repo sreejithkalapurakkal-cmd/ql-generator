@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Avatar, Dropdown, type MenuProps } from 'antd';
-import { SearchOutlined, UnorderedListOutlined, GoogleOutlined, UserOutlined, LogoutOutlined, TeamOutlined } from '@ant-design/icons';
+import { Avatar, Dropdown, Tooltip, type MenuProps } from 'antd';
+import { SearchOutlined, UnorderedListOutlined, GoogleOutlined, UserOutlined, LogoutOutlined, TeamOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { useAuth } from '../context/AuthContext';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -109,6 +109,16 @@ const WelcomePage: React.FC = () => {
           )}
 
           <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {isAuthenticated && (
+              <Tooltip title="User Guide">
+                <QuestionCircleOutlined
+                  onClick={() => window.open('/qlGen-User-Guide.pdf', '_blank')}
+                  style={{ fontSize: 18, color: 'rgba(0,0,0,0.45)', cursor: 'pointer', transition: 'color 0.2s' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#5C2D8F')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(0,0,0,0.45)')}
+                />
+              </Tooltip>
+            )}
             {isAuthenticated ? (
               <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
                 <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>

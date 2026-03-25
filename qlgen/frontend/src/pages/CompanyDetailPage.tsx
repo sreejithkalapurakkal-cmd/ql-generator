@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Button, Card, Tag, Tooltip, Typography, Spin, Select, message, Space,
 } from 'antd';
-import { LinkOutlined, ThunderboltOutlined, TeamOutlined, LoadingOutlined } from '@ant-design/icons';
+import { LinkOutlined, ThunderboltOutlined, TeamOutlined, LoadingOutlined, MailOutlined } from '@ant-design/icons';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   getSingleCompany, discoverCompanySignals, discoverCompanyContacts, getDiscoveryStreamUrl,
@@ -10,6 +10,8 @@ import {
 } from '../api/leadsApi';
 import { Company, CompanyStageResult, Contact } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
+import { useAuth } from '../context/AuthContext';
+import { EvidenceDisplay } from '../components/EvidenceDisplay';
 
 const { Text } = Typography;
 
@@ -79,150 +81,6 @@ const STAGE_BORDER_COLOR: Record<string, string> = {
 };
 const getStageBorderColor = (antColor: string): string =>
   STAGE_BORDER_COLOR[antColor] || 'var(--g300)';
-
-// ---------------------------------------------------------------------------
-// Evidence Display
-// ---------------------------------------------------------------------------
-
-const EvidenceDisplay: React.FC<{ evidence: unknown }> = ({ evidence }) => {
-  if (!evidence) return null;
-
-  if (Array.isArray(evidence)) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {evidence.map((item: any, idx: number) => (
-          <div key={idx} style={{
-            background: 'var(--g50)', padding: '10px 16px', borderRadius: 'var(--radius-sm)',
-            fontSize: 12, lineHeight: 1.6,
-            borderLeft: `3px solid ${item.score != null
-              ? (item.score >= 4 ? 'var(--green)' : item.score >= 2 ? 'var(--amber)' : 'var(--red)')
-              : 'var(--g300)'}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              {(item.signal_name || item.name) && (
-                <Text style={{ fontWeight: 600, fontSize: 12 }}>{item.signal_name || item.name}</Text>
-              )}
-              {item.score != null && (
-                <Tag color={item.score >= 4 ? 'green' : item.score >= 2 ? 'gold' : 'red'} style={{ fontSize: 10 }}>
-                  {item.score}/5
-                </Tag>
-              )}
-            </div>
-            {item.description && <div style={{ color: 'var(--g600)' }}>{item.description}</div>}
-            {item.source_url && (
-              <a href={item.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--purple)' }}>
-                <LinkOutlined style={{ marginRight: 4 }} />
-                {item.source_url.length > 60 ? item.source_url.substring(0, 60) + '...' : item.source_url}
-              </a>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (typeof evidence === 'object' && evidence !== null) {
-    const obj = evidence as Record<string, unknown>;
-    const keys = Object.keys(obj);
-
-    const firmographicKeys = new Set([
-      'revenue', 'employees', 'capability_fit', 'low_cost_center',
-      'industry', 'geography', 'employee_count', 'revenue_range',
-    ]);
-    const isFirmographic = keys.some(k => firmographicKeys.has(k));
-
-    const formatCriterionValue = (key: string, val: unknown): React.ReactNode => {
-      if (val == null) return <Text type="secondary">N/A</Text>;
-      if (typeof val !== 'object') return <Text>{String(val)}</Text>;
-
-      const criterion = val as Record<string, unknown>;
-
-      if ('match' in criterion) {
-        const matched = Boolean(criterion.match);
-        return (
-          <div style={{ background: 'var(--g50)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12, lineHeight: 1.6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Text style={{ fontWeight: 600, fontSize: 12 }}>
-                {key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-              </Text>
-              <Tag color={matched ? 'green' : 'red'} style={{ fontSize: 10 }}>{matched ? 'Match' : 'No Match'}</Tag>
-            </div>
-            {!!criterion.reasoning && <Text style={{ color: 'var(--g600)', fontSize: 12 }}>{String(criterion.reasoning)}</Text>}
-          </div>
-        );
-      }
-
-      if ('value' in criterion) {
-        const inRange = 'in_range' in criterion ? Boolean(criterion.in_range) : null;
-        const value = criterion.value;
-        const source = criterion.source ? String(criterion.source) : null;
-        let displayValue = String(value);
-        if (typeof value === 'number') {
-          if (key.toLowerCase().includes('revenue')) {
-            displayValue = value >= 1_000_000_000
-              ? `$${(value / 1_000_000_000).toFixed(1)}B`
-              : value >= 1_000_000
-                ? `$${(value / 1_000_000).toFixed(0)}M`
-                : `$${value.toLocaleString()}`;
-          } else {
-            displayValue = value.toLocaleString();
-          }
-        }
-        return (
-          <div style={{ background: 'var(--g50)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12, lineHeight: 1.6, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Text style={{ fontWeight: 600, fontSize: 12 }}>{key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}:</Text>
-            <Text style={{ fontSize: 12 }}>{displayValue}</Text>
-            {inRange != null && <Tag color={inRange ? 'green' : 'red'} style={{ fontSize: 10 }}>{inRange ? 'In Range' : 'Out of Range'}</Tag>}
-            {source && <Tag style={{ fontSize: 10 }}>{source}</Tag>}
-          </div>
-        );
-      }
-
-      const boolKey = Object.keys(criterion).find(k => typeof criterion[k] === 'boolean');
-      if (boolKey) {
-        const boolVal = Boolean(criterion[boolKey]);
-        const source = criterion.source ? String(criterion.source) : null;
-        return (
-          <div style={{ background: 'var(--g50)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12, lineHeight: 1.6, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Text style={{ fontWeight: 600, fontSize: 12 }}>{key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}:</Text>
-            <Tag color={boolVal ? 'green' : 'default'} style={{ fontSize: 10 }}>{boolVal ? 'Yes' : 'No'}</Tag>
-            {source && <Tag style={{ fontSize: 10 }}>{source}</Tag>}
-          </div>
-        );
-      }
-
-      return (
-        <div style={{ background: 'var(--g50)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12, lineHeight: 1.6 }}>
-          <Text style={{ fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 4 }}>
-            {key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-          </Text>
-          {Object.entries(criterion).map(([subKey, subVal]) => (
-            <div key={subKey} style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
-              <Text type="secondary" style={{ fontSize: 11 }}>{subKey.replace(/_/g, ' ')}:</Text>
-              <Text style={{ fontSize: 11 }}>{typeof subVal === 'object' ? JSON.stringify(subVal) : String(subVal)}</Text>
-            </div>
-          ))}
-        </div>
-      );
-    };
-
-    if (isFirmographic || keys.length > 0) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {keys.map(key => (
-            <React.Fragment key={key}>{formatCriterionValue(key, obj[key])}</React.Fragment>
-          ))}
-        </div>
-      );
-    }
-  }
-
-  return (
-    <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'var(--g50)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
-      {typeof evidence === 'string' ? evidence : JSON.stringify(evidence, null, 2)}
-    </pre>
-  );
-};
 
 // ---------------------------------------------------------------------------
 // Dimension Score Tags
@@ -324,6 +182,54 @@ const StageResultsPanel: React.FC<{ stageResults: CompanyStageResult[]; emptyTex
 };
 
 // ---------------------------------------------------------------------------
+// Outreach email prompt builder
+// ---------------------------------------------------------------------------
+
+const buildOutreachEmailPrompt = (contact: Contact, company: Company, senderName: string | null): string => {
+  const contactName = contact.full_name
+    || [contact.first_name, contact.last_name].filter(Boolean).join(' ')
+    || 'the contact';
+  const designation = contact.designation || 'N/A';
+  const stageResults = company.stage_results || [];
+  const budgetResult = stageResults.find(r => r.stage === 'budget_signals' || r.stage === 'budget_signal');
+  const urgencyResult = stageResults.find(r => r.stage === 'urgency_signals' || r.stage === 'urgency_signal');
+
+  return `Generate a professional outreach email (~300 words) from **Gadgeon Smart Systems** to **${contactName}**, ${designation} at **${company.name}**.
+
+**About the Sender — Gadgeon Smart Systems (gadgeon.com):**
+- Product engineering: hardware, firmware, embedded systems, IoT solutions
+- Application development, generative AI, and business process automation
+- Industry expertise: medical devices, consumer electronics, manufacturing, healthcare, retail, energy, telecom, EV charging, logistics, banking
+- Operates as a strategic technology partner offering dedicated services and Global Capability Centre (GCC) model
+- Global presence across India, USA, Europe, and Dubai
+
+**Target Company Context (from pipeline findings):**
+- Industry: ${company.industry || 'N/A'}
+- Description: ${company.description || 'N/A'}
+- Match Reasoning: ${company.match_reasoning || 'N/A'}
+- ICP Match Score: ${company.icp_match_score != null ? `${Math.round(company.icp_match_score)}/100` : 'N/A'}
+- Budget Signal Score: ${company.budget_signal_score != null ? `${Math.round(company.budget_signal_score)}/100` : 'N/A'}
+- Urgency Signal Score: ${company.urgency_signal_score != null ? `${Math.round(company.urgency_signal_score)}/100` : 'N/A'}
+- Budget Signal Reasoning: ${budgetResult?.reasoning || 'N/A'}
+- Urgency Signal Reasoning: ${urgencyResult?.reasoning || 'N/A'}
+
+**Contact Details:**
+- Name: ${contactName}
+- Title: ${designation}
+- Email: ${contact.email || 'N/A'}
+- Location: ${contact.city || 'N/A'}
+
+**Requirements:**
+1. Write as a Gadgeon representative reaching out to a potential client
+2. Create a personalized hook connecting Gadgeon's relevant capabilities to the target company's needs based on pipeline findings
+3. Reference budget/urgency signals naturally — do NOT expose internal scores
+4. Include a clear, low-friction call to action (e.g. a brief call or meeting)
+5. Professional but conversational tone
+6. Sign off with: ${senderName ? `"Best regards, ${senderName}, Gadgeon Smart Systems"` : '"Best regards, Gadgeon Smart Systems"'}
+7. Format in markdown with a subject line`;
+};
+
+// ---------------------------------------------------------------------------
 // Tab: Contacts
 // ---------------------------------------------------------------------------
 
@@ -402,7 +308,12 @@ const ContactInfoRow: React.FC<{ label: string; children: React.ReactNode }> = (
   </div>
 );
 
-const ContactsTab: React.FC<{ contacts: Contact[] }> = ({ contacts }) => {
+const ContactsTab: React.FC<{ contacts: Contact[]; company: Company; senderName: string | null }> = ({ contacts, company, senderName }) => {
+  const handleGenerateOutreachEmail = (contact: Contact) => {
+    const prompt = buildOutreachEmailPrompt(contact, company, senderName);
+    window.dispatchEvent(new CustomEvent('copilot:send-message', { detail: { message: prompt } }));
+  };
+
   if (contacts.length === 0) {
     return (
       <Card style={{ textAlign: 'center', padding: '32px 24px' }}>
@@ -432,10 +343,18 @@ const ContactsTab: React.FC<{ contacts: Contact[] }> = ({ contacts }) => {
             display: 'flex',
             flexDirection: 'column',
           }}>
-            {/* Header: name + designation */}
+            {/* Header: name + designation + outreach icon */}
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--g900)', lineHeight: 1.3 }}>
-                {displayName}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--g900)', lineHeight: 1.3 }}>
+                  {displayName}
+                </div>
+                <Tooltip title="Generate outreach email">
+                  <MailOutlined
+                    onClick={() => handleGenerateOutreachEmail(contact)}
+                    style={{ fontSize: 14, color: 'var(--purple)', cursor: 'pointer' }}
+                  />
+                </Tooltip>
               </div>
               {(contact.designation || contact.role_category) && (
                 <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -786,6 +705,7 @@ const CompanyDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { setCompanyId } = usePageContext();
+  const { user } = useAuth();
 
   const [company, setCompany] = useState<Company | null>(
     (location.state as any)?.company ?? null
@@ -1257,7 +1177,7 @@ const CompanyDetailPage: React.FC = () => {
               </Button>
             </div>
           )}
-          <ContactsTab contacts={company.contacts} />
+          <ContactsTab contacts={company.contacts} company={company} senderName={user?.name ?? null} />
         </div>
       )}
       {activeTab === 'overview'        && <OverviewTab company={company} />}

@@ -161,6 +161,19 @@ const CoPilotPanel: React.FC = () => {
     }
   };
 
+  // Listen for programmatic send requests (e.g. outreach email generation)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { message } = (e as CustomEvent<{ message: string }>).detail;
+      if (!message || isStreaming) return;
+      setIsOpen(true);
+      startNewChat();
+      setTimeout(() => sendMessage(message), 100);
+    };
+    window.addEventListener('copilot:send-message', handler);
+    return () => window.removeEventListener('copilot:send-message', handler);
+  }, [isStreaming, sendMessage, startNewChat]);
+
   // Delete a session
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
