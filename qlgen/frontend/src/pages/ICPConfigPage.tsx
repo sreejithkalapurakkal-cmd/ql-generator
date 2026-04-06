@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Switch } from 'antd';
-import { UploadOutlined, FileExcelOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
+import { Card, Button, Form, Input, Select, InputNumber, Tag, Space, message, Descriptions, Upload, Modal, Spin, Alert, Switch, Radio } from 'antd';
+import { UploadOutlined, FileExcelOutlined, DownloadOutlined, RobotOutlined, LinkedinOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI, generateICPFromFile } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
+import { getEvabootStatus, EvabootStatus } from '../api/toolsApi';
 import { ICPDefinition, DEFAULT_ICP } from '../types';
+import { parseSalesNavUrl, generateNameFromExtraction, SalesNavExtraction } from '../utils/salesNavParser';
 
 const { TextArea } = Input;
 
@@ -68,6 +70,83 @@ const ICPConfigPage: React.FC = () => {
   const [aiDescription, setAiDescription] = useState('');
   const [aiFile, setAiFile] = useState<File | null>(null);
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [discoveryMode, setDiscoveryMode] = useState<'qlgen_only' | 'sales_navigator_only' | 'sales_navigator_plus_qlgen'>('qlgen_only');
+  const [salesNavUrl, setSalesNavUrl] = useState('');
+  const [evabootStatus, setEvabootStatus] = useState<EvabootStatus | null>(null);
+  const [salesNavExtraction, setSalesNavExtraction] = useState<SalesNavExtraction | null>(null);
+  const [autoFillApplied, setAutoFillApplied] = useState<string>('');
+
+  const isSalesNav = discoveryMode !== 'qlgen_only';
+
+  // Debounced auto-parse of Sales Nav URL
+  useEffect(() => {
+    if (!isSalesNav || !salesNavUrl.trim()) {
+      setSalesNavExtraction(null);
+      setAutoFillApplied('');
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const extraction = parseSalesNavUrl(salesNavUrl.trim());
+      setSalesNavExtraction(extraction);
+
+      // Auto-fill ICP fields if parseable and not already applied for this URL
+      if (extraction.isParseable && !extraction.isSavedList && autoFillApplied !== salesNavUrl.trim()) {
+        const partial = extraction.icpPartial;
+
+        setConfig((prev) => {
+          const next = { ...prev };
+
+          if (partial.firmographic_details) {
+            const pf = partial.firmographic_details;
+            next.firmographic_details = {
+              ...prev.firmographic_details,
+              industry_types: pf.industry_types.length > 0 ? pf.industry_types : prev.firmographic_details.industry_types,
+              geography: {
+                countries: pf.geography.countries.length > 0 ? pf.geography.countries : prev.firmographic_details.geography.countries,
+              },
+              employee_range: (pf.employee_range.min !== 50 || pf.employee_range.max !== 1500) ? pf.employee_range : prev.firmographic_details.employee_range,
+              revenue_range: (pf.revenue_range.min !== 10000000 || pf.revenue_range.max !== 500000000) ? pf.revenue_range : prev.firmographic_details.revenue_range,
+              low_cost_center: prev.firmographic_details.low_cost_center,
+            };
+          }
+
+          if (partial.target_capability && partial.target_capability.offerings.length > 0) {
+            next.target_capability = {
+              ...prev.target_capability,
+              offerings: [...new Set([...prev.target_capability.offerings, ...partial.target_capability.offerings])],
+            };
+          }
+
+          if (partial.authority_roles && partial.authority_roles.target_roles.length > 0) {
+            next.authority_roles = {
+              ...prev.authority_roles,
+              target_roles: [...new Set([...prev.authority_roles.target_roles, ...partial.authority_roles.target_roles])],
+            };
+          }
+
+          return next;
+        });
+
+        // Auto-generate name if empty
+        if (!name.trim() || name === 'Sales Nav Search') {
+          const autoName = generateNameFromExtraction(extraction.icpPartial);
+          setName(autoName);
+        }
+
+        setAutoFillApplied(salesNavUrl.trim());
+        message.success(`Extracted ${extraction.filters.length} filter(s) from Sales Navigator URL`);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [salesNavUrl, isSalesNav]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    getEvabootStatus()
+      .then((res) => setEvabootStatus(res.data))
+      .catch(() => setEvabootStatus(null));
+  }, []);
 
   const handleImportUpload = async (file: File) => {
     setImportParsing(true);
@@ -81,7 +160,7 @@ const ICPConfigPage: React.FC = () => {
         if (icp.config) setConfig(icp.config as unknown as ICPDefinition);
         message.success('Search criteria imported — review and edit below');
         setImportModalOpen(false);
-        setCurrent(5); // Jump to Review step
+        setCurrent(6); // Jump to Review step
       } else {
         message.error('No ICP data found in uploaded file');
       }
@@ -100,14 +179,60 @@ const ICPConfigPage: React.FC = () => {
         ? await generateICPFromFile(aiFile, aiDescription)
         : await generateICPWithAI({ description: aiDescription });
       const { name: aiName, description: aiDesc, config: aiConfig } = res.data;
-      if (aiName) setName(aiName);
-      if (aiDesc) setDescription(aiDesc);
-      if (aiConfig) setConfig(aiConfig as unknown as ICPDefinition);
-      message.success('Search criteria generated — review and edit below');
+
+      if (isSalesNav && salesNavExtraction?.isParseable && !salesNavExtraction.isSavedList) {
+        // Merge mode: only fill fields that are empty / at default values
+        const generated = aiConfig as unknown as ICPDefinition;
+        if (aiName && !name.trim()) setName(aiName);
+        if (aiDesc && !description.trim()) setDescription(aiDesc);
+        if (generated) {
+          setConfig((prev) => {
+            const next = { ...prev };
+            // Don't overwrite URL-extracted firmographics — only fill if still at defaults
+            const prevFirm = prev.firmographic_details;
+            next.firmographic_details = {
+              ...prevFirm,
+              industry_types: prevFirm.industry_types.length > 0 ? prevFirm.industry_types : generated.firmographic_details.industry_types,
+              geography: {
+                countries: prevFirm.geography.countries.length > 0 ? prevFirm.geography.countries : generated.firmographic_details.geography.countries,
+              },
+              employee_range: (autoFillApplied && (prevFirm.employee_range.min !== 50 || prevFirm.employee_range.max !== 1500))
+                ? prevFirm.employee_range
+                : generated.firmographic_details.employee_range,
+              revenue_range: (autoFillApplied && (prevFirm.revenue_range.min !== 10000000 || prevFirm.revenue_range.max !== 500000000))
+                ? prevFirm.revenue_range
+                : generated.firmographic_details.revenue_range,
+              low_cost_center: prevFirm.low_cost_center,
+            };
+            // Fill empty scoring fields
+            if (prev.target_capability.offerings.length === 0 && generated.target_capability.offerings.length > 0) {
+              next.target_capability = generated.target_capability;
+            }
+            if (prev.urgency_signals.signals.length === 0 && generated.urgency_signals.signals.length > 0) {
+              next.urgency_signals = generated.urgency_signals;
+            }
+            if (prev.budget_signals.signals.length === 0 && generated.budget_signals.signals.length > 0) {
+              next.budget_signals = generated.budget_signals;
+            }
+            if (prev.authority_roles.target_roles.length === 0 && generated.authority_roles.target_roles.length > 0) {
+              next.authority_roles = generated.authority_roles;
+            }
+            return next;
+          });
+        }
+        message.success('AI filled remaining fields — review and edit below');
+      } else {
+        // Replace mode: existing behavior for qlGen
+        if (aiName) setName(aiName);
+        if (aiDesc) setDescription(aiDesc);
+        if (aiConfig) setConfig(aiConfig as unknown as ICPDefinition);
+        message.success('Search criteria generated — review and edit below');
+      }
+
       setAiModalOpen(false);
       setAiDescription('');
       setAiFile(null);
-      setCurrent(5); // Jump to Review step
+      setCurrent(6); // Jump to Review step
     } catch (err: any) {
       message.error(err?.response?.data?.detail || 'Failed to generate search criteria with AI');
     } finally {
@@ -128,7 +253,7 @@ const ICPConfigPage: React.FC = () => {
         setName(`Copy of ${cloneFrom.name}`);
         setDescription(cloneFrom.description || '');
         setConfig(cloneFrom.config as unknown as ICPDefinition);
-        setCurrent(5); // Jump to Review step
+        setCurrent(6); // Jump to Review step
       }
     }
   }, [id, location.state]);
@@ -166,21 +291,282 @@ const ICPConfigPage: React.FC = () => {
 
   const steps = [
     {
+      title: 'Discovery Source',
+      content: (
+        <Form layout="vertical">
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--g800)', marginBottom: 4 }}>How should companies be discovered?</div>
+            <div style={{ fontSize: 13, color: 'var(--g500)', lineHeight: 1.6 }}>
+              This controls <strong>Stage 1 (Industry Discovery)</strong> and <strong>Stage 2 (Firmographic Fit)</strong>. Stages 3–5 (Signals, Contacts, Scoring) run the same regardless.
+            </div>
+          </div>
+
+          <Form.Item>
+            <Radio.Group
+              value={discoveryMode}
+              onChange={(e) => setDiscoveryMode(e.target.value)}
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+            >
+              <Radio value="qlgen_only" style={{ padding: '14px 16px', border: '1px solid var(--g200)', borderRadius: 10, margin: 0, background: discoveryMode === 'qlgen_only' ? 'var(--purple-pale, #f9f0ff)' : '#fff' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>qlGen Multi-Source</div>
+                  <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 2 }}>Apollo, Exa, DuckDuckGo, registries, and more. No extra credits needed.</div>
+                </div>
+              </Radio>
+              <Radio value="sales_navigator_only" style={{ padding: '14px 16px', border: '1px solid var(--g200)', borderRadius: 10, margin: 0, background: discoveryMode === 'sales_navigator_only' ? 'var(--purple-pale, #f9f0ff)' : '#fff' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}><LinkedinOutlined style={{ marginRight: 6, color: '#0a66c2' }} />LinkedIn Sales Navigator Only</div>
+                  <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 2 }}>Extract companies & contacts from your Sales Navigator search via Evaboot (1 credit/profile).</div>
+                </div>
+              </Radio>
+              <Radio value="sales_navigator_plus_qlgen" style={{ padding: '14px 16px', border: '1px solid var(--g200)', borderRadius: 10, margin: 0, background: discoveryMode === 'sales_navigator_plus_qlgen' ? 'var(--purple-pale, #f9f0ff)' : '#fff' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}><LinkedinOutlined style={{ marginRight: 6, color: '#0a66c2' }} />Sales Navigator + qlGen (Hybrid)</div>
+                  <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 2 }}>LinkedIn data combined with multi-source discovery for maximum coverage. Uses Evaboot credits.</div>
+                </div>
+              </Radio>
+            </Radio.Group>
+          </Form.Item>
+
+          {isSalesNav && (
+            <>
+              {/* Live Credit Balance & Session Status */}
+              {evabootStatus?.configured && !evabootStatus.quota?.error && (
+                <div style={{
+                  background: 'linear-gradient(135deg, #f0f7ff 0%, #f5f0ff 100%)',
+                  borderRadius: 10,
+                  padding: '16px 20px',
+                  marginBottom: 16,
+                  border: '1px solid var(--g200)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <LinkedinOutlined style={{ color: '#0a66c2', fontSize: 16 }} />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--g700)' }}>Evaboot Account Status</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    {/* Credits */}
+                    <div style={{ background: '#fff', borderRadius: 8, padding: '10px 16px', border: '1px solid var(--g150, #eee)', flex: '1 1 120px' }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Credits Available</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: (evabootStatus.quota?.credits ?? 0) < 100 ? '#ff4d4f' : 'var(--purple, #722ed1)', marginTop: 2 }}>
+                        {evabootStatus.quota?.credits != null ? Math.floor(evabootStatus.quota.credits).toLocaleString() : '—'}
+                      </div>
+                    </div>
+                    {/* Daily */}
+                    <div style={{ background: '#fff', borderRadius: 8, padding: '10px 16px', border: '1px solid var(--g150, #eee)', flex: '1 1 120px' }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Daily Usage</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--g800)', marginTop: 2 }}>
+                        {evabootStatus.quota?.used_today ?? 0}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--g400)' }}> / {evabootStatus.quota?.daily_limit ?? '—'}</span>
+                      </div>
+                    </div>
+                    {/* Session */}
+                    <div style={{ background: '#fff', borderRadius: 8, padding: '10px 16px', border: '1px solid var(--g150, #eee)', flex: '1 1 140px' }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--g400)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Sales Nav Session</div>
+                      {evabootStatus.sales_nav_sessions.length > 0 ? (
+                        evabootStatus.sales_nav_sessions.map((sn, i) => (
+                          <div key={sn.id || i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                            {sn.status === 'valid' ? (
+                              <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />
+                            ) : (
+                              <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />
+                            )}
+                            <span style={{ fontSize: 13, fontWeight: 700, color: sn.status === 'valid' ? '#52c41a' : '#ff4d4f' }}>
+                              {sn.status === 'valid' ? 'Connected' : 'Disconnected'}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                          <WarningOutlined style={{ color: '#faad14', fontSize: 16 }} />
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#faad14' }}>No Account</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Error state */}
+              {evabootStatus?.configured && evabootStatus.quota?.error && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Evaboot Connection Error"
+                  description={evabootStatus.quota.error}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+
+              {/* Not configured */}
+              {evabootStatus && !evabootStatus.configured && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Evaboot Not Configured"
+                  description="No Evaboot API key is set. Ask your admin to add EVABOOT_API_KEY to the environment configuration."
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+
+              {/* Session disconnected warning */}
+              {evabootStatus?.sales_nav_sessions.some(sn => sn.status !== 'valid') && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Sales Navigator Session Expired"
+                  description="Your Sales Navigator cookie has expired. Re-link your account in the Evaboot dashboard before running a search."
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+
+              <Form.Item
+                label="Sales Navigator URL"
+                required
+                help="Paste a Sales Navigator search or saved list URL. Narrow your search in Sales Navigator first to control credit usage."
+              >
+                <Input
+                  prefix={<LinkedinOutlined style={{ color: '#0a66c2' }} />}
+                  placeholder="https://www.linkedin.com/sales/search/..."
+                  value={salesNavUrl}
+                  onChange={(e) => setSalesNavUrl(e.target.value)}
+                  size="large"
+                />
+              </Form.Item>
+
+              {/* Extraction feedback */}
+              {salesNavExtraction && salesNavExtraction.isParseable && !salesNavExtraction.isSavedList && salesNavExtraction.filters.length > 0 && (
+                <div style={{
+                  background: '#f6ffed',
+                  border: '1px solid #b7eb8f',
+                  borderRadius: 8,
+                  padding: '14px 18px',
+                  marginBottom: 12,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 15 }} />
+                    <span style={{ fontWeight: 700, fontSize: 13, color: '#389e0d' }}>Filters extracted from URL</span>
+                  </div>
+                  <Space wrap style={{ marginBottom: 8 }}>
+                    {salesNavExtraction.filters.map((f) => (
+                      <Tag key={f.type} color="green">{f.type}: {f.values.join(', ')}</Tag>
+                    ))}
+                    {salesNavExtraction.keywords.length > 0 && (
+                      <Tag color="green">KEYWORDS: {salesNavExtraction.keywords.join(', ')}</Tag>
+                    )}
+                  </Space>
+                  {salesNavExtraction.missingFields.length > 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 6 }}>
+                      <span style={{ fontWeight: 600 }}>Not in URL:</span>{' '}
+                      {salesNavExtraction.missingFields.join(', ')}
+                    </div>
+                  )}
+                  <Button
+                    size="small"
+                    icon={<RobotOutlined />}
+                    onClick={() => {
+                      setAiDescription(
+                        `Sales Navigator search with: ${salesNavExtraction.summary}. Please fill in the missing fields: ${salesNavExtraction.missingFields.join(', ')}.`
+                      );
+                      setAiModalOpen(true);
+                    }}
+                    style={{ marginTop: 10 }}
+                  >
+                    Fill remaining with AI
+                  </Button>
+                </div>
+              )}
+
+              {salesNavExtraction && salesNavExtraction.isSavedList && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Saved list URL detected"
+                  description={
+                    <span>
+                      Saved list URLs don't contain filter parameters to extract. Use{' '}
+                      <Button size="small" type="link" style={{ padding: 0 }} icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>
+                        AI to generate criteria
+                      </Button>{' '}
+                      or fill in the fields manually.
+                    </span>
+                  }
+                  style={{ marginBottom: 12 }}
+                />
+              )}
+
+              {/* Credit pricing breakdown */}
+              <div style={{
+                background: '#fffbe6',
+                border: '1px solid #ffe58f',
+                borderRadius: 8,
+                padding: '12px 16px',
+                marginTop: 8,
+              }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#ad6800', marginBottom: 6 }}>
+                  <WarningOutlined style={{ marginRight: 6 }} />Credit Usage Policy
+                </div>
+                <div style={{ fontSize: 12, color: '#874d00', lineHeight: 1.8 }}>
+                  <div><strong>1 credit</strong> per profile extracted from your Sales Navigator search</div>
+                  <div><strong>1 credit</strong> per email found for each contact</div>
+                  <div><strong>0.5 credit</strong> per email validation</div>
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #ffe58f', fontWeight: 600 }}>
+                    A search returning 100 profiles with email enrichment = ~200 credits. Narrow your Sales Navigator search first to control costs.
+                  </div>
+                </div>
+              </div>
+
+              <Alert
+                type="info"
+                showIcon
+                message="ICP criteria still needed for scoring"
+                description="Your Sales Navigator URL handles company discovery. The ICP criteria in the next steps will be used by the AI agent to score firmographic fit, evaluate signals, and find the right contacts."
+                style={{ marginTop: 12 }}
+              />
+            </>
+          )}
+        </Form>
+      ),
+    },
+    {
       title: 'Firmographics',
       content: (
         <Form layout="vertical">
+          {isSalesNav && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<LinkedinOutlined />}
+              message="Sales Navigator handles discovery — these criteria are used for scoring"
+              description="Since you're using a Sales Navigator URL, companies are already filtered there. The firmographic criteria below will be used by the AI agent in Stage 2 to score each company's fit. You can leave defaults or refine them."
+              style={{ marginBottom: 16 }}
+            />
+          )}
           {!id && (
             <Alert
               type="info"
               showIcon
               icon={<RobotOutlined />}
-              message="Build your search criteria faster!"
+              message={isSalesNav ? 'Fill remaining fields with AI' : 'Build your search criteria faster!'}
               description={
                 <Space size="middle" style={{ marginTop: 4 }}>
-                  <Button size="small" icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)}>
-                    Create with AI / Upload
+                  <Button
+                    size="small"
+                    icon={<RobotOutlined />}
+                    onClick={() => {
+                      if (isSalesNav && salesNavExtraction?.summary) {
+                        setAiDescription(
+                          `Sales Navigator search with: ${salesNavExtraction.summary}. Please fill in the missing fields: ${salesNavExtraction.missingFields.join(', ')}.`
+                        );
+                      }
+                      setAiModalOpen(true);
+                    }}
+                  >
+                    {isSalesNav ? 'Fill remaining with AI' : 'Create with AI / Upload'}
                   </Button>
-                  <span style={{ fontSize: 12, color: 'var(--g500)' }}>Describe your ideal customer and fill in all the fields using AI, or upload your own criteria from a spreadsheet</span>
+                  <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                    {isSalesNav
+                      ? 'Use AI to fill urgency signals, budget signals, offerings, and other fields not in your Sales Navigator URL'
+                      : 'Describe your ideal customer and fill in all the fields using AI, or upload your own criteria from a spreadsheet'}
+                  </span>
                 </Space>
               }
               style={{ marginBottom: 16 }}
@@ -594,6 +980,16 @@ const ICPConfigPage: React.FC = () => {
             <Descriptions.Item label="Target Roles" span={2}>
               {config.authority_roles.target_roles.join(', ') || '-'}
             </Descriptions.Item>
+            <Descriptions.Item label="Discovery Source" span={2}>
+              {discoveryMode === 'qlgen_only' && 'qlGen Multi-Source'}
+              {discoveryMode === 'sales_navigator_only' && 'Sales Navigator Only (Evaboot)'}
+              {discoveryMode === 'sales_navigator_plus_qlgen' && 'Sales Navigator + qlGen (Hybrid)'}
+              {discoveryMode !== 'qlgen_only' && salesNavUrl && (
+                <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 4, wordBreak: 'break-all' }}>
+                  URL: {salesNavUrl}
+                </div>
+              )}
+            </Descriptions.Item>
           </Descriptions>
         </div>
       ),
@@ -617,7 +1013,14 @@ const ICPConfigPage: React.FC = () => {
       message.success('Search criteria saved successfully');
 
       if (runPipeline && icpId) {
-        const runRes = await startPipeline({ icp_config_id: icpId });
+        const pipelinePayload: Parameters<typeof startPipeline>[0] = {
+          icp_config_id: icpId,
+          discovery_mode: discoveryMode,
+        };
+        if (discoveryMode !== 'qlgen_only' && salesNavUrl.trim()) {
+          pipelinePayload.sales_navigator_url = salesNavUrl.trim();
+        }
+        const runRes = await startPipeline(pipelinePayload);
         navigate(`/pipeline/${runRes.data.id}`);
       } else {
         navigate('/icp');

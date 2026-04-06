@@ -160,3 +160,98 @@ async def get_admin_activity(
         "recent_runs": recent_runs,
         "recent_icps": recent_icps,
     }
+
+
+@router.get("/evaboot/credit-usage")
+async def get_evaboot_credit_usage(
+    _admin: User = Depends(get_current_admin_or_above),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get Evaboot credit usage summary: per-user and per-run consumption."""
+    # Per-user credit usage
+    user_usage_result = await db.execute(
+        select(
+            PipelineRun.user_id,
+            func.sum(PipelineRun.evaboot_credits_used).label("total_credits"),
+            func.count(PipelineRun.id).label("run_count"),
+        )
+        .where(PipelineRun.evaboot_credits_used > 0)
+        .group_by(PipelineRun.user_id)
+    )
+    user_usage_rows = user_usage_result.all()
+
+    user_ids = {row.user_id for row in user_usage_rows if row.user_id}
+    user_map = {}
+    if user_ids:
+        u_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        for u in u_result.scalars().all():
+            user_map[u.id] = {"name": u.name, "email": u.email}
+
+    per_user = [
+        {
+            "user_id": str(row.user_id) if row.user_id else None,
+            "user_name": user_map.get(row.user_id, {}).get("name"),
+            "user_email": user_map.get(row.user_id, {}).get("email"),
+            "total_credits_used": row.total_credits or 0,
+            "run_count": row.run_count or 0,
+        }
+        for row in user_usage_rows
+    ]
+
+    # Recent runs with Evaboot credit usage
+    recent_result = await db.execute(
+        select(PipelineRun)
+        .options(selectinload(PipelineRun.icp_config))
+        .where(PipelineRun.evaboot_credits_used > 0)
+        .order_by(PipelineRun.started_at.desc().nullslast())
+        .limit(50)
+    )
+    recent_runs = recent_result.scalars().all()
+
+    run_user_ids = {r.user_id for r in recent_runs if r.user_id}
+    run_user_map = {}
+    if run_user_ids:
+        u_result = await db.execute(select(User).where(User.id.in_(run_user_ids)))
+        for u in u_result.scalars().all():
+            run_user_map[u.id] = u.name or u.email
+
+    recent = [
+        {
+            "id": str(r.id),
+            "icp_name": r.icp_config.name if r.icp_config else None,
+            "user_name": run_user_map.get(r.user_id),
+            "discovery_mode": r.discovery_mode,
+            "credits_used": r.evaboot_credits_used or 0,
+            "companies_found": r.companies_found or 0,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+        }
+        for r in recent_runs
+    ]
+
+    # Total credits used
+    total_result = await db.execute(
+        select(func.sum(PipelineRun.evaboot_credits_used)).where(PipelineRun.evaboot_credits_used > 0)
+    )
+    total_credits = total_result.scalar() or 0
+
+    # Current Evaboot quota (live check)
+    quota = None
+    try:
+        from app.config import get_settings
+        settings = get_settings()
+        if settings.EVABOOT_API_KEY:
+            from app.tools.evaboot_tool import evaboot_check_quota
+            raw_quota = evaboot_check_quota()
+            if "error" in raw_quota:
+                quota = {"error": raw_quota["error"]}
+            else:
+                quota = raw_quota.get("quota", raw_quota)
+    except Exception:
+        pass
+
+    return {
+        "total_credits_used": total_credits,
+        "per_user": per_user,
+        "recent_runs": recent,
+        "current_quota": quota,
+    }

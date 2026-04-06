@@ -20,6 +20,7 @@ from app.agent.lead_gen_agent import (
     create_industry_discovery_agent,
     create_discovery_sub_agent_db,
     create_discovery_sub_agent_web,
+    create_discovery_sub_agent_evaboot,
     create_firmographic_fit_agent,
     create_signal_agent,
     create_contact_agent,
@@ -116,6 +117,205 @@ async def _preseed_from_embeddings(
 
     logger.info(f"KB pre-seed: found {len(seed_companies)} similar companies from knowledge base")
     return seed_companies
+
+
+# ──────────────────────────────────────────────────────────────────
+# Evaboot / Sales Navigator helpers
+# ──────────────────────────────────────────────────────────────────
+
+async def _run_evaboot_extraction(
+    run_id_str: str,
+    sales_navigator_url: str,
+    event_collector: list,
+    disabled_tools: set[str] | None,
+    max_credits: int = 500,
+) -> tuple[list[dict], int]:
+    """Run Evaboot extraction and return (companies, credits_used).
+
+    Starts extraction, polls for completion, then parses prospects into
+    the standard company dict format used by Stage 1.
+    """
+    from app.agent.prompt_builder import build_industry_discovery_prompt
+    from app.tools.evaboot_tool import (
+        evaboot_check_quota as _check_quota,
+        evaboot_extract_from_url as _extract,
+        evaboot_get_extraction_status as _get_status,
+        evaboot_get_extraction_results as _get_results,
+    )
+
+    # Pre-flight credit check
+    await _emit_event(run_id_str, {
+        "type": "stage_update",
+        "stage": "industry_discovery",
+        "progress": 8,
+        "message": "Stage 1 (Evaboot): Checking available credits...",
+    })
+
+    raw_quota = _check_quota()
+    if "error" in raw_quota:
+        raise ValueError(f"Evaboot credit check failed: {raw_quota['error']}")
+
+    # Evaboot API nests data under "quota" key: {"success": true, "quota": {...}}
+    quota = raw_quota.get("quota", raw_quota)
+
+    available_credits = quota.get("credits", 0)
+    if available_credits < 10:
+        raise ValueError(
+            f"Insufficient Evaboot credits ({available_credits} remaining). "
+            f"Need at least 10 credits to run an extraction."
+        )
+
+    logger.info(f"[Evaboot] Credits available: {available_credits}, daily remaining: {quota.get('remaining', '?')}")
+
+    # Start extraction
+    await _emit_event(run_id_str, {
+        "type": "stage_update",
+        "stage": "industry_discovery",
+        "progress": 10,
+        "message": "Stage 1 (Evaboot): Starting Sales Navigator extraction...",
+    })
+
+    extraction = _extract(
+        linkedin_url=sales_navigator_url,
+        search_name=f"pipeline_{run_id_str[:8]}",
+        enrich_email="all",
+    )
+    if "error" in extraction:
+        raise ValueError(f"Evaboot extraction failed: {extraction['error']}")
+
+    extraction_id = extraction.get("id") or extraction.get("extraction_id")
+    if not extraction_id:
+        raise ValueError(f"Evaboot did not return an extraction ID: {extraction}")
+
+    logger.info(f"[Evaboot] Extraction started: {extraction_id}")
+
+    # Poll for completion (max 10 minutes)
+    max_polls = 60
+    poll_interval = 10
+    for i in range(max_polls):
+        await asyncio.sleep(poll_interval)
+
+        status_resp = _get_status(str(extraction_id))
+        if "error" in status_resp:
+            logger.warning(f"[Evaboot] Status poll error: {status_resp['error']}")
+            continue
+
+        status = (status_resp.get("status") or "").lower()
+        progress_pct = min(10 + (i * 10 // max_polls), 20)
+
+        await _emit_event(run_id_str, {
+            "type": "stage_update",
+            "stage": "industry_discovery",
+            "progress": progress_pct,
+            "message": f"Stage 1 (Evaboot): Extraction {status}... (poll {i+1})",
+        })
+
+        # Evaboot uses "executed" (not "complete") for finished extractions
+        if status in ("complete", "executed", "done", "finished"):
+            break
+        elif status in ("failed", "error"):
+            error_msg = status_resp.get("error", "Unknown error")
+            raise ValueError(f"Evaboot extraction failed: {error_msg}")
+    else:
+        raise ValueError("Evaboot extraction timed out after 10 minutes")
+
+    # Get results — status response may already contain prospects
+    prospects = status_resp.get("prospects", [])
+    if not prospects:
+        results = _get_results(str(extraction_id))
+        if "error" in results:
+            raise ValueError(f"Evaboot results retrieval failed: {results['error']}")
+        prospects = results.get("prospects", [])
+    logger.info(f"[Evaboot] Extraction complete: {len(prospects)} prospects")
+
+    await _emit_event(run_id_str, {
+        "type": "stage_update",
+        "stage": "industry_discovery",
+        "progress": 22,
+        "message": f"Stage 1 (Evaboot): Extracted {len(prospects)} prospects from Sales Navigator",
+    })
+
+    # Parse prospects into company dicts
+    companies = _parse_evaboot_prospects(prospects)
+    credits_used = len(prospects)  # 1 credit/profile (+ email enrichment counted separately)
+
+    return companies, credits_used
+
+
+def _parse_evaboot_prospects(prospects: list[dict]) -> list[dict]:
+    """Convert Evaboot prospect data into the standard company dict format.
+
+    Groups prospects by company domain/name to create unique company entries
+    with their contacts.
+
+    Evaboot API returns fields with display names like "Company Name",
+    "Company Domain", etc.  We support both snake_case (legacy) and the
+    actual API display-name format.
+    """
+    company_map = {}  # key: normalized domain or company name
+
+    def _get(d: dict, *keys: str) -> str:
+        """Return first non-empty value from multiple possible keys."""
+        for k in keys:
+            v = d.get(k)
+            if v:
+                return str(v).strip()
+        return ""
+
+    for p in prospects:
+        company_name = _get(p, "Company Name", "current_company")
+        company_domain = _get(p, "Company Domain", "current_company_domain", "Company Website URL", "company_website")
+
+        # Create company key for dedup
+        key = company_domain.lower() if company_domain else company_name.lower()
+        if not key:
+            continue
+
+        if key not in company_map:
+            employee_count = _safe_int(
+                p.get("Company Employee Exact Count") or p.get("company_size")
+            )
+            company_map[key] = {
+                "name": company_name,
+                "website": company_domain or _get(p, "Company Website URL"),
+                "industry": _get(p, "Company Industry", "company_industry"),
+                "employee_count": employee_count,
+                "city": None,
+                "country": None,
+                "description": _get(p, "Company Description", "company_description"),
+                "source": "evaboot",
+                "contacts": [],
+            }
+            # Parse location
+            location = _get(p, "Company Location", "company_location", "location")
+            if location:
+                parts = [part.strip() for part in location.split(",")]
+                if len(parts) >= 2:
+                    company_map[key]["city"] = parts[0]
+                    company_map[key]["country"] = parts[-1]
+                elif parts:
+                    company_map[key]["country"] = parts[0]
+
+        # Add contact — Evaboot company search results may not have person-level data
+        full_name = _get(p, "Full Name", "full_name")
+        if not full_name:
+            first = _get(p, "First Name", "first_name")
+            last = _get(p, "Last Name", "last_name")
+            full_name = f"{first} {last}".strip()
+        if full_name:
+            company_map[key]["contacts"].append({
+                "full_name": full_name,
+                "first_name": _get(p, "First Name", "first_name"),
+                "last_name": _get(p, "Last Name", "last_name"),
+                "designation": _get(p, "Current Title", "current_title", "Title"),
+                "email": _get(p, "Email", "email"),
+                "phone": _get(p, "Phone", "phone"),
+                "linkedin_url": _get(p, "Linkedin URL", "linkedin_url", "Profile URL"),
+                "source": "evaboot",
+                "email_validity": _get(p, "Email Status", "email_validity"),
+            })
+
+    return list(company_map.values())
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -765,8 +965,8 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
     industry_keywords = set()
     for item in fd.get("industry_types", []):
         if isinstance(item, dict):
-            v = item.get("vertical", "").lower().strip()
-            sv = item.get("sub_vertical", "").lower().strip()
+            v = (item.get("vertical") or "").lower().strip()
+            sv = (item.get("sub_vertical") or "").lower().strip()
             if v:
                 industry_keywords.add(v)
             if sv:
@@ -1006,96 +1206,158 @@ async def execute_pipeline(run_id: UUID):
             if kb_known_domains:
                 logger.info(f"[Stage 1] {len(kb_known_domains)} KB-known domains passed to discovery agents")
 
-            # ── Sub-run 1: Structured data sources (local DB, APIs, Wikidata, OpenCorporates)
-            await _emit_event(run_id_str, {
-                "type": "stage_update",
-                "stage": "industry_discovery",
-                "progress": 8,
-                "message": "Stage 1a: Searching structured databases...",
-            })
+            # ── Determine discovery mode
+            discovery_mode = run.discovery_mode or "qlgen_only"
+            sales_nav_url = run.sales_navigator_url
 
-            callback_handler_1 = create_pipeline_callback_handler(
-                run_id_str, event_collector,
-                initial_stage="industry_discovery",
-            )
-            sub_agent_db = create_discovery_sub_agent_db(
-                callback_handler=callback_handler_1, disabled_tools=disabled_tools,
-            )
-            discovery_prompt = build_industry_discovery_prompt(icp, kb_known_domains=kb_known_domains or None)
+            # ── Evaboot extraction (Sales Navigator modes)
+            evaboot_companies = []
+            evaboot_credits_used = 0
 
-            # Wire in cross-run discovery intelligence
-            try:
-                fd = icp.get("firmographic_details", {})
-                industry_types = fd.get("industry_types", [])
-                intel_industry = ""
-                if industry_types and isinstance(industry_types[0], dict):
-                    intel_industry = industry_types[0].get("vertical", "")
-                elif industry_types:
-                    intel_industry = str(industry_types[0])
-                intel_countries = fd.get("geography", {}).get("countries", [])
-                intel_country = intel_countries[0] if intel_countries else ""
-                intelligence = await get_intelligence_for_icp(db, intel_industry, intel_country)
-                intel_text = format_intelligence_for_prompt(intelligence)
-                if intel_text:
-                    discovery_prompt += "\n" + intel_text
-                    logger.info(f"[Stage 1] Injected discovery intelligence for {intel_industry}/{intel_country}")
-            except Exception as intel_err:
-                logger.debug(f"Discovery intelligence injection failed (non-fatal): {intel_err}")
+            if discovery_mode in ("sales_navigator_only", "sales_navigator_plus_qlgen") and sales_nav_url:
+                try:
+                    from app.config import get_settings as _get_settings
+                    max_credits = _get_settings().EVABOOT_MAX_CREDITS_PER_RUN
 
-            sub_result_1 = await asyncio.to_thread(sub_agent_db, discovery_prompt)
-            sub_json_1 = parse_json_from_agent_result(sub_result_1)
-            discovered_sub1_raw = sub_json_1.get("companies", [])
-            discovered_sub1 = _soft_filter_discovered(discovered_sub1_raw, icp, "Stage 1a")
-            logger.info(
-                f"[Stage 1a] Structured sources: agent output {len(discovered_sub1_raw)} companies, "
-                f"after soft filter {len(discovered_sub1)} kept"
-            )
+                    evaboot_companies, evaboot_credits_used = await _run_evaboot_extraction(
+                        run_id_str=run_id_str,
+                        sales_navigator_url=sales_nav_url,
+                        event_collector=event_collector,
+                        disabled_tools=disabled_tools,
+                        max_credits=max_credits,
+                    )
 
-            # ── Sub-run 2: Web search discovery (DDG, Tavily, YC, scraping)
-            await _emit_event(run_id_str, {
-                "type": "stage_update",
-                "stage": "industry_discovery",
-                "progress": 15,
-                "message": f"Stage 1b: Web search discovery ({len(discovered_sub1)} already found)...",
-            })
+                    # Save Evaboot contacts for later use in Stage 4
+                    # Store in stage_details so contact agent can check for existing contacts
+                    evaboot_contacts_by_company = {}
+                    for ec in evaboot_companies:
+                        key = (ec.get("website") or ec.get("name", "")).lower().strip()
+                        if key and ec.get("contacts"):
+                            evaboot_contacts_by_company[key] = ec["contacts"]
 
-            callback_handler_2 = create_pipeline_callback_handler(
-                run_id_str, event_collector,
-                initial_stage="industry_discovery",
-            )
-            sub_agent_web = create_discovery_sub_agent_web(
-                callback_handler=callback_handler_2, disabled_tools=disabled_tools,
-            )
-            # Extract domains from sub-run 1 to help web sub-agent avoid duplicates
-            # Note: KB domains are NOT included here — the carry-forward logic handles
-            # historical company inclusion deterministically after discovery.
-            known_domains = []
-            for c in discovered_sub1:
-                domain = (c.get("website") or "").strip()
-                if domain:
-                    d = _normalize_domain(domain)
-                    if d and d not in known_domains:
-                        known_domains.append(d)
-            web_prompt = build_discovery_web_prompt(icp, already_found_count=len(discovered_sub1), known_domains=known_domains[:300])
+                    # Track credits on the run
+                    run.evaboot_credits_used = evaboot_credits_used
+                    stage_details = run.stage_details or {}
+                    stage_details["evaboot_extraction"] = {
+                        "credits_used": evaboot_credits_used,
+                        "prospects_found": sum(len(c.get("contacts", [])) for c in evaboot_companies),
+                        "companies_found": len(evaboot_companies),
+                    }
+                    run.stage_details = stage_details
+                    await db.commit()
 
-            sub_result_2 = await asyncio.to_thread(sub_agent_web, web_prompt)
-            sub_json_2 = parse_json_from_agent_result(sub_result_2)
-            discovered_sub2_raw = sub_json_2.get("companies", [])
-            discovered_sub2 = _soft_filter_discovered(discovered_sub2_raw, icp, "Stage 1b")
-            logger.info(
-                f"[Stage 1b] Web search: agent output {len(discovered_sub2_raw)} companies, "
-                f"after soft filter {len(discovered_sub2)} kept"
-            )
+                    logger.info(
+                        f"[Stage 1] Evaboot extraction: {len(evaboot_companies)} companies, "
+                        f"{evaboot_credits_used} credits used"
+                    )
+                except Exception as evaboot_err:
+                    logger.error(f"[Stage 1] Evaboot extraction failed: {evaboot_err}")
+                    if discovery_mode == "sales_navigator_only":
+                        # Fatal — no other discovery sources
+                        raise ValueError(f"Sales Navigator extraction failed: {evaboot_err}")
+                    # For hybrid mode, log and continue with qlGen discovery
+                    await _emit_event(run_id_str, {
+                        "type": "stage_update",
+                        "stage": "industry_discovery",
+                        "progress": 8,
+                        "message": f"Evaboot extraction failed ({evaboot_err}). Continuing with qlGen discovery...",
+                    })
+
+            # ── Standard qlGen discovery (qlgen_only or hybrid mode)
+            discovered_sub1 = []
+            discovered_sub2 = []
+
+            if discovery_mode in ("qlgen_only", "sales_navigator_plus_qlgen"):
+                # ── Sub-run 1: Structured data sources (local DB, APIs, Wikidata, OpenCorporates)
+                await _emit_event(run_id_str, {
+                    "type": "stage_update",
+                    "stage": "industry_discovery",
+                    "progress": 8 if not evaboot_companies else 22,
+                    "message": "Stage 1a: Searching structured databases...",
+                })
+
+                callback_handler_1 = create_pipeline_callback_handler(
+                    run_id_str, event_collector,
+                    initial_stage="industry_discovery",
+                )
+                sub_agent_db = create_discovery_sub_agent_db(
+                    callback_handler=callback_handler_1, disabled_tools=disabled_tools,
+                )
+                discovery_prompt = build_industry_discovery_prompt(icp, kb_known_domains=kb_known_domains or None)
+
+                # Wire in cross-run discovery intelligence
+                try:
+                    fd = icp.get("firmographic_details", {})
+                    industry_types = fd.get("industry_types", [])
+                    intel_industry = ""
+                    if industry_types and isinstance(industry_types[0], dict):
+                        intel_industry = industry_types[0].get("vertical", "")
+                    elif industry_types:
+                        intel_industry = str(industry_types[0])
+                    intel_countries = fd.get("geography", {}).get("countries", [])
+                    intel_country = intel_countries[0] if intel_countries else ""
+                    intelligence = await get_intelligence_for_icp(db, intel_industry, intel_country)
+                    intel_text = format_intelligence_for_prompt(intelligence)
+                    if intel_text:
+                        discovery_prompt += "\n" + intel_text
+                        logger.info(f"[Stage 1] Injected discovery intelligence for {intel_industry}/{intel_country}")
+                except Exception as intel_err:
+                    logger.debug(f"Discovery intelligence injection failed (non-fatal): {intel_err}")
+
+                sub_result_1 = await asyncio.to_thread(sub_agent_db, discovery_prompt)
+                sub_json_1 = parse_json_from_agent_result(sub_result_1)
+                discovered_sub1_raw = sub_json_1.get("companies", [])
+                discovered_sub1 = _soft_filter_discovered(discovered_sub1_raw, icp, "Stage 1a")
+                logger.info(
+                    f"[Stage 1a] Structured sources: agent output {len(discovered_sub1_raw)} companies, "
+                    f"after soft filter {len(discovered_sub1)} kept"
+                )
+
+                # ── Sub-run 2: Web search discovery (DDG, Tavily, YC, scraping)
+                await _emit_event(run_id_str, {
+                    "type": "stage_update",
+                    "stage": "industry_discovery",
+                    "progress": 15 if not evaboot_companies else 23,
+                    "message": f"Stage 1b: Web search discovery ({len(discovered_sub1)} already found)...",
+                })
+
+                callback_handler_2 = create_pipeline_callback_handler(
+                    run_id_str, event_collector,
+                    initial_stage="industry_discovery",
+                )
+                sub_agent_web = create_discovery_sub_agent_web(
+                    callback_handler=callback_handler_2, disabled_tools=disabled_tools,
+                )
+                # Extract domains from sub-run 1 to help web sub-agent avoid duplicates
+                # Note: KB domains are NOT included here — the carry-forward logic handles
+                # historical company inclusion deterministically after discovery.
+                known_domains = []
+                for c in discovered_sub1:
+                    domain = (c.get("website") or "").strip()
+                    if domain:
+                        d = _normalize_domain(domain)
+                        if d and d not in known_domains:
+                            known_domains.append(d)
+                web_prompt = build_discovery_web_prompt(icp, already_found_count=len(discovered_sub1), known_domains=known_domains[:300])
+
+                sub_result_2 = await asyncio.to_thread(sub_agent_web, web_prompt)
+                sub_json_2 = parse_json_from_agent_result(sub_result_2)
+                discovered_sub2_raw = sub_json_2.get("companies", [])
+                discovered_sub2 = _soft_filter_discovered(discovered_sub2_raw, icp, "Stage 1b")
+                logger.info(
+                    f"[Stage 1b] Web search: agent output {len(discovered_sub2_raw)} companies, "
+                    f"after soft filter {len(discovered_sub2)} kept"
+                )
 
             # ── Sub-run 3: Gap Analysis & Similarity Expansion
-            discovered_so_far = preseed_companies + discovered_sub1 + discovered_sub2
+            discovered_so_far = preseed_companies + evaboot_companies + discovered_sub1 + discovered_sub2
 
-            # Analyze geographic coverage gaps
+            # Analyze geographic coverage gaps (skip for sales_navigator_only — results are targeted)
             fd = icp.get("firmographic_details", {})
             target_countries = [c.lower().strip() for c in fd.get("geography", {}).get("countries", [])]
             gap_expansion_companies = []
 
-            if target_countries and len(discovered_so_far) > 10:
+            if discovery_mode != "sales_navigator_only" and target_countries and len(discovered_so_far) > 10:
                 country_counts = {}
                 for c in discovered_so_far:
                     country = (c.get("country") or "").lower().strip()
@@ -1225,6 +1487,26 @@ async def execute_pipeline(run_id: UUID):
                     reasoning=f"Discovered via {disc.get('source', 'unknown')}",
                 )
                 db.add(stage_result)
+
+                # Save Evaboot contacts early (so Stage 4 can skip re-discovery)
+                if disc.get("source") == "evaboot" and disc.get("contacts"):
+                    for contact_data in disc["contacts"]:
+                        contact = Contact(
+                            company_id=company.id,
+                            full_name=contact_data.get("full_name"),
+                            first_name=contact_data.get("first_name"),
+                            last_name=contact_data.get("last_name"),
+                            designation=contact_data.get("designation"),
+                            email=contact_data.get("email"),
+                            phone=contact_data.get("phone"),
+                            linkedin_url=contact_data.get("linkedin_url"),
+                            source="evaboot",
+                            confidence=0.8 if contact_data.get("email_validity") == "safe" else 0.5,
+                            enrichment_status="enriched" if contact_data.get("email") else "pending",
+                            raw_data_json=contact_data,
+                        )
+                        db.add(contact)
+
                 companies_saved += 1
 
             await db.flush()

@@ -41,6 +41,17 @@ from app.tools.producthunt_tool import search_producthunt
 from app.tools.fmp_tool import get_investor_data
 from app.tools.simfin_tool import get_financial_statements
 from app.tools.similarity_search_tool import find_similar_companies
+from app.tools.evaboot_tool import (
+    evaboot_check_quota,
+    evaboot_extract_from_url,
+    evaboot_get_extraction_status,
+    evaboot_get_extraction_results,
+    evaboot_extract_single_profile,
+    evaboot_find_email,
+    evaboot_get_email_job_results,
+    evaboot_validate_email,
+    evaboot_get_validation_results,
+)
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -1051,6 +1062,63 @@ def create_discovery_sub_agent_web(callback_handler=None, disabled_tools: set[st
     return Agent(**kwargs)
 
 
+# ── Evaboot / Sales Navigator sub-agent ─────────────────────────
+
+STAGE1_SUB_PROMPT_EVABOOT = """You are a company discovery specialist using LinkedIn Sales Navigator
+data via the Evaboot API. Your job is to extract prospects from a Sales Navigator search URL,
+poll for completion, and return the results in a structured format.
+
+WORKFLOW:
+1. Call evaboot_check_quota to verify sufficient credits are available
+2. Call evaboot_extract_from_url with the provided Sales Navigator URL
+3. Poll evaboot_get_extraction_status every 10-15 seconds until status is 'complete' or 'failed'
+4. When complete, call evaboot_get_extraction_results to get the prospect data
+5. Return the prospects as a JSON array of companies with contacts
+
+IMPORTANT:
+- If quota check shows insufficient credits, STOP and return an error
+- If extraction fails (e.g., invalid cookies), return a clear error message
+- Do NOT retry failed extractions — they consume credits
+- Map prospect data to the standard company format:
+  - company name, website/domain, industry, employee count, location, description
+  - contacts: name, title, email, phone, LinkedIn URL
+
+Return JSON with "companies" array where each company has:
+- name, website, industry, employee_count, city, country, description
+- contacts: [{full_name, first_name, last_name, designation, email, phone, linkedin_url}]
+- source: "evaboot"
+
+And a "discovery_summary" object with total_prospects, credits_used.
+All scores must be on 0-100 integer scale.
+"""
+
+
+def create_discovery_sub_agent_evaboot(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
+    """Create Stage 1 sub-agent for Evaboot / Sales Navigator extraction."""
+    settings = get_settings()
+    model = BedrockModel(
+        model_id=settings.BEDROCK_MODEL_ID,
+        region_name=settings.AWS_REGION,
+        max_tokens=32000,
+    )
+
+    tools = _filter_tools([
+        evaboot_check_quota,
+        evaboot_extract_from_url,
+        evaboot_get_extraction_status,
+        evaboot_get_extraction_results,
+    ], disabled_tools)
+
+    kwargs = {
+        "model": model,
+        "system_prompt": STAGE1_SUB_PROMPT_EVABOOT,
+        "tools": tools,
+    }
+    if callback_handler is not None:
+        kwargs["callback_handler"] = callback_handler
+    return Agent(**kwargs)
+
+
 def create_firmographic_fit_agent(callback_handler=None, disabled_tools: set[str] | None = None) -> Agent:
     """Create Stage 2 agent — firmographic verification in batches."""
     settings = get_settings()
@@ -1137,6 +1205,10 @@ def create_contact_agent(callback_handler=None, disabled_tools: set[str] | None 
         exa_search,
         tavily_search,
         search_job_postings,
+        evaboot_find_email,           # Evaboot email finder (1 credit/person)
+        evaboot_get_email_job_results,
+        evaboot_validate_email,       # Evaboot email validation (0.5 credit/email)
+        evaboot_get_validation_results,
     ], disabled_tools)
 
     kwargs = {

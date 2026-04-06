@@ -11,6 +11,8 @@ class PipelineOptions(BaseModel):
 class PipelineRunRequest(BaseModel):
     icp_config_id: UUID
     options: PipelineOptions = PipelineOptions()
+    discovery_mode: str = "qlgen_only"  # qlgen_only | sales_navigator_only | sales_navigator_plus_qlgen
+    sales_navigator_url: Optional[str] = None
 
 
 class PipelineRunResponse(BaseModel):
@@ -31,6 +33,9 @@ class PipelineRunResponse(BaseModel):
     signal_phase: Optional[str] = None
     stage_details: Optional[dict] = None
     user_name: Optional[str] = None
+    discovery_mode: Optional[str] = None
+    sales_navigator_url: Optional[str] = None
+    evaboot_credits_used: Optional[int] = None
 
     class Config:
         from_attributes = True

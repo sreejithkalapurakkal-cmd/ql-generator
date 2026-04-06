@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
 
+    # Evaboot (LinkedIn Sales Navigator)
+    EVABOOT_API_KEY: str = ""
+    EVABOOT_BASE_URL: str = "https://api.evaboot.com"
+    EVABOOT_MAX_CREDITS_PER_RUN: int = 500
+
     # Free government registry API keys
     COMPANIES_HOUSE_API_KEY: str = ""     # UK Companies House (free at developer.company-information.service.gov.uk)
 

@@ -74,6 +74,9 @@ export interface PipelineRun {
   match_strictness?: string | null;
   estimated_duration_seconds?: number | null;
   user_name?: string | null;
+  discovery_mode?: string | null;
+  sales_navigator_url?: string | null;
+  evaboot_credits_used?: number | null;
   stage_details?: {
     total_discovered?: number;
     pre_filter_passed?: number;
@@ -88,6 +91,11 @@ export interface PipelineRun {
     contacts_found_so_far?: number;
     newly_discovered?: number;
     carried_forward?: number;
+    evaboot_extraction?: {
+      credits_used?: number;
+      prospects_found?: number;
+      companies_found?: number;
+    };
   } | null;
 }
 

@@ -4,6 +4,8 @@ import { PipelineRun, PipelineLogEntry } from '../types';
 export const startPipeline = (data: {
   icp_config_id: string;
   options?: { max_companies?: number; max_contacts_per_company?: number };
+  discovery_mode?: 'qlgen_only' | 'sales_navigator_only' | 'sales_navigator_plus_qlgen';
+  sales_navigator_url?: string;
 }) => client.post<PipelineRun>('/pipeline/run', data);
 
 export const getPipelineStatus = (runId: string) =>
