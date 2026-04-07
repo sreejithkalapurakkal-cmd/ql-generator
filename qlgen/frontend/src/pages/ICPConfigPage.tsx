@@ -245,14 +245,29 @@ const ICPConfigPage: React.FC = () => {
       getICP(id).then((res) => {
         setName(res.data.name);
         setDescription(res.data.description || '');
-        setConfig(res.data.config as unknown as ICPDefinition);
+        const rawConfig = res.data.config as unknown as Record<string, unknown>;
+        // Restore discovery source settings from config JSONB
+        if (rawConfig.discovery_mode) {
+          setDiscoveryMode(rawConfig.discovery_mode as typeof discoveryMode);
+        }
+        if (rawConfig.sales_navigator_url) {
+          setSalesNavUrl(rawConfig.sales_navigator_url as string);
+        }
+        setConfig(rawConfig as unknown as ICPDefinition);
       });
     } else {
       const cloneFrom = (location.state as any)?.cloneFrom;
       if (cloneFrom) {
         setName(`Copy of ${cloneFrom.name}`);
         setDescription(cloneFrom.description || '');
-        setConfig(cloneFrom.config as unknown as ICPDefinition);
+        const rawClone = cloneFrom.config as Record<string, unknown>;
+        if (rawClone.discovery_mode) {
+          setDiscoveryMode(rawClone.discovery_mode as typeof discoveryMode);
+        }
+        if (rawClone.sales_navigator_url) {
+          setSalesNavUrl(rawClone.sales_navigator_url as string);
+        }
+        setConfig(rawClone as unknown as ICPDefinition);
         setCurrent(6); // Jump to Review step
       }
     }
@@ -1003,11 +1018,18 @@ const ICPConfigPage: React.FC = () => {
     }
     setSaving(true);
     try {
+      // Persist discovery source settings inside the config JSONB
+      const configToSave: Record<string, unknown> = {
+        ...(config as unknown as Record<string, unknown>),
+        discovery_mode: discoveryMode,
+        ...(isSalesNav && salesNavUrl.trim() ? { sales_navigator_url: salesNavUrl.trim() } : {}),
+      };
+
       let icpId = id;
       if (id) {
-        await updateICP(id, { name, description, config: config as unknown as Record<string, unknown> });
+        await updateICP(id, { name, description, config: configToSave });
       } else {
-        const res = await createICP({ name, description, config: config as unknown as Record<string, unknown> });
+        const res = await createICP({ name, description, config: configToSave });
         icpId = res.data.id;
       }
       message.success('Search criteria saved successfully');

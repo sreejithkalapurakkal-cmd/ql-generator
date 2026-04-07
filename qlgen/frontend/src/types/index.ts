@@ -360,6 +360,47 @@ export interface AuditLogEntry {
   created_at: string | null;
 }
 
+// Feedback types
+export type FeedbackType = 'feedback' | 'complaint' | 'bug_report' | 'feature_request';
+export type FeedbackStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
+
+export interface FeedbackItem {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  type: FeedbackType;
+  subject: string;
+  description: string;
+  status: FeedbackStatus;
+  created_at: string | null;
+  updated_at: string | null;
+  replies: FeedbackReplyItem[];
+}
+
+export interface FeedbackListItem {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  type: FeedbackType;
+  subject: string;
+  status: FeedbackStatus;
+  reply_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface FeedbackReplyItem {
+  id: string;
+  feedback_id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  message: string;
+  created_at: string | null;
+}
+
 export const DEFAULT_ICP: ICPDefinition = {
   firmographic_details: {
     industry_types: [],

@@ -1,8 +1,9 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Avatar, Dropdown, type MenuProps } from 'antd';
-import { UserOutlined, LogoutOutlined, TeamOutlined } from '@ant-design/icons';
+import { UserOutlined, LogoutOutlined, TeamOutlined, MessageOutlined } from '@ant-design/icons';
 import { useAuth } from '../../context/AuthContext';
+import HelpMenu from '../HelpMenu';
 
 
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -21,6 +22,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (user?.role === 'super_admin') {
     menuItems.push({ key: '/tools', icon: '⚙', label: 'Tools' });
     menuItems.push({ key: '/admin/users', icon: '👥', label: 'Users' });
+    menuItems.push({ key: '/admin/feedback', icon: '💬', label: 'Feedback' });
   }
 
   // Don't highlight "Saved Searches" when on ICP form pages (new or edit)
@@ -57,6 +59,12 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label: 'Manage Users',
           onClick: () => navigate('/admin/users'),
         },
+        {
+          key: 'feedback',
+          icon: <MessageOutlined />,
+          label: 'Manage Feedback',
+          onClick: () => navigate('/admin/feedback'),
+        },
         { type: 'divider' as const },
       ]
       : []),
@@ -92,6 +100,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </div>
 
           <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <HelpMenu />
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {user?.picture_url ? (

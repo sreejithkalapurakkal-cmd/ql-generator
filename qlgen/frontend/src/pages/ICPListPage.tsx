@@ -466,6 +466,16 @@ const ICPListPage: React.FC = () => {
                 <Descriptions.Item label="Target Roles" span={2}>
                   {leadership?.target_roles?.join(', ') || '—'}
                 </Descriptions.Item>
+                <Descriptions.Item label="Discovery Source" span={2}>
+                  {cfg?.discovery_mode === 'sales_navigator_only' && 'Sales Navigator Only (Evaboot)'}
+                  {cfg?.discovery_mode === 'sales_navigator_plus_qlgen' && 'Sales Navigator + qlGen (Hybrid)'}
+                  {(!cfg?.discovery_mode || cfg?.discovery_mode === 'qlgen_only') && 'qlGen Multi-Source'}
+                  {cfg?.sales_navigator_url && (
+                    <div style={{ fontSize: 12, color: 'var(--g500)', marginTop: 4, wordBreak: 'break-all' }}>
+                      URL: {cfg.sales_navigator_url}
+                    </div>
+                  )}
+                </Descriptions.Item>
               </Descriptions>
             </div>
           );
