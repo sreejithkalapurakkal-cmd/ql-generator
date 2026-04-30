@@ -18,3 +18,29 @@ export const checkAllToolsHealth = () =>
 
 export const deleteTool = (id: string) =>
   client.delete(`/tools/${id}`);
+
+export interface EvabootStatus {
+  configured: boolean;
+  quota: {
+    credits?: number;
+    daily_limit?: number;
+    used_today?: number;
+    remaining?: number;
+    error?: string;
+  } | null;
+  sales_nav_sessions: { id: string; status: string }[];
+  my_credits_used: number;
+  my_run_count: number;
+  total_credits_used: number;
+  recent_runs: {
+    id: string;
+    user_name: string;
+    discovery_mode: string;
+    credits_used: number;
+    companies_found: number;
+    started_at: string | null;
+  }[];
+}
+
+export const getEvabootStatus = () =>
+  client.get<EvabootStatus>('/tools/evaboot/status');

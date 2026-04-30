@@ -160,6 +160,43 @@ TOOL_SEED_DATA = [
         "base_url": None,
         "rate_limit_info": "30s backoff on limit",
     },
+    # Evaboot (LinkedIn Sales Navigator) tools
+    {
+        "tool_name": "evaboot_extract_from_url",
+        "display_name": "Evaboot Sales Nav Extraction",
+        "category": "pipeline",
+        "requires_api_key": True,
+        "api_key_env_var": "EVABOOT_API_KEY",
+        "base_url": "https://api.evaboot.com",
+        "rate_limit_info": "Credit-based (1 credit/profile)",
+    },
+    {
+        "tool_name": "evaboot_check_quota",
+        "display_name": "Evaboot Quota Check",
+        "category": "pipeline",
+        "requires_api_key": True,
+        "api_key_env_var": "EVABOOT_API_KEY",
+        "base_url": "https://api.evaboot.com",
+        "rate_limit_info": "No limit",
+    },
+    {
+        "tool_name": "evaboot_find_email",
+        "display_name": "Evaboot Email Finder",
+        "category": "pipeline",
+        "requires_api_key": True,
+        "api_key_env_var": "EVABOOT_API_KEY",
+        "base_url": "https://api.evaboot.com",
+        "rate_limit_info": "Credit-based (1 credit/person)",
+    },
+    {
+        "tool_name": "evaboot_validate_email",
+        "display_name": "Evaboot Email Validator",
+        "category": "pipeline",
+        "requires_api_key": True,
+        "api_key_env_var": "EVABOOT_API_KEY",
+        "base_url": "https://api.evaboot.com",
+        "rate_limit_info": "Credit-based (0.5 credit/email)",
+    },
     # Research tools
     {
         "tool_name": "get_sec_filings",

@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy import Column, String, Boolean, Integer, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -15,6 +15,7 @@ class User(Base):
     google_id = Column(String(255), nullable=True)
     role = Column(String(20), nullable=False, default="user")
     is_active = Column(Boolean, nullable=False, default=True)
+    daily_credit_limit = Column(Integer, nullable=True, default=None)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_login_at = Column(DateTime(timezone=True), nullable=True)

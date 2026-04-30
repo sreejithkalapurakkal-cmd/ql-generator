@@ -11,6 +11,7 @@ from app.models.tool_registry import ToolRegistry
 from app.models.audit_log import AuditLog
 from app.models.discovery_intelligence import DiscoveryQuery, ToolEffectiveness
 from app.models.company_knowledge_base import CompanyKnowledgeBase
+from app.models.feedback import Feedback, FeedbackReply
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "AuditLog",
     "DiscoveryQuery", "ToolEffectiveness",
     "CompanyKnowledgeBase",
+    "Feedback", "FeedbackReply",
 ]

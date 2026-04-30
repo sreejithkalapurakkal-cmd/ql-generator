@@ -14,6 +14,7 @@ import AllLeadsPage from './pages/AllLeadsPage';
 import ToolsPage from './pages/ToolsPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import UserManagementPage from './pages/UserManagementPage';
+import AdminFeedbackPage from './pages/AdminFeedbackPage';
 import { AuthProvider } from './context/AuthContext';
 import { PageContextProvider } from './context/PageContextProvider';
 import CoPilotPanel from './components/CoPilotPanel';
@@ -71,6 +72,14 @@ function App() {
                           element={
                             <AdminRoute>
                               <UserManagementPage />
+                            </AdminRoute>
+                          }
+                        />
+                        <Route
+                          path="/admin/feedback"
+                          element={
+                            <AdminRoute>
+                              <AdminFeedbackPage />
                             </AdminRoute>
                           }
                         />

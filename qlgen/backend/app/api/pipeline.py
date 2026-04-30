@@ -50,6 +50,10 @@ def _build_run_response(run: PipelineRun, requesting_user: Optional[User] = None
         signal_mode=run.signal_mode,
         signal_phase=run.signal_phase,
         stage_details=run.stage_details,
+        discovery_mode=run.discovery_mode,
+        sales_navigator_url=run.sales_navigator_url,
+        evaboot_credits_used=run.evaboot_credits_used,
+        expected_result_count=run.expected_result_count,
     )
     if requesting_user and is_admin(requesting_user) and run.user:
         resp.user_name = run.user.name
@@ -70,12 +74,46 @@ async def start_pipeline(
         raise HTTPException(status_code=404, detail="ICP configuration not found")
     check_resource_access(icp.user_id, user)
 
+    # Validate discovery_mode and Sales Navigator URL
+    discovery_mode = request.discovery_mode or "qlgen_only"
+    if discovery_mode not in ("qlgen_only", "sales_navigator_only", "sales_navigator_plus_qlgen"):
+        raise HTTPException(status_code=400, detail=f"Invalid discovery_mode: {discovery_mode}")
+
+    if discovery_mode in ("sales_navigator_only", "sales_navigator_plus_qlgen"):
+        if not request.sales_navigator_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Sales Navigator URL is required when using Sales Navigator discovery mode",
+            )
+        # Check Evaboot API key is configured
+        from app.config import get_settings
+        settings = get_settings()
+        if not settings.EVABOOT_API_KEY:
+            raise HTTPException(
+                status_code=400,
+                detail="Evaboot API key is not configured. Sales Navigator modes are unavailable.",
+            )
+
+        # Credit quota validation
+        if user.daily_credit_limit is not None and request.expected_result_count:
+            from app.services.credit_service import get_credit_usage_today
+            usage = await get_credit_usage_today(user.id, db)
+            remaining = max(0, user.daily_credit_limit - usage["used_today"] - usage["reserved"])
+            if request.expected_result_count > remaining:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Daily credit limit exceeded. You have {remaining} credits remaining today.",
+                )
+
     run = PipelineRun(
         icp_config_id=request.icp_config_id,
         status="pending",
         current_stage="pending",
         options=request.options.model_dump(),
         user_id=user.id,
+        discovery_mode=discovery_mode,
+        sales_navigator_url=request.sales_navigator_url,
+        expected_result_count=request.expected_result_count,
     )
     db.add(run)
     await db.flush()

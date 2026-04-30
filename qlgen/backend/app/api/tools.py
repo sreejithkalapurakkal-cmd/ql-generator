@@ -4,12 +4,14 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.tool_registry import ToolRegistry
+from app.models.pipeline import PipelineRun
 from app.models.user import User
+from app.config import get_settings
 from app.schemas.tools import (
     ToolRegistryResponse,
     ToolRegistryUpdate,
@@ -23,7 +25,7 @@ from app.services.tool_registry_service import (
     get_tool_metrics,
     get_tool_last_errors,
 )
-from app.auth.dependencies import get_current_super_admin
+from app.auth.dependencies import get_current_super_admin, get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["Tools Monitoring"])
@@ -189,3 +191,116 @@ async def delete_tool(tool_id: UUID, db: AsyncSession = Depends(get_db), _admin:
     await db.delete(tool)
     await db.commit()
     return {"status": "deleted", "tool_name": tool.tool_name}
+
+
+@router.get("/evaboot/status")
+async def get_evaboot_status(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get Evaboot status for all authenticated users: credit balance, daily usage,
+    Sales Navigator session health, and the current user's credit consumption."""
+    settings = get_settings()
+    configured = bool(settings.EVABOOT_API_KEY)
+
+    # Base response when not configured
+    if not configured:
+        return {
+            "configured": False,
+            "quota": None,
+            "sales_nav_sessions": [],
+            "my_credits_used": 0,
+            "my_run_count": 0,
+            "total_credits_used": 0,
+            "recent_runs": [],
+        }
+
+    # Live quota + Sales Navigator session status from Evaboot API
+    quota = None
+    sales_nav_sessions = []
+    try:
+        from app.tools.evaboot_tool import evaboot_check_quota
+        raw = evaboot_check_quota()
+        if "error" not in raw:
+            # Response is nested: {"success": true, "quota": {...}}
+            q = raw.get("quota", raw)  # fallback to raw if no nesting
+            quota = {
+                "credits": q.get("credits"),
+                "daily_limit": q.get("daily_limit"),
+                "used_today": q.get("used_today"),
+                "remaining": q.get("remaining"),
+            }
+            # salesnavs array contains {id, status} — status is "valid" or "invalid"
+            for sn in q.get("salesnavs", []):
+                sales_nav_sessions.append({
+                    "id": sn.get("id"),
+                    "status": sn.get("status", "unknown"),
+                })
+        else:
+            quota = {"error": raw["error"]}
+    except Exception as e:
+        quota = {"error": str(e)}
+
+    # Current user's credit usage
+    my_result = await db.execute(
+        select(
+            func.coalesce(func.sum(PipelineRun.evaboot_credits_used), 0).label("total"),
+            func.count(PipelineRun.id).label("count"),
+        )
+        .where(PipelineRun.user_id == user.id)
+        .where(PipelineRun.evaboot_credits_used > 0)
+    )
+    my_row = my_result.one()
+
+    # Total across all users
+    total_result = await db.execute(
+        select(func.coalesce(func.sum(PipelineRun.evaboot_credits_used), 0))
+        .where(PipelineRun.evaboot_credits_used > 0)
+    )
+    total_credits = total_result.scalar() or 0
+
+    # Recent runs (last 10) across all users for visibility
+    recent_result = await db.execute(
+        select(
+            PipelineRun.id,
+            PipelineRun.discovery_mode,
+            PipelineRun.evaboot_credits_used,
+            PipelineRun.companies_found,
+            PipelineRun.started_at,
+            PipelineRun.user_id,
+        )
+        .where(PipelineRun.evaboot_credits_used > 0)
+        .order_by(PipelineRun.started_at.desc().nullslast())
+        .limit(10)
+    )
+    recent_rows = recent_result.all()
+
+    # Resolve user names for recent runs
+    run_user_ids = {r.user_id for r in recent_rows if r.user_id}
+    user_map: dict = {}
+    if run_user_ids:
+        u_result = await db.execute(select(User).where(User.id.in_(run_user_ids)))
+        for u in u_result.scalars().all():
+            user_map[u.id] = u.name or u.email
+
+    recent_runs = [
+        {
+            "id": str(r.id),
+            "user_name": user_map.get(r.user_id, "Unknown"),
+            "discovery_mode": r.discovery_mode,
+            "credits_used": r.evaboot_credits_used or 0,
+            "companies_found": r.companies_found or 0,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+        }
+        for r in recent_rows
+    ]
+
+    return {
+        "configured": True,
+        "quota": quota,
+        "sales_nav_sessions": sales_nav_sessions,
+        "my_credits_used": int(my_row.total),
+        "my_run_count": int(my_row.count),
+        "total_credits_used": int(total_credits),
+        "recent_runs": recent_runs,
+    }

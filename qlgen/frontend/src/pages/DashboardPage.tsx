@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress, Avatar } from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined, UserOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Tag, Space, Modal, Table, Popconfirm, message, Input, Progress, Avatar, Tooltip } from 'antd';
+import { PlusOutlined, DeleteOutlined, SearchOutlined, LoadingOutlined, UserOutlined, LinkedinOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { listICPs } from '../api/icpApi';
 import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus, getAdminActivity } from '../api/pipelineApi';
+import { getEvabootStatus, EvabootStatus } from '../api/toolsApi';
 import { PipelineRun, AdminActivityResponse, AdminUserSummary } from '../types';
 import { useAuth } from '../context/AuthContext';
 
@@ -41,6 +42,18 @@ const DashboardPage: React.FC = () => {
   const [displayCount, setDisplayCount] = useState(12);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // Evaboot status
+  const [evabootStatus, setEvabootStatus] = useState<EvabootStatus | null>(null);
+  const [evabootLoading, setEvabootLoading] = useState(false);
+
+  const fetchEvabootStatus = () => {
+    setEvabootLoading(true);
+    getEvabootStatus()
+      .then((res) => setEvabootStatus(res.data))
+      .catch(() => setEvabootStatus(null))
+      .finally(() => setEvabootLoading(false));
+  };
+
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
   const [statsModalTile, setStatsModalTile] = useState<TileKey>('total_leads');
@@ -57,6 +70,7 @@ const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     refreshRuns();
+    fetchEvabootStatus();
     if (isAdmin) {
       getAdminActivity()
         .then((res) => setAdminActivity(res.data))
@@ -330,6 +344,178 @@ const DashboardPage: React.FC = () => {
           </div>
         </Col>
       </Row>
+
+      {/* Evaboot / Sales Navigator Status */}
+      {evabootStatus?.configured && (
+        <div style={{
+          marginBottom: 24,
+          background: 'linear-gradient(135deg, #f0f7ff 0%, #f5f0ff 100%)',
+          border: '1px solid var(--g200)',
+          borderRadius: 'var(--radius, 12px)',
+          padding: '20px 24px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <LinkedinOutlined style={{ fontSize: 20, color: '#0a66c2' }} />
+              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--g800)' }}>Evaboot / Sales Navigator</span>
+            </div>
+            <Tooltip title="Refresh status">
+              <Button
+                size="small"
+                icon={<ReloadOutlined spin={evabootLoading} />}
+                onClick={fetchEvabootStatus}
+                disabled={evabootLoading}
+                style={{ fontSize: 12 }}
+              >
+                Refresh
+              </Button>
+            </Tooltip>
+          </div>
+
+          {evabootStatus.quota?.error ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '12px 16px', background: '#fff2f0', borderRadius: 8, border: '1px solid #ffccc7',
+            }}>
+              <WarningOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />
+              <span style={{ fontSize: 13, color: '#cf1322' }}>{evabootStatus.quota.error}</span>
+            </div>
+          ) : (
+            <Row gutter={[16, 16]}>
+              {/* Credit Balance */}
+              <Col xs={24} sm={12} md={6}>
+                <div style={{ background: '#fff', borderRadius: 10, padding: '16px 20px', border: '1px solid var(--g150, #eee)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--g500)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Credits Available</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--purple, #722ed1)' }}>
+                    {evabootStatus.quota?.credits != null ? Math.floor(evabootStatus.quota.credits).toLocaleString() : '—'}
+                  </div>
+                  {evabootStatus.total_credits_used > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 4 }}>
+                      {evabootStatus.total_credits_used.toLocaleString()} used total
+                    </div>
+                  )}
+                </div>
+              </Col>
+
+              {/* Daily Usage */}
+              <Col xs={24} sm={12} md={6}>
+                <div style={{ background: '#fff', borderRadius: 10, padding: '16px 20px', border: '1px solid var(--g150, #eee)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--g500)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Daily Extractions</div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                    <span style={{ fontSize: 28, fontWeight: 800, color: 'var(--g800)' }}>
+                      {evabootStatus.quota?.used_today ?? '—'}
+                    </span>
+                    <span style={{ fontSize: 14, color: 'var(--g400)' }}>
+                      / {evabootStatus.quota?.daily_limit ?? '—'}
+                    </span>
+                  </div>
+                  {evabootStatus.quota?.daily_limit && evabootStatus.quota?.used_today != null && (
+                    <Progress
+                      percent={Math.round((evabootStatus.quota.used_today / evabootStatus.quota.daily_limit) * 100)}
+                      size="small"
+                      showInfo={false}
+                      strokeColor={
+                        (evabootStatus.quota.used_today / evabootStatus.quota.daily_limit) > 0.9
+                          ? '#ff4d4f'
+                          : (evabootStatus.quota.used_today / evabootStatus.quota.daily_limit) > 0.7
+                            ? '#faad14'
+                            : 'var(--purple, #722ed1)'
+                      }
+                      style={{ marginTop: 8 }}
+                    />
+                  )}
+                </div>
+              </Col>
+
+              {/* Sales Navigator Session Status */}
+              <Col xs={24} sm={12} md={6}>
+                <div style={{ background: '#fff', borderRadius: 10, padding: '16px 20px', border: '1px solid var(--g150, #eee)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--g500)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Sales Navigator Session</div>
+                  {evabootStatus.sales_nav_sessions.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {evabootStatus.sales_nav_sessions.map((sn, i) => (
+                        <div key={sn.id || i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {sn.status === 'valid' ? (
+                            <CheckCircleOutlined style={{ fontSize: 20, color: '#52c41a' }} />
+                          ) : (
+                            <CloseCircleOutlined style={{ fontSize: 20, color: '#ff4d4f' }} />
+                          )}
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: sn.status === 'valid' ? '#52c41a' : '#ff4d4f' }}>
+                              {sn.status === 'valid' ? 'Connected' : 'Disconnected'}
+                            </div>
+                            {sn.status !== 'valid' && (
+                              <div style={{ fontSize: 11, color: '#ff4d4f' }}>
+                                Re-link in Evaboot dashboard
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <WarningOutlined style={{ fontSize: 20, color: '#faad14' }} />
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#faad14' }}>No Account</div>
+                        <div style={{ fontSize: 11, color: 'var(--g400)' }}>Link Sales Navigator in Evaboot</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Col>
+
+              {/* Your Usage */}
+              <Col xs={24} sm={12} md={6}>
+                <div style={{ background: '#fff', borderRadius: 10, padding: '16px 20px', border: '1px solid var(--g150, #eee)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--g500)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Your Usage</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--g800)' }}>
+                    {evabootStatus.my_credits_used.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--g400)', marginTop: 4 }}>
+                    credits across {evabootStatus.my_run_count} search{evabootStatus.my_run_count !== 1 ? 'es' : ''}
+                  </div>
+                </div>
+              </Col>
+            </Row>
+          )}
+
+          {/* Recent Evaboot runs */}
+          {evabootStatus.recent_runs.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--g500)', marginBottom: 8 }}>Recent Evaboot Searches</div>
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                {evabootStatus.recent_runs.slice(0, 5).map((run) => (
+                  <div
+                    key={run.id}
+                    style={{
+                      background: '#fff',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                      border: '1px solid var(--g150, #eee)',
+                      minWidth: 180,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => navigate(`/leads/${run.id}`)}
+                  >
+                    <div style={{ fontWeight: 600, color: 'var(--g700)', marginBottom: 4 }}>{run.user_name}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--g500)' }}>
+                      <span>{run.credits_used} credits</span>
+                      <span>{run.companies_found} co.</span>
+                    </div>
+                    {run.started_at && (
+                      <div style={{ color: 'var(--g400)', fontSize: 11, marginTop: 4 }}>
+                        {relativeTime(run.started_at)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginBottom: 16 }}>
         <div className="section-label">Recent Activity</div>

@@ -5,8 +5,16 @@ export interface AuthUser {
   picture_url: string | null;
   role: string;
   is_active: boolean;
+  daily_credit_limit: number | null;
   created_at: string | null;
   last_login_at: string | null;
+}
+
+export interface CreditQuotaResponse {
+  daily_limit: number | null;
+  used_today: number;
+  remaining: number | null;
+  runs_in_progress: number;
 }
 
 export interface ICPConfig {
@@ -74,6 +82,10 @@ export interface PipelineRun {
   match_strictness?: string | null;
   estimated_duration_seconds?: number | null;
   user_name?: string | null;
+  discovery_mode?: string | null;
+  sales_navigator_url?: string | null;
+  evaboot_credits_used?: number | null;
+  expected_result_count?: number | null;
   stage_details?: {
     total_discovered?: number;
     pre_filter_passed?: number;
@@ -88,6 +100,12 @@ export interface PipelineRun {
     contacts_found_so_far?: number;
     newly_discovered?: number;
     carried_forward?: number;
+    pre_qualified_sn?: number;
+    evaboot_extraction?: {
+      credits_used?: number;
+      prospects_found?: number;
+      companies_found?: number;
+    };
   } | null;
 }
 
@@ -167,6 +185,30 @@ export interface Company {
   deal_hotness_score?: number | null;
   deal_hotness_tier?: string | null;
   avg_evidence_age_months?: number | null;
+
+  // LinkedIn / Evaboot enrichment fields
+  domain?: string | null;
+  linkedin_url?: string | null;
+  company_type?: string | null;
+  year_founded?: number | null;
+  revenue_min?: number | null;
+  revenue_max?: number | null;
+  employee_growth_1y_pct?: number | null;
+  funding_stage?: string | null;
+  discovery_method?: string | null;
+  headquarters_address?: string | null;
+  linkedin_data?: {
+    department_headcounts?: Record<string, number>;
+    specialties?: string[];
+    employee_growth_6m_pct?: number;
+    employee_growth_2y_pct?: number;
+    profile_picture_url?: string;
+    revenue_currency?: string;
+    employee_range_text?: string;
+    company_type_detailed?: string;
+    matches_sn_filters?: string;
+    sn_no_match_reasons?: string;
+  } | null;
 
   // Cross-run context (populated by /all/companies endpoint)
   pipeline_run_id?: string | null;
@@ -349,6 +391,47 @@ export interface AuditLogEntry {
   resource_id: string | null;
   details: Record<string, unknown> | null;
   ip_address: string | null;
+  created_at: string | null;
+}
+
+// Feedback types
+export type FeedbackType = 'feedback' | 'complaint' | 'bug_report' | 'feature_request';
+export type FeedbackStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
+
+export interface FeedbackItem {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  type: FeedbackType;
+  subject: string;
+  description: string;
+  status: FeedbackStatus;
+  created_at: string | null;
+  updated_at: string | null;
+  replies: FeedbackReplyItem[];
+}
+
+export interface FeedbackListItem {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  type: FeedbackType;
+  subject: string;
+  status: FeedbackStatus;
+  reply_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface FeedbackReplyItem {
+  id: string;
+  feedback_id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  message: string;
   created_at: string | null;
 }
 

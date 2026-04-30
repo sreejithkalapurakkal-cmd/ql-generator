@@ -593,10 +593,73 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
               </div>
             </div>
           )}
+          {company.company_type && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Company Type</Text>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.company_type}</div>
+            </div>
+          )}
+          {company.year_founded != null && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Year Founded</Text>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.year_founded}</div>
+            </div>
+          )}
+          {(company.revenue_min != null || company.revenue_max != null) && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Revenue Range</Text>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                {company.revenue_min != null && company.revenue_max != null
+                  ? `${fmtRevenue(company.revenue_min)} – ${fmtRevenue(company.revenue_max)}`
+                  : company.revenue_min != null
+                    ? `${fmtRevenue(company.revenue_min)}+`
+                    : `Up to ${fmtRevenue(company.revenue_max)}`
+                }
+              </div>
+            </div>
+          )}
+          {company.funding_stage && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Funding Stage</Text>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.funding_stage}</div>
+            </div>
+          )}
+          {company.employee_growth_1y_pct != null && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Employee Growth (1Y)</Text>
+              <div style={{ fontWeight: 600, fontSize: 13, color: company.employee_growth_1y_pct > 0 ? 'var(--green)' : company.employee_growth_1y_pct < 0 ? 'var(--red)' : undefined }}>
+                {company.employee_growth_1y_pct > 0 ? '+' : ''}{company.employee_growth_1y_pct.toFixed(1)}%
+              </div>
+            </div>
+          )}
+          {company.linkedin_url && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>LinkedIn</Text>
+              <div>
+                <a
+                  href={company.linkedin_url.startsWith('http') ? company.linkedin_url : `https://linkedin.com/company/${company.linkedin_url}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: 13, color: 'var(--purple)' }}
+                >
+                  <LinkOutlined style={{ marginRight: 4 }} />LinkedIn Profile
+                </a>
+              </div>
+            </div>
+          )}
           {company.source && (
             <div>
               <Text type="secondary" style={{ fontSize: 11 }}>Source</Text>
               <div style={{ fontWeight: 600, fontSize: 13 }}>{company.source}</div>
+            </div>
+          )}
+          {company.discovery_method && company.discovery_method !== 'qlgen' && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>Discovery Method</Text>
+              <div>
+                <Tag color="blue" style={{ fontSize: 11 }}>
+                  {company.discovery_method === 'linkedin_sales_navigator' ? 'LinkedIn Sales Navigator' : company.discovery_method}
+                </Tag>
+              </div>
             </div>
           )}
           {company.qualification && (
@@ -618,6 +681,28 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
         {company.description && (
           <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--g50)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--g700)', lineHeight: 1.7 }}>
             {company.description}
+          </div>
+        )}
+        {company.linkedin_data?.specialties && company.linkedin_data.specialties.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <Text type="secondary" style={{ fontSize: 11 }}>Specialties</Text>
+            <div style={{ marginTop: 4 }}>
+              {company.linkedin_data.specialties.map((s, i) => (
+                <Tag key={i} style={{ fontSize: 11, marginBottom: 3 }}>{s}</Tag>
+              ))}
+            </div>
+          </div>
+        )}
+        {company.linkedin_data?.department_headcounts && Object.keys(company.linkedin_data.department_headcounts).length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <Text type="secondary" style={{ fontSize: 11 }}>Department Headcounts</Text>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+              {Object.entries(company.linkedin_data.department_headcounts).map(([dept, count]) => (
+                <Tag key={dept} color="blue" style={{ fontSize: 11 }}>
+                  {dept}: {count}
+                </Tag>
+              ))}
+            </div>
           </div>
         )}
       </Card>

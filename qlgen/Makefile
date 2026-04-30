@@ -14,8 +14,7 @@ VITE         := $(FRONTEND_DIR)/node_modules/.bin/vite
 BACKEND_LOG  := /tmp/qlgen-backend.log
 FRONTEND_LOG := /tmp/qlgen-frontend.log
 
-.PHONY: help install install-backend install-frontend \
-        db-start db-stop db-wait \
+.PHONY: help install install-backend install-frontend \        db-start db-stop db-wait \
         migrate migrate-create \
         dev dev-backend dev-frontend \
         stop stop-backend stop-frontend \

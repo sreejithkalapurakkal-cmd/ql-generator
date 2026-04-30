@@ -30,6 +30,15 @@ class CompanyKnowledgeBase(Base):
     revenue_estimate = Column(BigInteger)
     asset_value = Column(BigInteger)
 
+    # LinkedIn / Evaboot enrichment
+    linkedin_url = Column(String(500))
+    company_type = Column(String(500))
+    year_founded = Column(Integer)
+    revenue_min = Column(BigInteger)
+    revenue_max = Column(BigInteger)
+    funding_stage = Column(String(500))
+    linkedin_data = Column(JSONB)
+
     # Tech / Description
     tech_stack_json = Column(JSONB)
     description = Column(Text)

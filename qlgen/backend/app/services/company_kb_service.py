@@ -179,6 +179,14 @@ async def upsert_company_to_kb(
         ("asset_value", company.asset_value),
         ("tech_stack_json", company.tech_stack_json),
         ("description", company.description),
+        # LinkedIn / Evaboot enrichment
+        ("linkedin_url", company.linkedin_url),
+        ("company_type", company.company_type),
+        ("year_founded", company.year_founded),
+        ("revenue_min", company.revenue_min),
+        ("revenue_max", company.revenue_max),
+        ("funding_stage", company.funding_stage),
+        ("linkedin_data", company.linkedin_data),
     ]
 
     for field_name, new_value in firmographic_fields:
@@ -290,6 +298,22 @@ def clone_from_kb(kb_record: CompanyKnowledgeBase, company: Company):
         company.state_region = kb_record.state_region
     if kb_record.embedding is not None and company.embedding is None:
         company.embedding = kb_record.embedding
+
+    # LinkedIn / Evaboot enrichment fields
+    if kb_record.linkedin_url and not company.linkedin_url:
+        company.linkedin_url = kb_record.linkedin_url
+    if kb_record.company_type and not company.company_type:
+        company.company_type = kb_record.company_type
+    if kb_record.year_founded and not company.year_founded:
+        company.year_founded = kb_record.year_founded
+    if kb_record.revenue_min and not company.revenue_min:
+        company.revenue_min = kb_record.revenue_min
+    if kb_record.revenue_max and not company.revenue_max:
+        company.revenue_max = kb_record.revenue_max
+    if kb_record.funding_stage and not company.funding_stage:
+        company.funding_stage = kb_record.funding_stage
+    if kb_record.linkedin_data and not company.linkedin_data:
+        company.linkedin_data = kb_record.linkedin_data
 
     company.data_freshness = kb_record.last_enriched_at
 

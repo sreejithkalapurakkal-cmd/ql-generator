@@ -25,6 +25,13 @@ class PipelineRun(Base):
     signal_mode = Column(String(50), nullable=True)     # budget_first, urgency_first, both
     signal_phase = Column(String(50), nullable=True)    # first_signal_done, second_signal_done, or null
 
+    # Evaboot / Sales Navigator integration
+    discovery_mode = Column(String(50), nullable=True, default="qlgen_only")  # qlgen_only, sales_navigator_only, sales_navigator_plus_qlgen
+    sales_navigator_url = Column(Text, nullable=True)
+    evaboot_extraction_id = Column(String(255), nullable=True)
+    evaboot_credits_used = Column(Integer, nullable=True, default=0)
+    expected_result_count = Column(Integer, nullable=True)
+
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
 
     icp_config = relationship("ICPConfig", back_populates="pipeline_runs")
