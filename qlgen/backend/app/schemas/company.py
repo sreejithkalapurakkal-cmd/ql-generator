@@ -81,6 +81,19 @@ class CompanyResponse(BaseModel):
     deal_hotness_tier: Optional[str] = None
     avg_evidence_age_months: Optional[float] = None
 
+    # LinkedIn / Evaboot enrichment fields
+    domain: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    company_type: Optional[str] = None
+    year_founded: Optional[int] = None
+    revenue_min: Optional[int] = None
+    revenue_max: Optional[int] = None
+    employee_growth_1y_pct: Optional[float] = None
+    funding_stage: Optional[str] = None
+    discovery_method: Optional[str] = None
+    headquarters_address: Optional[str] = None
+    linkedin_data: Optional[Any] = None
+
     # Cross-run context (populated by /all/companies endpoint)
     pipeline_run_id: Optional[UUID] = None
     run_icp_name: Optional[str] = None

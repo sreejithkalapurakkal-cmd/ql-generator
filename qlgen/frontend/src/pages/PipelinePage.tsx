@@ -1767,16 +1767,28 @@ const PipelinePage: React.FC = () => {
         title: 'Company',
         dataIndex: 'name',
         width: 200,
-        render: (name: string, record: Company) => (
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{name}</div>
-            {record.website && (
-              <a href={record.website.startsWith('http') ? record.website : `https://${record.website}`} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--purple)' }}>
-                {record.website}
-              </a>
-            )}
-          </div>
-        ),
+        render: (name: string, record: Company) => {
+          const isPreQualified = record.stage_results?.some(
+            sr => sr.stage === 'firmographic_fit' && sr.status === 'skipped'
+          );
+          return (
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                {name}
+                {isPreQualified && (
+                  <Tag color="blue" style={{ fontSize: 10, marginLeft: 6, verticalAlign: 'middle' }}>
+                    LinkedIn Pre-Qualified
+                  </Tag>
+                )}
+              </div>
+              {record.website && (
+                <a href={record.website.startsWith('http') ? record.website : `https://${record.website}`} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--purple)' }}>
+                  {record.website}
+                </a>
+              )}
+            </div>
+          );
+        },
       },
       {
         title: 'Industry',

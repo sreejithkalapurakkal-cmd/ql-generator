@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.session import get_db
 from app.models.user import User
-from app.auth.dependencies import get_current_super_admin
-from app.schemas.auth import UserResponse, UserInviteRequest, UserUpdateRequest
+from app.auth.dependencies import get_current_user, get_current_super_admin
+from app.schemas.auth import UserResponse, UserInviteRequest, UserUpdateRequest, CreditQuotaResponse
 from app.services.audit_service import log_audit
+from app.services.credit_service import get_credit_usage_today
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -68,6 +69,25 @@ async def invite_user(
     return UserResponse.model_validate(user)
 
 
+@router.get("/me/credit-quota", response_model=CreditQuotaResponse)
+async def get_my_credit_quota(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current user's daily credit quota status."""
+    usage = await get_credit_usage_today(user.id, db)
+    daily_limit = user.daily_credit_limit
+    remaining = None
+    if daily_limit is not None:
+        remaining = max(0, daily_limit - usage["used_today"] - usage["reserved"])
+    return CreditQuotaResponse(
+        daily_limit=daily_limit,
+        used_today=usage["used_today"],
+        remaining=remaining,
+        runs_in_progress=usage["runs_in_progress"],
+    )
+
+
 @router.put("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: UUID,
@@ -94,6 +114,10 @@ async def update_user(
     if request.name is not None:
         user.name = request.name
         changed_fields.append("name")
+    if request.daily_credit_limit is not None:
+        # -1 is sentinel for "set to unlimited (None)"
+        user.daily_credit_limit = None if request.daily_credit_limit == -1 else request.daily_credit_limit
+        changed_fields.append("daily_credit_limit")
 
     await log_audit(db, admin.id, "update", "user", user.id, {"changed_fields": changed_fields, "email": user.email}, ip_address=http_request.client.host if http_request.client else None)
     await db.commit()

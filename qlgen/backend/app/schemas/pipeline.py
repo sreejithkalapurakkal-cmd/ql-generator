@@ -13,6 +13,7 @@ class PipelineRunRequest(BaseModel):
     options: PipelineOptions = PipelineOptions()
     discovery_mode: str = "qlgen_only"  # qlgen_only | sales_navigator_only | sales_navigator_plus_qlgen
     sales_navigator_url: Optional[str] = None
+    expected_result_count: Optional[int] = None
 
 
 class PipelineRunResponse(BaseModel):
@@ -36,6 +37,7 @@ class PipelineRunResponse(BaseModel):
     discovery_mode: Optional[str] = None
     sales_navigator_url: Optional[str] = None
     evaboot_credits_used: Optional[int] = None
+    expected_result_count: Optional[int] = None
 
     class Config:
         from_attributes = True

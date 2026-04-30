@@ -6,6 +6,7 @@ export const startPipeline = (data: {
   options?: { max_companies?: number; max_contacts_per_company?: number };
   discovery_mode?: 'qlgen_only' | 'sales_navigator_only' | 'sales_navigator_plus_qlgen';
   sales_navigator_url?: string;
+  expected_result_count?: number;
 }) => client.post<PipelineRun>('/pipeline/run', data);
 
 export const getPipelineStatus = (runId: string) =>

@@ -22,6 +22,7 @@ class UserResponse(BaseModel):
     picture_url: Optional[str]
     role: str
     is_active: bool
+    daily_credit_limit: Optional[int] = None
     created_at: Optional[datetime]
     last_login_at: Optional[datetime]
 
@@ -38,3 +39,11 @@ class UserUpdateRequest(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
     name: Optional[str] = None
+    daily_credit_limit: Optional[int] = None
+
+
+class CreditQuotaResponse(BaseModel):
+    daily_limit: Optional[int] = None
+    used_today: int = 0
+    remaining: Optional[int] = None
+    runs_in_progress: int = 0

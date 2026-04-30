@@ -79,6 +79,18 @@ def _company_to_dict(company, include_contacts=False):
         "urgency_signal_score": company.urgency_signal_score,
         "final_score": company.final_score,
         "final_rank": company.final_rank,
+        # LinkedIn / Evaboot enrichment
+        "domain": company.domain,
+        "linkedin_url": company.linkedin_url,
+        "company_type": company.company_type,
+        "year_founded": company.year_founded,
+        "revenue_min": company.revenue_min,
+        "revenue_max": company.revenue_max,
+        "employee_growth_1y_pct": company.employee_growth_1y_pct,
+        "funding_stage": company.funding_stage,
+        "discovery_method": company.discovery_method,
+        "headquarters_address": company.headquarters_address,
+        "linkedin_data": company.linkedin_data,
     }
 
     if include_contacts and company.contacts:

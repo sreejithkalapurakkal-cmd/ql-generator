@@ -5,7 +5,8 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { createICP, getICP, updateICP, getICPTemplateURL, parseICPUpload, generateICPWithAI, generateICPFromFile } from '../api/icpApi';
 import { startPipeline } from '../api/pipelineApi';
 import { getEvabootStatus, EvabootStatus } from '../api/toolsApi';
-import { ICPDefinition, DEFAULT_ICP } from '../types';
+import { getCreditQuota } from '../api/usersApi';
+import { ICPDefinition, DEFAULT_ICP, CreditQuotaResponse } from '../types';
 import { parseSalesNavUrl, generateNameFromExtraction, SalesNavExtraction } from '../utils/salesNavParser';
 
 const { TextArea } = Input;
@@ -75,6 +76,8 @@ const ICPConfigPage: React.FC = () => {
   const [evabootStatus, setEvabootStatus] = useState<EvabootStatus | null>(null);
   const [salesNavExtraction, setSalesNavExtraction] = useState<SalesNavExtraction | null>(null);
   const [autoFillApplied, setAutoFillApplied] = useState<string>('');
+  const [expectedResultCount, setExpectedResultCount] = useState<number | null>(null);
+  const [creditQuota, setCreditQuota] = useState<CreditQuotaResponse | null>(null);
 
   const isSalesNav = discoveryMode !== 'qlgen_only';
 
@@ -147,6 +150,17 @@ const ICPConfigPage: React.FC = () => {
       .then((res) => setEvabootStatus(res.data))
       .catch(() => setEvabootStatus(null));
   }, []);
+
+  // Fetch credit quota when Sales Navigator mode is selected
+  useEffect(() => {
+    if (isSalesNav) {
+      getCreditQuota()
+        .then((res) => setCreditQuota(res.data))
+        .catch(() => setCreditQuota(null));
+    } else {
+      setCreditQuota(null);
+    }
+  }, [isSalesNav]);
 
   const handleImportUpload = async (file: File) => {
     setImportParsing(true);
@@ -446,6 +460,51 @@ const ICPConfigPage: React.FC = () => {
                   size="large"
                 />
               </Form.Item>
+
+              <Form.Item
+                label="Expected Result Count"
+                help="Estimate how many profiles this search will return. Used for daily credit quota tracking."
+              >
+                <InputNumber
+                  min={1}
+                  max={10000}
+                  value={expectedResultCount}
+                  onChange={(val) => setExpectedResultCount(val)}
+                  placeholder="e.g. 100"
+                  style={{ width: '100%' }}
+                  size="large"
+                />
+              </Form.Item>
+
+              {creditQuota && creditQuota.daily_limit !== null && (
+                <div style={{
+                  background: creditQuota.remaining !== null && creditQuota.remaining <= 0 ? '#fff2f0' : '#f0f5ff',
+                  border: `1px solid ${creditQuota.remaining !== null && creditQuota.remaining <= 0 ? '#ffccc7' : '#adc6ff'}`,
+                  borderRadius: 8,
+                  padding: '12px 16px',
+                  marginBottom: 12,
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1d39c4', marginBottom: 6 }}>
+                    Daily Credit Quota
+                  </div>
+                  <div style={{ display: 'flex', gap: 24, fontSize: 13 }}>
+                    <div><strong>Limit:</strong> {creditQuota.daily_limit}</div>
+                    <div><strong>Used today:</strong> {creditQuota.used_today}</div>
+                    <div><strong>Remaining:</strong> {creditQuota.remaining ?? 'Unlimited'}</div>
+                    {creditQuota.runs_in_progress > 0 && (
+                      <div><strong>Runs in progress:</strong> {creditQuota.runs_in_progress}</div>
+                    )}
+                  </div>
+                  {expectedResultCount != null && creditQuota.remaining !== null && expectedResultCount > creditQuota.remaining && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message={`Expected count (${expectedResultCount}) exceeds remaining quota (${creditQuota.remaining}). Reduce the count or contact your admin.`}
+                      style={{ marginTop: 8 }}
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Extraction feedback */}
               {salesNavExtraction && salesNavExtraction.isParseable && !salesNavExtraction.isSavedList && salesNavExtraction.filters.length > 0 && (
@@ -1016,6 +1075,13 @@ const ICPConfigPage: React.FC = () => {
       message.error('Please provide an ICP name');
       return;
     }
+    // Pre-run credit quota validation for Sales Navigator modes
+    if (runPipeline && isSalesNav && creditQuota && creditQuota.daily_limit !== null) {
+      if (expectedResultCount != null && creditQuota.remaining !== null && expectedResultCount > creditQuota.remaining) {
+        message.error(`Daily credit limit exceeded. You have ${creditQuota.remaining} credits remaining today.`);
+        return;
+      }
+    }
     setSaving(true);
     try {
       // Persist discovery source settings inside the config JSONB
@@ -1041,6 +1107,9 @@ const ICPConfigPage: React.FC = () => {
         };
         if (discoveryMode !== 'qlgen_only' && salesNavUrl.trim()) {
           pipelinePayload.sales_navigator_url = salesNavUrl.trim();
+        }
+        if (isSalesNav && expectedResultCount != null) {
+          pipelinePayload.expected_result_count = expectedResultCount;
         }
         const runRes = await startPipeline(pipelinePayload);
         navigate(`/pipeline/${runRes.data.id}`);

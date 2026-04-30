@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Table, Button, Modal, Form, Input, Select, Tag, message, Popconfirm,
-  Typography, Space, Switch, Avatar,
+  Typography, Space, Switch, Avatar, InputNumber,
 } from 'antd';
 import { PlusOutlined, UserOutlined, DeleteOutlined } from '@ant-design/icons';
 import { listUsers, inviteUser, updateUser, deleteUser } from '../api/usersApi';
@@ -9,6 +9,29 @@ import type { AuthUser } from '../api/authApi';
 import { useAuth } from '../context/AuthContext';
 
 const { Title } = Typography;
+
+const CreditLimitInput: React.FC<{
+  value: number | null;
+  onSave: (val: number | null) => void;
+}> = ({ value, onSave }) => {
+  const [local, setLocal] = useState<number | null>(value);
+  useEffect(() => { setLocal(value); }, [value]);
+  const commit = () => {
+    if (local !== value) onSave(local);
+  };
+  return (
+    <InputNumber
+      min={0}
+      value={local}
+      placeholder="Unlimited"
+      size="small"
+      style={{ width: 120 }}
+      onChange={(val) => setLocal(val)}
+      onBlur={commit}
+      onPressEnter={commit}
+    />
+  );
+};
 
 const UserManagementPage: React.FC = () => {
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -63,6 +86,17 @@ const UserManagementPage: React.FC = () => {
       fetchUsers();
     } catch {
       message.error('Failed to update role');
+    }
+  };
+
+  const handleCreditLimitSave = async (userId: string, value: number | null) => {
+    try {
+      // null means clear → send -1 sentinel for "set to unlimited (None)"
+      await updateUser(userId, { daily_credit_limit: value == null ? -1 : value });
+      message.success('Credit limit updated');
+      fetchUsers();
+    } catch {
+      message.error('Failed to update credit limit');
     }
   };
 
@@ -135,6 +169,22 @@ const UserManagementPage: React.FC = () => {
             checkedChildren="Active"
             unCheckedChildren="Inactive"
             onChange={(checked) => handleToggleActive(record.id, checked)}
+          />
+        );
+      },
+    },
+    {
+      title: 'Daily Credit Limit',
+      key: 'daily_credit_limit',
+      width: 160,
+      render: (_: unknown, record: AuthUser) => {
+        const isSelf = record.id === currentUser?.id;
+        return isSelf ? (
+          <span>{record.daily_credit_limit ?? 'Unlimited'}</span>
+        ) : (
+          <CreditLimitInput
+            value={record.daily_credit_limit}
+            onSave={(val) => handleCreditLimitSave(record.id, val)}
           />
         );
       },

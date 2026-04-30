@@ -9,13 +9,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.company import Company
+from app.models.company_stage import CompanyStageResult
+
+
+def _extract_signal_text(company: Company, stage_name: str) -> str:
+    """Extract semicolon-separated signal names from a company's stage result evidence."""
+    if not hasattr(company, 'stage_results') or not company.stage_results:
+        return ""
+    for sr in company.stage_results:
+        if sr.stage == stage_name and sr.evidence:
+            signals = []
+            for item in sr.evidence:
+                if isinstance(item, dict):
+                    name = item.get("signal_name") or item.get("signal") or ""
+                    if name:
+                        signals.append(str(name))
+            return "; ".join(signals)
+    return ""
 
 
 async def _fetch_companies(run_id: UUID, db: AsyncSession, scope: str = "all"):
     stmt = (
         select(Company)
         .where(Company.pipeline_run_id == run_id)
-        .options(selectinload(Company.contacts))
+        .options(selectinload(Company.contacts), selectinload(Company.stage_results))
         .order_by(Company.name)
     )
     if scope == "final":
@@ -43,7 +60,7 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession, scope: str = "all") -> B
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
         "Phone", "Final Score", "Budget Score", "Urgency Score",
-        "Deal Hotness", "Hotness Tier",
+        "Deal Hotness", "Hotness Tier", "Budget Signal", "Urgency Signal",
     ]
 
     header_fill = PatternFill(start_color="1F4E79", fill_type="solid")
@@ -64,6 +81,8 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession, scope: str = "all") -> B
         urgency_display = company.urgency_signal_score if company.urgency_signal_score is not None else ""
         hotness_display = company.deal_hotness_score if company.deal_hotness_score is not None else ""
         tier_display = company.deal_hotness_tier or ""
+        budget_signal_text = _extract_signal_text(company, "budget_signals")
+        urgency_signal_text = _extract_signal_text(company, "urgency_signals")
 
         if company.contacts:
             for contact in company.contacts:
@@ -81,6 +100,8 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession, scope: str = "all") -> B
                 ws.cell(row=row_num, column=12, value=urgency_display)
                 ws.cell(row=row_num, column=13, value=hotness_display)
                 ws.cell(row=row_num, column=14, value=tier_display)
+                ws.cell(row=row_num, column=15, value=budget_signal_text)
+                ws.cell(row=row_num, column=16, value=urgency_signal_text)
                 serial += 1
                 row_num += 1
         else:
@@ -93,6 +114,8 @@ async def generate_xlsx(run_id: UUID, db: AsyncSession, scope: str = "all") -> B
             ws.cell(row=row_num, column=12, value=urgency_display)
             ws.cell(row=row_num, column=13, value=hotness_display)
             ws.cell(row=row_num, column=14, value=tier_display)
+            ws.cell(row=row_num, column=15, value=budget_signal_text)
+            ws.cell(row=row_num, column=16, value=urgency_signal_text)
             serial += 1
             row_num += 1
 
@@ -122,7 +145,7 @@ async def generate_csv(run_id: UUID, db: AsyncSession, scope: str = "all") -> By
         "Serial#", "Company Name", "Website", "Geo/City",
         "Contact Name", "Designation", "LinkedIn", "Email",
         "Phone", "Final Score", "Budget Score", "Urgency Score",
-        "Deal Hotness", "Hotness Tier",
+        "Deal Hotness", "Hotness Tier", "Budget Signal", "Urgency Signal",
     ])
 
     serial = 1
@@ -133,6 +156,8 @@ async def generate_csv(run_id: UUID, db: AsyncSession, scope: str = "all") -> By
         urgency_display = company.urgency_signal_score if company.urgency_signal_score is not None else ""
         hotness_display = company.deal_hotness_score if company.deal_hotness_score is not None else ""
         tier_display = company.deal_hotness_tier or ""
+        budget_signal_text = _extract_signal_text(company, "budget_signals")
+        urgency_signal_text = _extract_signal_text(company, "urgency_signals")
 
         if company.contacts:
             for contact in company.contacts:
@@ -141,6 +166,7 @@ async def generate_csv(run_id: UUID, db: AsyncSession, scope: str = "all") -> By
                     contact.full_name, contact.designation, contact.linkedin_url,
                     contact.email, contact.phone, score_display,
                     budget_display, urgency_display, hotness_display, tier_display,
+                    budget_signal_text, urgency_signal_text,
                 ])
                 serial += 1
         else:
@@ -148,6 +174,7 @@ async def generate_csv(run_id: UUID, db: AsyncSession, scope: str = "all") -> By
                 serial, company.name, company.website, city_str,
                 "", "", "", "", "", score_display,
                 budget_display, urgency_display, hotness_display, tier_display,
+                budget_signal_text, urgency_signal_text,
             ])
             serial += 1
 

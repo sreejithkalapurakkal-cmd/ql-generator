@@ -7,6 +7,7 @@ export interface AuthUser {
   picture_url: string | null;
   role: string;
   is_active: boolean;
+  daily_credit_limit: number | null;
   created_at: string | null;
   last_login_at: string | null;
 }

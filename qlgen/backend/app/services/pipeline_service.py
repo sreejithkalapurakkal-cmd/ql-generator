@@ -80,6 +80,14 @@ def _safe_int(value) -> int | None:
     return None
 
 
+def _safe_str(value, max_length: int = 500) -> str | None:
+    """Truncate agent-returned strings to fit column width."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s[:max_length] if s else None
+
+
 # ──────────────────────────────────────────────────────────────────
 # C4: Embedding-powered discovery pre-seeding
 # ──────────────────────────────────────────────────────────────────
@@ -242,6 +250,72 @@ async def _run_evaboot_extraction(
     return companies, credits_used
 
 
+def _safe_float(value) -> float | None:
+    """Coerce a value to float, returning None if it can't be converted."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().replace(",", "").replace("%", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_revenue_millions(value) -> int | None:
+    """Parse a revenue value expressed in millions to dollars (×1,000,000)."""
+    f = _safe_float(value)
+    if f is None:
+        return None
+    return int(f * 1_000_000)
+
+
+def _parse_comma_list(value) -> list[str]:
+    """Split a comma-separated string into a list of stripped strings."""
+    if not value:
+        return []
+    return [s.strip() for s in str(value).split(",") if s.strip()]
+
+
+def _parse_department_headcounts(value) -> dict[str, int] | None:
+    """Parse department headcount data.
+
+    Handles formats like:
+    - 'Sales: 5\\nEngineering: 6'
+    - dict already
+    - JSON string
+    """
+    if not value:
+        return None
+    if isinstance(value, dict):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    result = {}
+    # Try key: value lines (newline or semicolon separated)
+    for sep in ["\n", ";"]:
+        if sep in s:
+            for part in s.split(sep):
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    parsed = _safe_int(v.strip())
+                    if parsed is not None:
+                        result[k.strip()] = parsed
+            if result:
+                return result
+    # Single "key: value" pair
+    if ":" in s:
+        k, v = s.split(":", 1)
+        parsed = _safe_int(v.strip())
+        if parsed is not None:
+            return {k.strip(): parsed}
+    return None
+
+
 def _parse_evaboot_prospects(prospects: list[dict]) -> list[dict]:
     """Convert Evaboot prospect data into the standard company dict format.
 
@@ -275,22 +349,87 @@ def _parse_evaboot_prospects(prospects: list[dict]) -> list[dict]:
             employee_count = _safe_int(
                 p.get("Company Employee Exact Count") or p.get("company_size")
             )
+
+            # Revenue: stored in dollars (×1M from the Evaboot millions value)
+            revenue_min = _parse_revenue_millions(
+                p.get("Company Revenue Min (Millions USD)") or p.get("company_revenue_min")
+            )
+            revenue_max = _parse_revenue_millions(
+                p.get("Company Revenue Max (Millions USD)") or p.get("company_revenue_max")
+            )
+            # Compute midpoint revenue estimate
+            revenue_estimate = None
+            if revenue_min is not None and revenue_max is not None:
+                revenue_estimate = int((revenue_min + revenue_max) / 2)
+            elif revenue_min is not None:
+                revenue_estimate = revenue_min
+            elif revenue_max is not None:
+                revenue_estimate = revenue_max
+
+            # LinkedIn data JSONB (semi-structured fields)
+            linkedin_data = {
+                "department_headcounts": _parse_department_headcounts(
+                    p.get("Department Headcounts") or p.get("department_headcounts")
+                ),
+                "specialties": _parse_comma_list(
+                    _get(p, "Company Specialities", "company_specialties")
+                ) or None,
+                "employee_growth_6m_pct": _safe_float(
+                    p.get("Company Employee Growth 6 Months (%)") or p.get("employee_growth_6m")
+                ),
+                "employee_growth_2y_pct": _safe_float(
+                    p.get("Company Employee Growth 2 Years (%)") or p.get("employee_growth_2y")
+                ),
+                "profile_picture_url": _get(p, "Company Profile Picture", "company_profile_picture") or None,
+                "revenue_currency": _get(p, "Company Revenue Currency", "revenue_currency") or None,
+                "employee_range_text": _get(p, "Company Employee Range", "employee_range") or None,
+                "company_type_detailed": _get(p, "Company Type", "company_type_detailed") or None,
+                "matches_sn_filters": _get(p, "Matches Filters", "matches_filters") or None,
+                "sn_no_match_reasons": _get(p, "No Match Reasons", "no_match_reasons") or None,
+            }
+            # Remove None values from linkedin_data for cleaner JSONB
+            linkedin_data = {k: v for k, v in linkedin_data.items() if v is not None}
+
             company_map[key] = {
                 "name": company_name,
                 "website": company_domain or _get(p, "Company Website URL"),
                 "industry": _get(p, "Company Industry", "company_industry"),
                 "employee_count": employee_count,
                 "city": None,
+                "state_region": None,
                 "country": None,
                 "description": _get(p, "Company Description", "company_description"),
                 "source": "evaboot",
+                "discovery_method": "linkedin_sales_navigator",
                 "contacts": [],
+                # New dedicated columns
+                "domain": company_domain.lower() if company_domain else None,
+                "linkedin_url": _get(p, "Company Linkedin URL Unique ID", "company_linkedin_url") or None,
+                "company_type": _get(p, "Company Type", "company_type") or None,
+                "year_founded": _safe_int(p.get("Company Year Founded") or p.get("year_founded")),
+                "revenue_min": revenue_min,
+                "revenue_max": revenue_max,
+                "revenue_estimate": revenue_estimate,
+                "employee_growth_1y_pct": _safe_float(
+                    p.get("Company Employee Growth 1 Year (%)") or p.get("employee_growth_1y")
+                ),
+                "funding_stage": _get(p, "Company Funding Stage", "funding_stage") or None,
+                "headquarters_address": _get(p, "Company Headquarters (Full Address)", "headquarters_address") or None,
+                "linkedin_data": linkedin_data if linkedin_data else None,
+                "raw_prospect_data": p,  # Full raw payload for raw_data_json
             }
-            # Parse location
+
+            # Parse location (use headquarters address as fallback)
             location = _get(p, "Company Location", "company_location", "location")
-            if location:
-                parts = [part.strip() for part in location.split(",")]
-                if len(parts) >= 2:
+            hq_address = company_map[key]["headquarters_address"]
+            loc_to_parse = location or hq_address or ""
+            if loc_to_parse:
+                parts = [part.strip() for part in loc_to_parse.split(",")]
+                if len(parts) >= 3:
+                    company_map[key]["city"] = parts[0]
+                    company_map[key]["state_region"] = parts[-2]
+                    company_map[key]["country"] = parts[-1]
+                elif len(parts) == 2:
                     company_map[key]["city"] = parts[0]
                     company_map[key]["country"] = parts[-1]
                 elif parts:
@@ -1451,6 +1590,16 @@ async def execute_pipeline(run_id: UUID):
             # Save all discovered companies to DB
             companies_saved = 0
             for disc in unique_companies:
+                # Compute revenue_estimate from min/max if not directly available
+                disc_revenue = _safe_int(disc.get("revenue_estimate"))
+                if not disc_revenue and (disc.get("revenue_min") or disc.get("revenue_max")):
+                    rmin = disc.get("revenue_min")
+                    rmax = disc.get("revenue_max")
+                    if rmin and rmax:
+                        disc_revenue = int((rmin + rmax) / 2)
+                    else:
+                        disc_revenue = rmin or rmax
+
                 company = Company(
                     pipeline_run_id=run_id,
                     name=disc.get("name", "Unknown"),
@@ -1461,12 +1610,25 @@ async def execute_pipeline(run_id: UUID):
                     state_region=disc.get("state") or disc.get("state_region"),
                     country=disc.get("country"),
                     employee_count=_safe_int(disc.get("employee_count")),
-                    revenue_estimate=_safe_int(disc.get("revenue_estimate")),
+                    revenue_estimate=disc_revenue,
                     asset_value=_safe_int(disc.get("asset_value")),
                     description=disc.get("description"),
-                    source=disc.get("source"),
+                    source=_safe_str(disc.get("source")),
                     current_stage="industry_discovery",
                     carried_forward=disc.get("carried_forward", False),
+                    # Evaboot / LinkedIn enrichment fields
+                    domain=disc.get("domain"),
+                    linkedin_url=disc.get("linkedin_url"),
+                    company_type=_safe_str(disc.get("company_type")),
+                    year_founded=disc.get("year_founded"),
+                    revenue_min=disc.get("revenue_min"),
+                    revenue_max=disc.get("revenue_max"),
+                    employee_growth_1y_pct=disc.get("employee_growth_1y_pct"),
+                    funding_stage=_safe_str(disc.get("funding_stage")),
+                    discovery_method=disc.get("discovery_method", "qlgen"),
+                    headquarters_address=disc.get("headquarters_address"),
+                    linkedin_data=disc.get("linkedin_data"),
+                    raw_data_json=disc.get("raw_prospect_data"),
                 )
                 db.add(company)
 
@@ -1498,7 +1660,7 @@ async def execute_pipeline(run_id: UUID):
                             last_name=contact_data.get("last_name"),
                             designation=contact_data.get("designation"),
                             email=contact_data.get("email"),
-                            phone=contact_data.get("phone"),
+                            phone=_safe_str(contact_data.get("phone")),
                             linkedin_url=contact_data.get("linkedin_url"),
                             source="evaboot",
                             confidence=0.8 if contact_data.get("email_validity") == "safe" else 0.5,
@@ -1541,8 +1703,45 @@ async def execute_pipeline(run_id: UUID):
             )
             all_companies = list(all_companies_result.scalars().all())
 
-            # Pass 1: Computational pre-filter
-            passed, failed, needs_agent = quick_firmographic_filter(all_companies, icp)
+            # ── Routing: split pre-qualified (LinkedIn Sales Navigator) vs standard ──
+            pre_qualified = [c for c in all_companies if c.discovery_method == "linkedin_sales_navigator"]
+            standard_companies = [c for c in all_companies if c.discovery_method != "linkedin_sales_navigator"]
+
+            # Auto-qualify pre-filtered LinkedIn companies (skip Stage 2 agent)
+            pre_qualified_count = 0
+            for company in pre_qualified:
+                company.current_stage = "firmographic_fit"
+                company.qualification = "qualified"
+                company.icp_match_score = company.icp_match_score or 80.0
+                # Compute revenue_estimate from min/max if not set
+                if not company.revenue_estimate and (company.revenue_min or company.revenue_max):
+                    if company.revenue_min and company.revenue_max:
+                        company.revenue_estimate = int((company.revenue_min + company.revenue_max) / 2)
+                    else:
+                        company.revenue_estimate = company.revenue_min or company.revenue_max
+                stage_result = CompanyStageResult(
+                    company_id=company.id,
+                    stage="firmographic_fit",
+                    status="skipped",
+                    score=80.0,
+                    reasoning="Pre-filtered via LinkedIn Sales Navigator. Firmographic fit assumed.",
+                )
+                db.add(stage_result)
+                pre_qualified_count += 1
+
+            if pre_qualified:
+                await _emit_event(run_id_str, {
+                    "type": "stage_update",
+                    "stage": "firmographic_fit",
+                    "progress": 32,
+                    "message": f"{pre_qualified_count} Sales Navigator companies auto-qualified (Stage 2 skipped).",
+                })
+
+            # Pass 1: Computational pre-filter (only standard companies)
+            if standard_companies:
+                passed, failed, needs_agent = quick_firmographic_filter(standard_companies, icp)
+            else:
+                passed, failed, needs_agent = [], [], []
 
             # Save failed results
             for company, reason in failed:
@@ -1722,6 +1921,7 @@ async def execute_pipeline(run_id: UUID):
                 "total_discovered": companies_saved,
                 "newly_discovered": companies_saved - carried_forward_count,
                 "carried_forward": carried_forward_count,
+                "pre_qualified_sn": pre_qualified_count,
                 "pre_filter_passed": len(passed),
                 "pre_filter_failed": len(failed),
                 "agent_passed": companies_passed,
@@ -1764,16 +1964,19 @@ async def execute_pipeline(run_id: UUID):
                 logger.warning(f"Embedding generation failed (non-fatal): {embed_err}")
 
             total_failed = len(failed) + companies_failed_agent
+            total_passed = companies_passed + pre_qualified_count
             await _emit_event(run_id_str, {
                 "type": "awaiting_firmographic_review",
-                "companies_passed": companies_passed,
+                "companies_passed": total_passed,
                 "companies_failed": total_failed,
+                "pre_qualified_sn": pre_qualified_count,
                 "total": companies_saved,
             })
 
             logger.info(
                 f"Pipeline {run_id} paused for firmographic review: "
-                f"{companies_passed} passed, {total_failed} failed out of {companies_saved}"
+                f"{total_passed} passed ({pre_qualified_count} pre-qualified SN), "
+                f"{total_failed} failed out of {companies_saved}"
             )
 
         except PipelineCancelled:
@@ -2185,11 +2388,11 @@ async def resume_after_signals(
                             first_name=cd.get("first_name"),
                             last_name=cd.get("last_name"),
                             designation=cd.get("designation"),
-                            role_category=cd.get("role_category"),
+                            role_category=_safe_str(cd.get("role_category")),
                             email=cd.get("email"),
-                            phone=cd.get("phone"),
+                            phone=_safe_str(cd.get("phone")),
                             linkedin_url=cd.get("linkedin_url"),
-                            source=cd.get("source"),
+                            source=_safe_str(cd.get("source")),
                             confidence=cd.get("confidence"),
                             enrichment_status=cd.get("enrichment_status", "pending"),
                         )
@@ -2783,12 +2986,12 @@ async def discover_contacts_for_company(company_id: UUID) -> None:
                     first_name=cd.get("first_name"),
                     last_name=cd.get("last_name"),
                     designation=cd.get("designation"),
-                    role_category=cd.get("role_category"),
+                    role_category=_safe_str(cd.get("role_category")),
                     email=cd.get("email"),
-                    phone=cd.get("phone"),
+                    phone=_safe_str(cd.get("phone")),
                     linkedin_url=cd.get("linkedin_url"),
                     city=cd.get("city"),
-                    source=cd.get("source"),
+                    source=_safe_str(cd.get("source")),
                     confidence=cd.get("confidence"),
                     enrichment_status=cd.get("enrichment_status", "pending"),
                 )

@@ -30,6 +30,7 @@ class PipelineRun(Base):
     sales_navigator_url = Column(Text, nullable=True)
     evaboot_extraction_id = Column(String(255), nullable=True)
     evaboot_credits_used = Column(Integer, nullable=True, default=0)
+    expected_result_count = Column(Integer, nullable=True)
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
 
