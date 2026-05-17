@@ -14,6 +14,12 @@ import AllLeadsPage from './pages/AllLeadsPage';
 import ToolsPage from './pages/ToolsPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import UserManagementPage from './pages/UserManagementPage';
+import TrackingListsPage from './pages/TrackingListsPage';
+import TrackingListDetailPage from './pages/TrackingListDetailPage';
+import TrackedCompanyDetailPage from './pages/TrackedCompanyDetailPage';
+import IngestPage from './pages/IngestPage';
+import IngestEvaluationPage from './pages/IngestEvaluationPage';
+import SignalFeedPage from './pages/SignalFeedPage';
 import { AuthProvider } from './context/AuthContext';
 import { PageContextProvider } from './context/PageContextProvider';
 import CoPilotPanel from './components/CoPilotPanel';
@@ -56,6 +62,12 @@ function App() {
                         <Route path="/icp" element={<ICPListPage />} />
                         <Route path="/pipeline/:runId" element={<PipelinePage />} />
                         <Route path="/all-leads" element={<AllLeadsPage />} />
+                        <Route path="/tracking" element={<TrackingListsPage />} />
+                        <Route path="/tracking/:listId" element={<TrackingListDetailPage />} />
+                        <Route path="/tracking/:listId/company/:membershipId" element={<TrackedCompanyDetailPage />} />
+                        <Route path="/ingest" element={<IngestPage />} />
+                        <Route path="/ingest/:batchId" element={<IngestEvaluationPage />} />
+                        <Route path="/signals" element={<SignalFeedPage />} />
                         <Route path="/leads/:runId" element={<LeadsPage />} />
                         <Route path="/leads/:runId/company/:companyId" element={<CompanyDetailPage />} />
                         <Route

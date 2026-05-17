@@ -17,6 +17,7 @@ import {
   StageSummaryResponse, StageSummary,
 } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
+import AddToTrackingListModal from '../components/AddToTrackingListModal';
 
 const { Text } = Typography;
 
@@ -1269,6 +1270,8 @@ const LeadsPage: React.FC = () => {
   const [logsLoading, setLogsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'companies' | 'funnel' | 'criteria' | 'summary'>('companies');
   const [promotedFilter, setPromotedFilter] = useState<'promoted' | 'all' | 'skipped'>('promoted');
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [trackingModalOpen, setTrackingModalOpen] = useState(false);
 
   useEffect(() => {
     if (runId) {
@@ -1605,6 +1608,16 @@ const LeadsPage: React.FC = () => {
           title="Qualified Leads"
           extra={
             <Space>
+              {selectedRowKeys.length > 0 && (
+                <Button
+                  type="primary"
+                  ghost
+                  onClick={() => setTrackingModalOpen(true)}
+                  style={{ borderRadius: 8 }}
+                >
+                  Add {selectedRowKeys.length} to Tracking List
+                </Button>
+              )}
               {isMultiStepRun && (
                 <Select value={promotedFilter} onChange={setPromotedFilter} style={{ width: 160 }}>
                   <Select.Option value="promoted">Promoted Only</Select.Option>
@@ -1651,6 +1664,10 @@ const LeadsPage: React.FC = () => {
             loading={loading}
             pagination={{ pageSize: 50, showSizeChanger: true }}
             scroll={{ x: 1200 }}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: setSelectedRowKeys,
+            }}
             onRow={(record) => ({
               onClick: () => {
                 const companyId = record.company.id;
@@ -1660,6 +1677,12 @@ const LeadsPage: React.FC = () => {
               style: { cursor: 'pointer' },
             })}
             size="small"
+          />
+          <AddToTrackingListModal
+            open={trackingModalOpen}
+            onClose={() => { setTrackingModalOpen(false); setSelectedRowKeys([]); }}
+            companyIds={selectedRowKeys.map(String)}
+            source="pipeline"
           />
         </Card>
       )}

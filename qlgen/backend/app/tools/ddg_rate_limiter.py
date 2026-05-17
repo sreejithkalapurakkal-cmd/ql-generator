@@ -14,6 +14,14 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Import RatelimitException at module level so it's always available
+# in except clauses. If the ddgs package is missing or restructured,
+# fall back gracefully.
+try:
+    from ddgs.exceptions import RatelimitException as _DDGRatelimitException
+except (ImportError, ModuleNotFoundError, AttributeError):
+    _DDGRatelimitException = None
+
 
 class DDGRateLimiter:
     """Process-wide singleton rate limiter for DuckDuckGo searches."""
@@ -154,23 +162,23 @@ def ddg_search(query: str, max_results: int = 10) -> list[dict]:
 
     try:
         from ddgs import DDGS
-        from ddgs.exceptions import RatelimitException
 
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=min(max_results, 10)))
         return results
 
-    except RatelimitException:
-        _limiter.mark_rate_limited()
-        return [{
-            "error": (
-                "RATE_LIMITED: DuckDuckGo is blocking automated queries. "
-                "Do NOT retry this tool. Switch to exa_search, tavily_search, or "
-                "apollo_company_search instead."
-            ),
-            "rate_limited": True,
-        }]
     except Exception as e:
+        # Check if this is a DDG rate-limit exception
+        if _DDGRatelimitException and isinstance(e, _DDGRatelimitException):
+            _limiter.mark_rate_limited()
+            return [{
+                "error": (
+                    "RATE_LIMITED: DuckDuckGo is blocking automated queries. "
+                    "Do NOT retry this tool. Switch to exa_search, tavily_search, or "
+                    "apollo_company_search instead."
+                ),
+                "rate_limited": True,
+            }]
         if "ratelimit" in str(e).lower():
             _limiter.mark_rate_limited()
             return [{

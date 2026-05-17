@@ -6,6 +6,8 @@ import { listICPs } from '../api/icpApi';
 import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, getPipelineStatus, getAdminActivity } from '../api/pipelineApi';
 import { PipelineRun, AdminActivityResponse, AdminUserSummary } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { getTrackingLists } from '../api/trackingApi';
+import { getSignalFeed } from '../api/signalApi';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
 
@@ -41,6 +43,11 @@ const DashboardPage: React.FC = () => {
   const [displayCount, setDisplayCount] = useState(12);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // Tracking stats
+  const [trackingListCount, setTrackingListCount] = useState(0);
+  const [trackedCompanyCount, setTrackedCompanyCount] = useState(0);
+  const [recentSignalCount, setRecentSignalCount] = useState(0);
+
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
   const [statsModalTile, setStatsModalTile] = useState<TileKey>('total_leads');
@@ -62,6 +69,17 @@ const DashboardPage: React.FC = () => {
         .then((res) => setAdminActivity(res.data))
         .catch(() => setAdminActivity(null));
     }
+    // Fetch tracking stats
+    getTrackingLists()
+      .then((res) => {
+        const lists = res.data.lists || [];
+        setTrackingListCount(lists.length);
+        setTrackedCompanyCount(lists.reduce((sum, l) => sum + (l.company_count || 0), 0));
+      })
+      .catch(() => {});
+    getSignalFeed({ limit: 1 })
+      .then((res) => setRecentSignalCount(res.data.total || 0))
+      .catch(() => {});
   }, [isAdmin]);
 
   const runsList = Array.isArray(runs) ? runs : [];
@@ -327,6 +345,31 @@ const DashboardPage: React.FC = () => {
             <div className="metric-icon">🏢</div>
             <div className="label">Companies Found</div>
             <div className="value">{totalCompanies}</div>
+          </div>
+        </Col>
+      </Row>
+
+      {/* Tracking stats row */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile" style={{ cursor: 'pointer' }} onClick={() => navigate('/tracking')}>
+            <div className="metric-icon">◎</div>
+            <div className="label">Tracking Lists</div>
+            <div className="value">{trackingListCount}</div>
+          </div>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile" style={{ cursor: 'pointer' }} onClick={() => navigate('/tracking')}>
+            <div className="metric-icon">🎯</div>
+            <div className="label">Tracked Companies</div>
+            <div className="value">{trackedCompanyCount}</div>
+          </div>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
+          <div className="metric-tile" style={{ cursor: 'pointer' }} onClick={() => navigate('/signals')}>
+            <div className="metric-icon">◇</div>
+            <div className="label">Active Signals</div>
+            <div className="value">{recentSignalCount}</div>
           </div>
         </Col>
       </Row>

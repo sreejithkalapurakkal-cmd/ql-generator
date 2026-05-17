@@ -352,6 +352,189 @@ export interface AuditLogEntry {
   created_at: string | null;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Signal Research & Track types
+// ──────────────────────────────────────────────────────────────────
+
+export interface TrackingList {
+  id: string;
+  name: string;
+  description: string | null;
+  company_count: number;
+  monitoring_config: MonitoringConfig;
+  signal_hints: SignalHints;
+  last_monitored_at: string | null;
+  is_active?: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MonitoringConfig {
+  enabled?: boolean;
+  frequency_days?: number;
+  signal_types?: string[];
+  alert_threshold?: string;
+}
+
+export interface SignalHints {
+  budget_signals?: string[];
+  urgency_signals?: string[];
+  custom_hints?: string[];
+  target_roles?: string[];
+}
+
+export interface EnrichedContact {
+  full_name: string;
+  first_name?: string;
+  last_name?: string;
+  designation: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedin_url: string | null;
+  city: string | null;
+  source: string | null;
+  confidence: number;
+}
+
+export interface TrackingListMember {
+  membership_id: string;
+  company_kb_id: string;
+  company_name: string | null;
+  domain: string | null;
+  industry: string | null;
+  country: string | null;
+  city: string | null;
+  employee_count: number | null;
+  revenue_estimate: number | null;
+  best_final_score: number | null;
+  best_deal_hotness_tier: string | null;
+  signal_heat_score: number;
+  outreach_status: string;
+  outreach_history: OutreachHistoryEntry[];
+  notes: string | null;
+  tags: string[];
+  added_from: string;
+  added_at: string | null;
+  snoozed_until: string | null;
+  latest_signal: SignalEventSummary | null;
+  enrichment_status: string;
+  best_known_contacts: EnrichedContact[] | null;
+  last_enriched_at: string | null;
+}
+
+export interface OutreachHistoryEntry {
+  status: string;
+  previous_status?: string;
+  timestamp: string;
+  note?: string;
+}
+
+export interface SignalEvent {
+  id: string;
+  company_kb_id: string;
+  signal_type: string;
+  signal_subtype: string | null;
+  signal_category: string | null;
+  priority: string;
+  strength: number;
+  title: string;
+  summary: string | null;
+  evidence: Record<string, unknown> | null;
+  source_tool: string | null;
+  source_url: string | null;
+  detected_at: string | null;
+  evidence_date: string | null;
+  expires_at: string | null;
+  is_archived: boolean;
+  is_dismissed: boolean;
+  created_at: string | null;
+}
+
+export interface SignalEventSummary {
+  id: string;
+  signal_type: string;
+  priority: string;
+  title: string;
+  detected_at: string | null;
+  evidence_date?: string | null;
+  source_url?: string | null;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  signal_event_id: string | null;
+  notification_type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  is_read: boolean;
+  created_at: string | null;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export const OUTREACH_STATUSES = [
+  'not_started',
+  'drafted',
+  'sent',
+  'replied',
+  'meeting_booked',
+  'won',
+  'lost',
+] as const;
+
+export type OutreachStatus = typeof OUTREACH_STATUSES[number];
+
+export const OUTREACH_STATUS_LABELS: Record<string, string> = {
+  not_started: 'Not Started',
+  drafted: 'Drafted',
+  sent: 'Sent',
+  replied: 'Replied',
+  meeting_booked: 'Meeting Booked',
+  won: 'Won',
+  lost: 'Lost',
+};
+
+export const OUTREACH_STATUS_COLORS: Record<string, string> = {
+  not_started: '#8c8c8c',
+  drafted: '#1890ff',
+  sent: '#722ed1',
+  replied: '#faad14',
+  meeting_booked: '#13c2c2',
+  won: '#52c41a',
+  lost: '#f5222d',
+};
+
+export const SIGNAL_TYPE_LABELS: Record<string, string> = {
+  funding: 'Funding',
+  hiring_surge: 'Hiring Surge',
+  executive_change: 'Executive Change',
+  champion_job_change: 'Champion Job Change',
+  tech_adoption: 'Tech Adoption',
+  product_launch: 'Product Launch',
+  earnings_report: 'Earnings Report',
+  press_mention: 'Press Mention',
+  partnership: 'Partnership',
+  expansion: 'Expansion',
+  competitor_adoption: 'Competitor Adoption',
+  competitor_churn: 'Competitor Churn',
+  budget_signal: 'Budget Signal',
+  urgency_signal: 'Urgency Signal',
+  custom_signal: 'Custom Signal',
+};
+
+export const SIGNAL_PRIORITY_COLORS: Record<string, string> = {
+  critical: '#f5222d',
+  high: '#fa541c',
+  medium: '#faad14',
+  low: '#8c8c8c',
+};
+
 export const DEFAULT_ICP: ICPDefinition = {
   firmographic_details: {
     industry_types: [],
@@ -365,3 +548,87 @@ export const DEFAULT_ICP: ICPDefinition = {
   budget_signals: { signals: [], condition: 'OR' },
   authority_roles: { target_roles: [] },
 };
+
+// ── Firmographic Filter (ingest pipeline) ──
+
+export interface FirmographicFilter {
+  industry_types: { vertical: string; sub_vertical?: string | null }[];
+  countries: string[];
+  employee_range: { min: number; max: number };
+  revenue_range: { min: number; max: number; currency: string };
+}
+
+export const DEFAULT_FIRMOGRAPHIC_FILTER: FirmographicFilter = {
+  industry_types: [],
+  countries: [],
+  employee_range: { min: 50, max: 5000 },
+  revenue_range: { min: 1000000, max: 500000000, currency: 'USD' },
+};
+
+export interface ScoreBreakdownEntry {
+  score: number;
+  reasoning: string;
+}
+
+export interface ScoredCompany {
+  company_kb_id: string;
+  company_name: string;
+  domain: string | null;
+  industry: string | null;
+  country: string | null;
+  employee_count: number | null;
+  revenue_estimate: number | null;
+  score: number;
+  justification: string;
+  score_breakdown: {
+    industry: ScoreBreakdownEntry;
+    geography: ScoreBreakdownEntry;
+    employees: ScoreBreakdownEntry;
+    revenue: ScoreBreakdownEntry;
+  };
+}
+
+export interface IngestActivityEntry {
+  id: number;
+  type: 'company_start' | 'tool_start' | 'tool_result' | 'agent_reasoning' | 'company_result';
+  timestamp: Date;
+  company_name?: string;
+  tool_name?: string;
+  display_name?: string;
+  context?: string;
+  text?: string;
+  score?: number;
+  justification?: string;
+  result_preview?: string;
+  success?: boolean;
+  company_index?: number;
+  total?: number;
+  fields_found?: string[];
+}
+
+export interface IngestBatchStatus {
+  batch_id: string;
+  name: string | null;
+  filename: string | null;
+  file_type: string;
+  status: string;
+  total_rows: number;
+  processed_rows: number;
+  matched_kb: number;
+  newly_created: number;
+  enriched_count: number;
+  filtered_count: number;
+  errors: { row?: number; error: string }[];
+  has_filter: boolean;
+  evaluation_status: string;
+  filter_config: FirmographicFilter | null;
+  target_tracking_list_id: string | null;
+  created_at: string | null;
+}
+
+export interface IngestBatchLogEntry {
+  event_type: string;
+  event_data: Record<string, unknown>;
+  sequence_number: number;
+  created_at: string | null;
+}

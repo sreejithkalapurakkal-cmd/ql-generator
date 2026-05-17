@@ -1,6 +1,39 @@
 @import "tailwindcss";
 @import "./styles/theme.css";
 
+@theme {
+  --color-brand: #5C2D8F;
+  --color-brand-dark: #4a2272;
+  --color-brand-light: #7B4DB5;
+  --color-brand-pale: #F4EFFE;
+  --color-brand-bg: #f9f5ff;
+  --color-signal-critical: #f5222d;
+  --color-signal-high: #fa541c;
+  --color-signal-medium: #faad14;
+  --color-signal-low: #8c8c8c;
+  --color-status-green: #1E9B6B;
+  --color-status-green-bg: #E6F7F1;
+  --color-status-amber: #E0820A;
+  --color-status-amber-bg: #FEF3E2;
+  --color-status-red: #D93025;
+  --color-status-red-bg: #FDECEA;
+}
+
+@keyframes slide-up {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 body {
   margin: 0;
   min-height: 100vh;

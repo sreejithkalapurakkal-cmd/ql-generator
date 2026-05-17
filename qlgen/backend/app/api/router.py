@@ -9,6 +9,11 @@ from app.api.chat import router as chat_router
 from app.api.tools import router as tools_router
 from app.api.admin import router as admin_router
 from app.api.knowledge_base import router as kb_router
+from app.api.tracking import router as tracking_router
+from app.api.ingest import router as ingest_router
+from app.api.signals import router as signals_router
+from app.api.notifications import router as notifications_router
+from app.api.briefs import router as briefs_router
 
 api_router = APIRouter()
 
@@ -22,3 +27,8 @@ api_router.include_router(chat_router)
 api_router.include_router(tools_router)
 api_router.include_router(admin_router)
 api_router.include_router(kb_router)
+api_router.include_router(tracking_router)
+api_router.include_router(ingest_router)
+api_router.include_router(signals_router)
+api_router.include_router(notifications_router)
+api_router.include_router(briefs_router)

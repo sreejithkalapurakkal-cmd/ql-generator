@@ -25,6 +25,10 @@ function derivePageType(pathname: string): string {
   if (pathname === '/all-leads') return 'AllLeadsPage';
   if (pathname === '/dashboard') return 'DashboardPage';
   if (pathname === '/welcome' || pathname === '/') return 'WelcomePage';
+  if (pathname.startsWith('/tracking/')) return 'TrackingListDetailPage';
+  if (pathname === '/tracking') return 'TrackingListsPage';
+  if (pathname === '/signals') return 'SignalFeedPage';
+  if (pathname === '/ingest') return 'IngestPage';
   return 'Unknown';
 }
 

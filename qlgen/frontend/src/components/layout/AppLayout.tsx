@@ -1,8 +1,9 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Avatar, Dropdown, type MenuProps } from 'antd';
-import { UserOutlined, LogoutOutlined, TeamOutlined } from '@ant-design/icons';
+import { UserOutlined, LogoutOutlined, TeamOutlined, SettingOutlined } from '@ant-design/icons';
 import { useAuth } from '../../context/AuthContext';
+import NotificationBell from '../NotificationBell';
 
 
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -11,23 +12,27 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
 
   const menuItems = [
-    { key: '/welcome', icon: '✦', label: 'Home' },
     { key: '/dashboard', icon: '▦', label: 'Dashboard' },
     { key: '/all-leads', icon: '◉', label: 'All Leads' },
+    { key: '/tracking', icon: '◎', label: 'Tracking' },
     { key: '/icp', icon: '◈', label: 'Saved ICPs' },
   ];
 
-  // Add admin-only links for super_admin
-  if (user?.role === 'super_admin') {
-    menuItems.push({ key: '/tools', icon: '⚙', label: 'Tools' });
-    menuItems.push({ key: '/admin/users', icon: '👥', label: 'Users' });
-  }
-
   // Don't highlight "Saved Searches" when on ICP form pages (new or edit)
   const isICPFormPage = location.pathname === '/icp/new' || location.pathname.match(/^\/icp\/[^/]+\/edit$/);
+
+  // Map child routes to their parent nav item
+  const getParentNavKey = (pathname: string): string | null => {
+    if (pathname.startsWith('/ingest')) return '/tracking';
+    if (pathname.startsWith('/signals')) return '/tracking';
+    return null;
+  };
+
   const selectedKey = isICPFormPage
     ? null
-    : menuItems.find((item) => location.pathname.startsWith(item.key))?.key || '/dashboard';
+    : getParentNavKey(location.pathname)
+      || menuItems.find((item) => location.pathname.startsWith(item.key))?.key
+      || '/dashboard';
 
   const handleLogout = async () => {
     await logout();
@@ -51,6 +56,12 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { type: 'divider' },
     ...(user?.role === 'super_admin'
       ? [
+        {
+          key: 'tools',
+          icon: <SettingOutlined />,
+          label: 'Tools',
+          onClick: () => navigate('/tools'),
+        },
         {
           key: 'users',
           icon: <TeamOutlined />,
@@ -92,6 +103,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </div>
 
           <div className="gnav-right" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <NotificationBell />
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {user?.picture_url ? (

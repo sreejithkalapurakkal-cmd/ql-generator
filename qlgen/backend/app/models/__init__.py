@@ -11,6 +11,17 @@ from app.models.tool_registry import ToolRegistry
 from app.models.audit_log import AuditLog
 from app.models.discovery_intelligence import DiscoveryQuery, ToolEffectiveness
 from app.models.company_knowledge_base import CompanyKnowledgeBase
+from app.models.tracking_list import TrackingList
+from app.models.tracking_list_membership import TrackingListMembership
+from app.models.signal_event import SignalEvent
+from app.models.ingest_batch import IngestBatch
+from app.models.ingest_batch_log import IngestBatchLog
+from app.models.notification import Notification
+from app.models.tag import Tag
+from app.models.signal_detection_run import SignalDetectionRun
+from app.models.signal_detection_log import SignalDetectionLog
+from app.models.enrichment_run import EnrichmentRun
+from app.models.enrichment_log import EnrichmentLog
 
 __all__ = [
     "User",
@@ -20,4 +31,8 @@ __all__ = [
     "AuditLog",
     "DiscoveryQuery", "ToolEffectiveness",
     "CompanyKnowledgeBase",
+    "TrackingList", "TrackingListMembership",
+    "SignalEvent", "IngestBatch", "IngestBatchLog", "Notification", "Tag",
+    "SignalDetectionRun", "SignalDetectionLog",
+    "EnrichmentRun", "EnrichmentLog",
 ]

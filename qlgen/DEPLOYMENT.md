@@ -509,25 +509,29 @@ There's no built-in rollback for S3. Options:
 
 ## Current Deployment State
 
-Last updated: 2026-03-23
+Last updated: 2026-05-15
 
 | Item | Value |
 |------|-------|
-| ECS Task Definition | `qlgen-backend:4` |
+| ECS Task Definition | `qlgen-backend:11` |
 | ECS Desired Count | 2 |
-| Alembic Revision (HEAD) | `k1l2m3n4o5p6` (add tool priority and auto-disable) |
+| Alembic Revision (HEAD) | `q7r8s9t0u1v2` (add dismissed_at, signal_detection_logs, enrichment_runs, enrichment_logs) |
 | Docker Base Image | `python:3.11-slim` |
 | Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Git Branch Deployed | `development` |
+| Git Branch Deployed | `signalreasearch` |
 
-### Database Tables (16 migrations applied)
+### Database Tables (22 migrations applied)
 
 ```
 alembic_version          companies                 company_knowledge_base
 company_stage_results    contacts                  chat_messages
-chat_sessions            discovery_queries         icp_configs
-pipeline_logs            pipeline_runs             tool_effectiveness
-tool_registry            users                     audit_logs
+chat_sessions            discovery_queries         enrichment_logs
+enrichment_runs          icp_configs               ingest_batches
+ingest_batch_logs        notifications             pipeline_logs
+pipeline_runs            signal_detection_logs     signal_detection_runs
+signal_events            tags                      tool_effectiveness
+tool_registry            tracking_lists            tracking_list_memberships
+users                    audit_logs
 ```
 
 `bant_scores` was dropped by migration `a1b2c3d4e5f6` (replaced by `company_stage_results`).
@@ -550,12 +554,44 @@ g7h8i9j0k1l2  Add discovery_queries + tool_effectiveness tables
 h8i9j0k1l2m3  Add recency/hotness columns to companies
 i9j0k1l2m3n4  Add company_knowledge_base table
 j0k1l2m3n4o5  Add carried_forward column to companies
-k1l2m3n4o5p6  Add tool priority and auto-disable (HEAD)
+k1l2m3n4o5p6  Add tool priority and auto-disable
+l2m3n4o5p6q7  Add signal tracking tables (tracking_lists, memberships, signal_events, ingest_batches, notifications, tags)
+m3n4o5p6q7r8  Add signal_hints and enrichment_status columns
+n4o5p6q7r8s9  Add signal_detection_runs table
+o5p6q7r8s9t0  Add evidence_date to signal_events
+p6q7r8s9t0u1  Add ingest_batch_logs table
+q7r8s9t0u1v2  Add dismissed_at, signal_detection_logs, enrichment_runs, enrichment_logs (HEAD)
 ```
 
 ---
 
 ## Deployment History
+
+### 2026-05-15 — Enrichment tables and dismissed_at column
+
+**Changes deployed**: New enrichment pipeline tables (enrichment_runs, enrichment_logs), signal detection logs table, dismissed_at column on ingest_batches. Backend services for enrichment runner, enrichment service, signal research agent updates. Frontend updates across multiple pages.
+
+**Migrations applied** (1 new, from `p6q7r8s9t0u1` to `q7r8s9t0u1v2`):
+- `q7r8s9t0u1v2` — dismissed_at column on ingest_batches, signal_detection_logs table, enrichment_runs table, enrichment_logs table
+
+**Task definition**: No changes (stayed at revision 11). No new env vars needed.
+
+**Issues encountered**: None. DB was already at HEAD (migration previously applied). Clean rollout.
+
+### 2026-05-14 — Signal Research & Tracking feature deployment
+
+**Changes deployed**: Signal research & tracking feature — tracking lists, company ingestion pipeline, signal detection & monitoring, notifications, account briefs, and signal feed. 6 new frontend pages (TrackingLists, TrackingListDetail, TrackedCompanyDetail, Ingest, IngestEvaluation, SignalFeed). 5 new backend API routers (tracking, ingest, signals, notifications, briefs). Signal research agent.
+
+**Migrations applied** (5 new, from `k1l2m3n4o5p6` to `p6q7r8s9t0u1`):
+- `l2m3n4o5p6q7` — tracking_lists, tracking_list_memberships, signal_events, ingest_batches, notifications, tags tables
+- `m3n4o5p6q7r8` — signal_hints column on tracking_lists, enrichment_status column on memberships
+- `n4o5p6q7r8s9` — signal_detection_runs table
+- `o5p6q7r8s9t0` — evidence_date column on signal_events (with backfill)
+- `p6q7r8s9t0u1` — ingest_batch_logs table
+
+**Task definition**: No changes (stayed at revision 10). No new env vars needed.
+
+**Deployment notes**: Image was already in ECR from a prior build. Migrations were already applied to the database from a previous container startup. Force new deployment confirmed all code running correctly. Frontend built clean (no TypeScript errors).
 
 ### 2026-03-23 — Full stack redeployment
 

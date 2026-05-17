@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Card, Table, Tag, Input, Select, Typography, Space } from 'antd';
+import { Card, Table, Tag, Input, Select, Typography, Space, Button } from 'antd';
 import { SearchOutlined, FilterOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getAllCompanies, getAllCompanyFilters, AllCompaniesParams } from '../api/leadsApi';
 import { Company } from '../types';
 import { usePageContext } from '../context/PageContextProvider';
+import AddToTrackingListModal from '../components/AddToTrackingListModal';
 
 const { Text } = Typography;
 
@@ -49,6 +50,8 @@ const AllLeadsPage: React.FC = () => {
   const [countryFilter, setCountryFilter] = useState<string | undefined>(undefined);
   const [availableIndustries, setAvailableIndustries] = useState<string[]>([]);
   const [availableCountries, setAvailableCountries] = useState<string[]>([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [trackingModalOpen, setTrackingModalOpen] = useState(false);
 
   // Load filter options once on mount
   useEffect(() => {
@@ -265,6 +268,16 @@ const AllLeadsPage: React.FC = () => {
               style={{ width: 260 }}
               allowClear
             />
+            {selectedRowKeys.length > 0 && (
+              <Button
+                type="primary"
+                ghost
+                onClick={() => setTrackingModalOpen(true)}
+                style={{ borderRadius: 8 }}
+              >
+                Add {selectedRowKeys.length} to Tracking List
+              </Button>
+            )}
             <Select value={sortBy} onChange={setSortBy} style={{ width: 180 }}>
               <Select.Option value="final_score">Sort by Final Score</Select.Option>
               <Select.Option value="budget_signal_score">Sort by Budget Score</Select.Option>
@@ -280,6 +293,10 @@ const AllLeadsPage: React.FC = () => {
           dataSource={companies}
           rowKey="id"
           loading={loading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+          }}
           pagination={{
             current: page,
             pageSize: pageSize,
@@ -301,6 +318,12 @@ const AllLeadsPage: React.FC = () => {
             style: { cursor: 'pointer' },
           })}
           size="small"
+        />
+        <AddToTrackingListModal
+          open={trackingModalOpen}
+          onClose={() => { setTrackingModalOpen(false); setSelectedRowKeys([]); }}
+          companyIds={selectedRowKeys.map(String)}
+          source="pipeline"
         />
       </Card>
     </div>
