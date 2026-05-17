@@ -2,10 +2,11 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Button, Spin, Tooltip, Progress, message } from 'antd';
 import {
   ThunderboltOutlined, EyeInvisibleOutlined, ReloadOutlined,
+  StarOutlined, StarFilled, ClockCircleOutlined as ClockIcon,
 } from '@ant-design/icons';
 import { Badge, EmptyState, SectionLabel, SourceBadge } from './ui';
 import {
-  getCompanySignals, dismissSignal,
+  getCompanySignals, dismissSignal, saveSignal, unsaveSignal, snoozeSignal,
   startDetectSignals, getSignalDetectionStreamUrl,
 } from '../api/signalApi';
 import {
@@ -114,6 +115,24 @@ const SignalTimeline: React.FC<SignalTimelineProps> = ({
       setSignals((prev) => prev.filter((s) => s.id !== signalId));
     } catch {
       message.error('Failed to dismiss');
+    }
+  };
+
+  const handleSave = async (signalId: string) => {
+    try {
+      await saveSignal(signalId);
+      setSignals((prev) => prev.map((s) => s.id === signalId ? { ...s, is_saved: true } : s));
+    } catch {
+      message.error('Failed to save');
+    }
+  };
+
+  const handleUnsave = async (signalId: string) => {
+    try {
+      await unsaveSignal(signalId);
+      setSignals((prev) => prev.map((s) => s.id === signalId ? { ...s, is_saved: false } : s));
+    } catch {
+      message.error('Failed to unsave');
     }
   };
 
@@ -270,15 +289,27 @@ const SignalTimeline: React.FC<SignalTimelineProps> = ({
                           </div>
                         </div>
 
-                        {/* Dismiss */}
-                        <Tooltip title="Dismiss">
-                          <button
-                            onClick={() => handleDismiss(signal.id)}
-                            className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-all shrink-0"
-                          >
-                            <EyeInvisibleOutlined />
-                          </button>
-                        </Tooltip>
+                        {/* Save/Unsave + Dismiss */}
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                          <Tooltip title={signal.is_saved ? 'Unsave' : 'Save'}>
+                            <button
+                              onClick={() => signal.is_saved ? handleUnsave(signal.id) : handleSave(signal.id)}
+                              className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
+                                signal.is_saved ? 'text-amber-400' : 'text-gray-300 hover:text-gray-500 hover:bg-gray-100'
+                              }`}
+                            >
+                              {signal.is_saved ? <StarFilled /> : <StarOutlined />}
+                            </button>
+                          </Tooltip>
+                          <Tooltip title="Dismiss">
+                            <button
+                              onClick={() => handleDismiss(signal.id)}
+                              className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-all"
+                            >
+                              <EyeInvisibleOutlined />
+                            </button>
+                          </Tooltip>
+                        </div>
                       </div>
                     </div>
                   </div>

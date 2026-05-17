@@ -3,25 +3,29 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Button, Select, Spin, message, Tooltip, Input } from 'antd';
 import {
   ArrowLeftOutlined, ReloadOutlined, GlobalOutlined, LinkedinOutlined,
-  SearchOutlined,
+  SearchOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import { PillTabs, Badge, KpiStrip, SectionLabel, SourceBadge } from '../components/ui';
 import {
   getListMembers, updateMember,
 } from '../api/trackingApi';
-import { researchCompany } from '../api/briefApi';
+import { researchCompany, getLatestBrief, generateStructuredBrief, getCompanyDrafts, generateDraft, updateDraft, getBriefExportUrl, getSignalReportExportUrl } from '../api/briefApi';
+import { API_BASE } from '../api/client';
 import SignalTimeline from '../components/SignalTimeline';
 import CompanyBriefModal from '../components/CompanyBriefModal';
 import OutreachDraftModal from '../components/OutreachDraftModal';
 import ContactsPanel from '../components/ContactsPanel';
+import { useDraftDrawer } from '../context/DraftDrawerContext';
+import ActivityFeed from '../components/ActivityFeed';
 import {
   TrackingListMember,
   OUTREACH_STATUSES, OUTREACH_STATUS_LABELS, OUTREACH_STATUS_COLORS,
   SIGNAL_PRIORITY_COLORS, SIGNAL_TYPE_LABELS,
+  BriefRevision, BriefSection, OutreachDraft, BRIEF_SECTION_ICONS,
 } from '../types';
 import { getSignalFreshness, FRESHNESS_DESCRIPTIONS } from '../utils/signalFreshness';
 
-type TabKey = 'overview' | 'signals' | 'contacts' | 'notes';
+type TabKey = 'overview' | 'signals' | 'brief' | 'drafts' | 'contacts' | 'notes';
 
 const getHeatColor = (score: number) => {
   if (score >= 75) return '#f5222d';
@@ -34,6 +38,7 @@ const TrackedCompanyDetailPage: React.FC = () => {
   const { listId, membershipId } = useParams<{ listId: string; membershipId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { openDraftDrawer } = useDraftDrawer();
 
   const [member, setMember] = useState<TrackingListMember | null>(
     (location.state as { member?: TrackingListMember })?.member || null,
@@ -43,6 +48,11 @@ const TrackedCompanyDetailPage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [researching, setResearching] = useState(false);
+  const [brief, setBrief] = useState<BriefRevision | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefGenerating, setBriefGenerating] = useState(false);
+  const [drafts, setDrafts] = useState<OutreachDraft[]>([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
 
   const handleResearch = async () => {
     if (!member) return;
@@ -95,6 +105,51 @@ const TrackedCompanyDetailPage: React.FC = () => {
     if (!member) fetchMember();
     else setNotes(member.notes || '');
   }, [member, fetchMember]);
+
+  // Fetch brief when tab switches
+  useEffect(() => {
+    if (activeTab !== 'brief' || !member) return;
+    setBriefLoading(true);
+    getLatestBrief(member.company_kb_id)
+      .then(res => setBrief(res.data.brief || null))
+      .catch(() => {})
+      .finally(() => setBriefLoading(false));
+  }, [activeTab, member]);
+
+  // Fetch drafts when tab switches
+  useEffect(() => {
+    if (activeTab !== 'drafts' || !member) return;
+    setDraftsLoading(true);
+    getCompanyDrafts(member.company_kb_id)
+      .then(res => setDrafts(res.data.drafts || []))
+      .catch(() => {})
+      .finally(() => setDraftsLoading(false));
+  }, [activeTab, member]);
+
+  const handleGenerateBrief = async () => {
+    if (!member || briefGenerating) return;
+    setBriefGenerating(true);
+    try {
+      const res = await generateStructuredBrief(member.company_kb_id);
+      if (res.data.brief) {
+        setBrief(res.data.brief);
+        message.success('Brief generated');
+      }
+    } catch {
+      message.error('Failed to generate brief');
+    } finally {
+      setBriefGenerating(false);
+    }
+  };
+
+  const handleDraftStatusChange = async (draftId: string, newStatus: string) => {
+    try {
+      await updateDraft(draftId, { status: newStatus });
+      setDrafts(prev => prev.map(d => d.id === draftId ? { ...d, status: newStatus as OutreachDraft['status'] } : d));
+    } catch {
+      message.error('Failed to update draft');
+    }
+  };
 
   const handleStatusChange = async (newStatus: string) => {
     if (!listId || !membershipId || !member) return;
@@ -220,10 +275,34 @@ const TrackedCompanyDetailPage: React.FC = () => {
                 </a>
               </Tooltip>
             )}
+            <Tooltip title="Full Research Brief">
+              <Button
+                icon={<SearchOutlined />}
+                onClick={() => navigate(`/tracking/${listId}/company/${membershipId}/brief`)}
+                className="!rounded-md"
+              >
+                Brief
+              </Button>
+            </Tooltip>
             <CompanyBriefModal
               companyKbId={member.company_kb_id}
               companyName={member.company_name || undefined}
             />
+            <Tooltip title="Open Draft Drawer">
+              <Button
+                icon={<FileTextOutlined />}
+                onClick={() => openDraftDrawer({
+                  companyKbId: member.company_kb_id,
+                  companyName: member.company_name || undefined,
+                  domain: member.domain || undefined,
+                  contactName: member.best_known_contacts?.[0]?.full_name || undefined,
+                  contactTitle: member.best_known_contacts?.[0]?.designation || undefined,
+                })}
+                className="!rounded-md"
+              >
+                Draft
+              </Button>
+            </Tooltip>
             <OutreachDraftModal
               companyKbId={member.company_kb_id}
               companyName={member.company_name || undefined}
@@ -246,6 +325,8 @@ const TrackedCompanyDetailPage: React.FC = () => {
         tabs={[
           { key: 'overview', label: 'Overview' },
           { key: 'signals', label: 'Signals' },
+          { key: 'brief', label: 'Research brief' },
+          { key: 'drafts', label: 'Drafts' },
           { key: 'contacts', label: 'Contacts' },
           { key: 'notes', label: 'Notes & History' },
         ]}
@@ -398,6 +479,199 @@ const TrackedCompanyDetailPage: React.FC = () => {
         </div>
       )}
 
+      {/* Research Brief Tab */}
+      {activeTab === 'brief' && (
+        <div>
+          {briefLoading ? (
+            <div className="flex justify-center py-16"><Spin /></div>
+          ) : brief ? (
+            <div className="space-y-4">
+              {/* Brief header */}
+              <div className="bg-white border border-purple-200 rounded-lg overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100 bg-purple-50 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileTextOutlined className="text-purple-600" />
+                    <span className="text-sm font-semibold text-purple-800">
+                      {member.company_name} — Research Brief
+                    </span>
+                    <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-mono">
+                      v{brief.version}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleGenerateBrief}
+                      disabled={briefGenerating}
+                      className="flex items-center gap-1 h-7 px-2.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-md hover:border-gray-300 bg-white transition-colors disabled:opacity-50"
+                    >
+                      <ReloadOutlined className={briefGenerating ? 'animate-spin' : ''} />
+                      {briefGenerating ? 'Regenerating...' : 'Regenerate'}
+                    </button>
+                    <Tooltip title="Export brief as printable HTML (save as PDF from browser)">
+                      <a
+                        href={`${API_BASE}${getBriefExportUrl(member.company_kb_id)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 h-7 px-2.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-md hover:border-gray-300 bg-white transition-colors no-underline"
+                      >
+                        Export PDF
+                      </a>
+                    </Tooltip>
+                    <Tooltip title="Download signal report as XLSX">
+                      <a
+                        href={`${API_BASE}${getSignalReportExportUrl(member.company_kb_id)}`}
+                        className="flex items-center gap-1 h-7 px-2.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-md hover:border-gray-300 bg-white transition-colors no-underline"
+                      >
+                        Signal Report
+                      </a>
+                    </Tooltip>
+                    <Button
+                      size="small"
+                      onClick={() => navigate(`/tracking/${listId}/company/${membershipId}/brief`)}
+                      className="!rounded-md"
+                    >
+                      Open full brief
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Brief sections preview */}
+                <div className="px-5 py-4 space-y-4">
+                  {brief.sections.slice(0, 5).map((section: BriefSection) => (
+                    <div key={section.id}>
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+                        {BRIEF_SECTION_ICONS[section.id] || '•'} {section.heading}
+                      </p>
+                      {section.insufficient ? (
+                        <p className="text-xs text-gray-300 italic">Insufficient data</p>
+                      ) : (
+                        <p className="text-sm text-gray-700 leading-relaxed line-clamp-3">
+                          {section.body.replace(/\[\d+\]/g, '')}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  {brief.sections.length > 5 && (
+                    <p className="text-xs text-gray-400">
+                      +{brief.sections.length - 5} more sections —{' '}
+                      <button
+                        onClick={() => navigate(`/tracking/${listId}/company/${membershipId}/brief`)}
+                        className="text-purple-600 hover:text-purple-700 underline underline-offset-2"
+                      >
+                        View full brief
+                      </button>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Brief meta */}
+              <div className="flex items-center justify-between text-xs text-gray-400">
+                <span>
+                  ✦ Generated{' '}
+                  {brief.created_at ? new Date(brief.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                  {brief.trigger_signal_headline && ` · Triggered by: ${brief.trigger_signal_headline}`}
+                </span>
+                <span>{brief.word_count?.toLocaleString() || 0} words · {brief.sections.length} sections</span>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white border border-gray-200 rounded-lg">
+              <div className="flex flex-col items-center py-14 px-8 gap-5">
+                <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center">
+                  <FileTextOutlined className="text-xl text-purple-500" />
+                </div>
+                <div className="text-center max-w-sm">
+                  <p className="text-sm font-semibold text-gray-800 mb-1.5">No research brief yet</p>
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    Generate a brief to get a structured view of this account — signals, org structure,
+                    competitive context, and a recommended outreach angle.
+                  </p>
+                </div>
+                <Button
+                  type="primary"
+                  onClick={handleGenerateBrief}
+                  loading={briefGenerating}
+                  className="!rounded-md"
+                >
+                  ✦ Generate brief
+                </Button>
+                <p className="text-[11px] text-gray-300">
+                  Briefs are also auto-generated when high-confidence signals fire.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Drafts Tab */}
+      {activeTab === 'drafts' && (
+        <div>
+          {draftsLoading ? (
+            <div className="flex justify-center py-16"><Spin /></div>
+          ) : drafts.length > 0 ? (
+            <div className="space-y-3">
+              {drafts.map(d => (
+                <div key={d.id} className="bg-white border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      {d.format === 'email' ? (
+                        <span className="text-purple-500">✉</span>
+                      ) : (
+                        <span className="text-blue-500">in</span>
+                      )}
+                      <span className="text-sm font-semibold text-gray-800">
+                        {d.subject || `${d.format === 'email' ? 'Email' : 'LinkedIn'} to ${d.contact_name || 'contact'}`}
+                      </span>
+                    </div>
+                    <Badge
+                      variant="status"
+                      status={d.status === 'in_progress' ? 'drafted' : d.status === 'sent' ? 'sent' : 'lost'}
+                    >
+                      {d.status === 'in_progress' ? 'In progress' : d.status === 'sent' ? 'Sent' : 'Discarded'}
+                    </Badge>
+                  </div>
+                  {d.contact_name && (
+                    <p className="text-xs text-gray-500 mb-2">To: {d.contact_name}{d.contact_title ? ` · ${d.contact_title}` : ''}</p>
+                  )}
+                  <p className="text-xs bg-gray-50 border border-gray-100 rounded px-2.5 py-1.5 text-gray-500 line-clamp-2">
+                    {d.body.slice(0, 200)}
+                  </p>
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-gray-400">
+                      {d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                    </p>
+                    {d.status === 'in_progress' && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleDraftStatusChange(d.id, 'sent')}
+                          className="text-xs text-emerald-600 hover:text-emerald-700 underline underline-offset-2"
+                        >
+                          Mark sent
+                        </button>
+                        <button
+                          onClick={() => handleDraftStatusChange(d.id, 'discarded')}
+                          className="text-xs text-gray-400 hover:text-red-500 underline underline-offset-2"
+                        >
+                          Discard
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white border border-gray-200 rounded-lg py-16 text-center">
+              <span className="text-3xl opacity-30 block mb-3">✉</span>
+              <p className="text-sm text-gray-400">No drafts for this account yet.</p>
+              <p className="text-xs text-gray-300 mt-1">Generate a draft from a signal or from the outreach button above.</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Contacts Tab */}
       {activeTab === 'contacts' && (
         <div className="bg-white border border-gray-200 rounded-lg p-6">
@@ -411,7 +685,7 @@ const TrackedCompanyDetailPage: React.FC = () => {
       )}
 
       {/* Notes & History Tab */}
-      {activeTab === 'notes' && (
+      {activeTab === 'notes' && (<>
         <div className="grid grid-cols-2 gap-5">
           {/* Notes */}
           <div className="bg-white border border-gray-200 rounded-lg p-5">
@@ -485,7 +759,12 @@ const TrackedCompanyDetailPage: React.FC = () => {
             )}
           </div>
         </div>
-      )}
+
+        {/* Activity Timeline */}
+        <div className="mt-5 bg-white border border-gray-200 rounded-lg p-5">
+          <ActivityFeed companyKbId={member.company_kb_id} maxItems={30} />
+        </div>
+      </>)}
     </div>
   );
 };

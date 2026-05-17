@@ -20,9 +20,13 @@ import TrackedCompanyDetailPage from './pages/TrackedCompanyDetailPage';
 import IngestPage from './pages/IngestPage';
 import IngestEvaluationPage from './pages/IngestEvaluationPage';
 import SignalFeedPage from './pages/SignalFeedPage';
+import ResearchBriefPage from './pages/ResearchBriefPage';
+import CustomSignalRulesPage from './pages/CustomSignalRulesPage';
 import { AuthProvider } from './context/AuthContext';
 import { PageContextProvider } from './context/PageContextProvider';
+import { DraftDrawerProvider } from './context/DraftDrawerContext';
 import CoPilotPanel from './components/CoPilotPanel';
+import DraftDrawer from './components/DraftDrawer';
 
 function App() {
   return (
@@ -54,6 +58,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PageContextProvider>
+                    <DraftDrawerProvider>
                     <AppLayout>
                       <Routes>
                         <Route path="/dashboard" element={<DashboardPage />} />
@@ -65,9 +70,12 @@ function App() {
                         <Route path="/tracking" element={<TrackingListsPage />} />
                         <Route path="/tracking/:listId" element={<TrackingListDetailPage />} />
                         <Route path="/tracking/:listId/company/:membershipId" element={<TrackedCompanyDetailPage />} />
+                        <Route path="/tracking/:listId/company/:membershipId/brief" element={<ResearchBriefPage />} />
+                        <Route path="/accounts/:id/brief" element={<ResearchBriefPage />} />
                         <Route path="/ingest" element={<IngestPage />} />
                         <Route path="/ingest/:batchId" element={<IngestEvaluationPage />} />
                         <Route path="/signals" element={<SignalFeedPage />} />
+                        <Route path="/signals/rules" element={<CustomSignalRulesPage />} />
                         <Route path="/leads/:runId" element={<LeadsPage />} />
                         <Route path="/leads/:runId/company/:companyId" element={<CompanyDetailPage />} />
                         <Route
@@ -89,6 +97,8 @@ function App() {
                       </Routes>
                     </AppLayout>
                     <CoPilotPanel />
+                    <DraftDrawer />
+                    </DraftDrawerProvider>
                   </PageContextProvider>
                 </ProtectedRoute>
               }

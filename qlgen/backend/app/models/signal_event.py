@@ -50,6 +50,11 @@ class SignalEvent(Base):
     # Lifecycle
     is_archived = Column(Boolean, default=False)
     is_dismissed = Column(Boolean, default=False)
+    is_saved = Column(Boolean, default=False)
+    is_snoozed = Column(Boolean, default=False)
+    snoozed_until = Column(DateTime(timezone=True))
+    saved_at = Column(DateTime(timezone=True))
+    snoozed_at = Column(DateTime(timezone=True))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -59,4 +64,6 @@ class SignalEvent(Base):
         Index("ix_signal_priority", "priority"),
         Index("ix_signal_expires", "expires_at"),
         Index("ix_signal_archived", "is_archived"),
+        Index("ix_signal_saved", "is_saved"),
+        Index("ix_signal_snoozed", "is_snoozed", "snoozed_until"),
     )

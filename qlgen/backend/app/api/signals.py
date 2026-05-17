@@ -21,7 +21,11 @@ from app.services.signal_service import (
     recompute_signal_heat_for_company,
     get_signals_for_company,
     get_signal_feed,
+    get_dashboard_signal_stats,
     dismiss_signal,
+    save_signal,
+    unsave_signal,
+    snooze_signal,
     archive_expired_signals,
     DEFAULT_SIGNAL_TYPES,
 )
@@ -231,16 +235,18 @@ async def get_company_signals(
 async def signal_feed(
     signal_type: Optional[str] = Query(None),
     priority: Optional[str] = Query(None),
+    tab: Optional[str] = Query(None, description="Feed tab: all, today, week, saved"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Get unified signal feed across all tracking lists for the current user."""
-    feed, total = await get_signal_feed(
+    feed, total, snoozed_returned = await get_signal_feed(
         db, user.id,
         signal_type=signal_type,
         priority=priority,
+        tab=tab,
         limit=limit,
         offset=offset,
     )
@@ -250,6 +256,7 @@ async def signal_feed(
         "total": total,
         "offset": offset,
         "limit": limit,
+        "snoozed_returned_count": snoozed_returned,
     }
 
 
@@ -271,6 +278,67 @@ async def dismiss(
     return {"status": "dismissed"}
 
 
+@router.post("/{signal_id}/save")
+async def save(
+    signal_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save/bookmark a signal."""
+    success = await save_signal(db, signal_id)
+    if not success:
+        raise HTTPException(404, "Signal not found")
+    await db.commit()
+    return {"status": "saved"}
+
+
+@router.delete("/{signal_id}/save")
+async def unsave(
+    signal_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Remove save/bookmark from a signal."""
+    success = await unsave_signal(db, signal_id)
+    if not success:
+        raise HTTPException(404, "Signal not found")
+    await db.commit()
+    return {"status": "unsaved"}
+
+
+class SnoozeRequest(BaseModel):
+    duration_hours: int = 24
+
+
+@router.post("/{signal_id}/snooze")
+async def snooze(
+    signal_id: UUID,
+    request: SnoozeRequest = SnoozeRequest(),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Snooze a signal for a given duration. It will reappear after the period."""
+    success = await snooze_signal(db, signal_id, request.duration_hours)
+    if not success:
+        raise HTTPException(404, "Signal not found")
+    await db.commit()
+    return {"status": "snoozed", "duration_hours": request.duration_hours}
+
+
+# ──────────────────────────────────────────────────────────────────
+# Dashboard stats
+# ──────────────────────────────────────────────────────────────────
+
+@router.get("/dashboard-stats")
+async def dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get signal stats for the dashboard."""
+    stats = await get_dashboard_signal_stats(db, user.id)
+    return stats
+
+
 @router.post("/archive-expired")
 async def archive_expired(
     db: AsyncSession = Depends(get_db),
@@ -280,3 +348,49 @@ async def archive_expired(
     count = await archive_expired_signals(db)
     await db.commit()
     return {"archived": count}
+
+
+# ──────────────────────────────────────────────────────────────────
+# Scheduled monitoring
+# ──────────────────────────────────────────────────────────────────
+
+@router.post("/monitoring/check")
+async def check_monitoring(
+    dry_run: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Check all tracking lists for overdue monitoring and trigger signal detection.
+
+    Can be called by cron or manually. Use dry_run=true to preview.
+    """
+    from app.services.monitoring_scheduler import check_and_trigger_monitoring
+    result = await check_and_trigger_monitoring(db, dry_run=dry_run)
+    return result
+
+
+class MonitoringConfigRequest(BaseModel):
+    enabled: bool
+    frequency_days: int = 7
+    signal_types: Optional[list[str]] = None
+    alert_threshold: str = "high"
+
+
+@router.put("/monitoring/{tracking_list_id}")
+async def configure_monitoring(
+    tracking_list_id: UUID,
+    request: MonitoringConfigRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Configure scheduled monitoring for a tracking list."""
+    from app.services.monitoring_scheduler import configure_monitoring as config_mon
+    result = await config_mon(
+        db, tracking_list_id,
+        enabled=request.enabled,
+        frequency_days=request.frequency_days,
+        signal_types=request.signal_types,
+        alert_threshold=request.alert_threshold,
+    )
+    await db.commit()
+    return result

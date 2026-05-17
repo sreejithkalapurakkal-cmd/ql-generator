@@ -25,6 +25,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const getParentNavKey = (pathname: string): string | null => {
     if (pathname.startsWith('/ingest')) return '/tracking';
     if (pathname.startsWith('/signals')) return '/tracking';
+    if (pathname.startsWith('/accounts/')) return '/tracking';
     return null;
   };
 

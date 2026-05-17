@@ -29,7 +29,17 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api/v1")
 
+# Observability middleware (request timing, request_id, structured logging)
+from app.middleware.observability import ObservabilityMiddleware, get_metrics
+app.add_middleware(ObservabilityMiddleware)
+
 
 @app.get("/")
 async def root():
     return {"message": "qlGen API is running", "docs": "/docs"}
+
+
+@app.get("/health/metrics")
+async def health_metrics():
+    """Operational metrics: uptime, request count, latency, top endpoints."""
+    return get_metrics()

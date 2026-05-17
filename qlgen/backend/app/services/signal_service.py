@@ -298,6 +298,14 @@ async def detect_signals_for_company(
     if new_signals:
         await db.flush()
 
+        # Run correlation engine on the company's signals
+        try:
+            from app.services.signal_correlation_engine import correlate_signals_for_company
+            company_name = _clean_company_name(raw_name, domain)
+            await correlate_signals_for_company(db, company_kb_id, company_name)
+        except Exception as e:
+            logger.warning(f"Signal correlation failed for {company_kb_id}: {e}")
+
     return new_signals
 
 
@@ -1124,18 +1132,9 @@ async def get_signals_for_company(
     return list(result.scalars().all())
 
 
-async def get_signal_feed(
-    db: AsyncSession,
-    user_id: UUID,
-    signal_type: str | None = None,
-    priority: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> tuple[list[dict], int]:
-    """Get unified signal feed across all of a user's tracking lists."""
+async def _get_user_tracked_kb_ids(db: AsyncSession, user_id: UUID) -> list[UUID]:
+    """Get all company KB IDs from user's active tracking lists."""
     from app.models.tracking_list import TrackingList
-
-    # Get user's tracked company KB IDs
     list_result = await db.execute(
         select(TrackingList.id).where(
             TrackingList.user_id == user_id,
@@ -1144,35 +1143,69 @@ async def get_signal_feed(
     )
     list_ids = [row[0] for row in list_result.all()]
     if not list_ids:
-        return [], 0
-
+        return []
     membership_result = await db.execute(
         select(TrackingListMembership.company_kb_id).where(
             TrackingListMembership.tracking_list_id.in_(list_ids)
         ).distinct()
     )
-    kb_ids = [row[0] for row in membership_result.all()]
-    if not kb_ids:
-        return [], 0
+    return [row[0] for row in membership_result.all()]
 
-    # Query signals
+
+async def get_signal_feed(
+    db: AsyncSession,
+    user_id: UUID,
+    signal_type: str | None = None,
+    priority: str | None = None,
+    tab: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int, int]:
+    """Get unified signal feed across all of a user's tracking lists.
+
+    Args:
+        tab: Feed tab filter — "all" (default), "today", "week", "saved"
+
+    Returns:
+        (feed_items, total_count, snoozed_returned_count)
+    """
+    kb_ids = await _get_user_tracked_kb_ids(db, user_id)
+    if not kb_ids:
+        return [], 0, 0
+
+    # First, unsnooze any returned signals
+    returned = await unsnooze_returned_signals(db)
+    snoozed_returned = await get_snoozed_returned_count(db, kb_ids) + returned
+
+    # Base filters
     from sqlalchemy import func
-    count_query = (
-        select(func.count(SignalEvent.id))
-        .where(
-            SignalEvent.company_kb_id.in_(kb_ids),
-            SignalEvent.is_archived == False,
-            SignalEvent.is_dismissed == False,
+    base_filters = [
+        SignalEvent.company_kb_id.in_(kb_ids),
+        SignalEvent.is_archived == False,
+        SignalEvent.is_dismissed == False,
+        SignalEvent.is_snoozed == False,
+    ]
+
+    # Tab-specific filters
+    now = datetime.now(timezone.utc)
+    if tab == "today":
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        base_filters.append(
+            func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at) >= start_of_day
         )
-    )
+    elif tab == "week":
+        start_of_week = now - timedelta(days=7)
+        base_filters.append(
+            func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at) >= start_of_week
+        )
+    elif tab == "saved":
+        base_filters.append(SignalEvent.is_saved == True)
+
+    count_query = select(func.count(SignalEvent.id)).where(*base_filters)
     query = (
         select(SignalEvent, CompanyKnowledgeBase.canonical_name, CompanyKnowledgeBase.normalized_domain)
         .join(CompanyKnowledgeBase, SignalEvent.company_kb_id == CompanyKnowledgeBase.id)
-        .where(
-            SignalEvent.company_kb_id.in_(kb_ids),
-            SignalEvent.is_archived == False,
-            SignalEvent.is_dismissed == False,
-        )
+        .where(*base_filters)
     )
 
     if signal_type:
@@ -1207,12 +1240,133 @@ async def get_signal_feed(
             "summary": signal.summary,
             "source_url": signal.source_url,
             "source_tool": signal.source_tool,
+            "is_saved": signal.is_saved,
             "detected_at": signal.detected_at.isoformat() if signal.detected_at else None,
             "evidence_date": signal.evidence_date.isoformat() if signal.evidence_date else None,
             "created_at": signal.created_at.isoformat() if signal.created_at else None,
         })
 
-    return feed, total
+    return feed, total, snoozed_returned
+
+
+async def get_dashboard_signal_stats(
+    db: AsyncSession,
+    user_id: UUID,
+) -> dict:
+    """Get signal stats for dashboard display."""
+    kb_ids = await _get_user_tracked_kb_ids(db, user_id)
+    if not kb_ids:
+        return {
+            "total_active": 0,
+            "this_week": 0,
+            "saved_count": 0,
+            "snoozed_count": 0,
+            "top_signals": [],
+            "by_type": {},
+        }
+
+    from sqlalchemy import func
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+
+    active_filters = [
+        SignalEvent.company_kb_id.in_(kb_ids),
+        SignalEvent.is_archived == False,
+        SignalEvent.is_dismissed == False,
+    ]
+
+    # Total active
+    total_active = (await db.execute(
+        select(func.count(SignalEvent.id)).where(*active_filters, SignalEvent.is_snoozed == False)
+    )).scalar() or 0
+
+    # This week
+    this_week = (await db.execute(
+        select(func.count(SignalEvent.id)).where(
+            *active_filters,
+            func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at) >= week_ago,
+        )
+    )).scalar() or 0
+
+    # Saved count
+    saved_count = (await db.execute(
+        select(func.count(SignalEvent.id)).where(*active_filters, SignalEvent.is_saved == True)
+    )).scalar() or 0
+
+    # Snoozed count
+    snoozed_count = (await db.execute(
+        select(func.count(SignalEvent.id)).where(
+            SignalEvent.company_kb_id.in_(kb_ids),
+            SignalEvent.is_snoozed == True,
+        )
+    )).scalar() or 0
+
+    # Top 3 recent high-priority signals
+    from sqlalchemy import func as sa_func
+    top_result = await db.execute(
+        select(SignalEvent, CompanyKnowledgeBase.canonical_name, CompanyKnowledgeBase.normalized_domain)
+        .join(CompanyKnowledgeBase, SignalEvent.company_kb_id == CompanyKnowledgeBase.id)
+        .where(
+            *active_filters,
+            SignalEvent.is_snoozed == False,
+            SignalEvent.priority.in_(["critical", "high"]),
+        )
+        .order_by(sa_func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at).desc())
+        .limit(3)
+    )
+    top_signals = []
+    for signal, company_name, domain in top_result.all():
+        top_signals.append({
+            "id": str(signal.id),
+            "company_kb_id": str(signal.company_kb_id),
+            "company_name": company_name,
+            "domain": domain,
+            "signal_type": signal.signal_type,
+            "priority": signal.priority,
+            "title": signal.title,
+            "summary": signal.summary,
+            "source_url": signal.source_url,
+            "detected_at": signal.detected_at.isoformat() if signal.detected_at else None,
+            "evidence_date": signal.evidence_date.isoformat() if signal.evidence_date else None,
+        })
+
+    # Breakdown by type
+    type_result = await db.execute(
+        select(SignalEvent.signal_type, func.count(SignalEvent.id))
+        .where(*active_filters, SignalEvent.is_snoozed == False)
+        .group_by(SignalEvent.signal_type)
+    )
+    by_type = {row[0]: row[1] for row in type_result.all()}
+
+    # Correlation count (recent activity events of type correlation_found)
+    from app.models.activity_event import ActivityEvent
+    correlation_count = (await db.execute(
+        select(func.count(ActivityEvent.id)).where(
+            ActivityEvent.company_kb_id.in_(kb_ids),
+            ActivityEvent.event_type == "correlation_found",
+            ActivityEvent.created_at >= week_ago,
+        )
+    )).scalar() or 0
+
+    # Custom rules count
+    from app.models.custom_signal_rule import CustomSignalRule
+    rules_count = (await db.execute(
+        select(func.count(CustomSignalRule.id)).where(
+            CustomSignalRule.user_id == user_id,
+            CustomSignalRule.is_active == True,
+        )
+    )).scalar() or 0
+
+    return {
+        "total_active": total_active,
+        "this_week": this_week,
+        "saved_count": saved_count,
+        "snoozed_count": snoozed_count,
+        "top_signals": top_signals,
+        "by_type": by_type,
+        "correlations_this_week": correlation_count,
+        "active_rules_count": rules_count,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1229,6 +1383,88 @@ async def dismiss_signal(db: AsyncSession, signal_id: UUID) -> bool:
     signal.is_dismissed = True
     await db.flush()
     return True
+
+
+async def save_signal(db: AsyncSession, signal_id: UUID) -> bool:
+    """Bookmark/save a signal for later reference."""
+    result = await db.execute(
+        select(SignalEvent).where(SignalEvent.id == signal_id)
+    )
+    signal = result.scalar_one_or_none()
+    if not signal:
+        return False
+    signal.is_saved = True
+    signal.saved_at = datetime.now(timezone.utc)
+    await db.flush()
+    return True
+
+
+async def unsave_signal(db: AsyncSession, signal_id: UUID) -> bool:
+    """Remove save/bookmark from a signal."""
+    result = await db.execute(
+        select(SignalEvent).where(SignalEvent.id == signal_id)
+    )
+    signal = result.scalar_one_or_none()
+    if not signal:
+        return False
+    signal.is_saved = False
+    signal.saved_at = None
+    await db.flush()
+    return True
+
+
+async def snooze_signal(db: AsyncSession, signal_id: UUID, duration_hours: int) -> bool:
+    """Snooze a signal for a given number of hours. It will reappear after the duration."""
+    result = await db.execute(
+        select(SignalEvent).where(SignalEvent.id == signal_id)
+    )
+    signal = result.scalar_one_or_none()
+    if not signal:
+        return False
+    now = datetime.now(timezone.utc)
+    signal.is_snoozed = True
+    signal.snoozed_at = now
+    signal.snoozed_until = now + timedelta(hours=duration_hours)
+    await db.flush()
+    return True
+
+
+async def unsnooze_returned_signals(db: AsyncSession) -> int:
+    """Unsnooze signals whose snooze period has expired. Returns count of returned signals."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(SignalEvent)
+        .where(
+            SignalEvent.is_snoozed == True,
+            SignalEvent.snoozed_until <= now,
+        )
+        .values(is_snoozed=False, snoozed_until=None, snoozed_at=None)
+    )
+    await db.flush()
+    return result.rowcount
+
+
+async def get_snoozed_returned_count(db: AsyncSession, kb_ids: list[UUID]) -> int:
+    """Count signals that just returned from snooze (unsnooze happened within last 24h).
+
+    These are signals where is_snoozed=False but snoozed_at is recent,
+    indicating they recently came back. Since unsnooze clears snoozed_at,
+    we instead count signals that were snoozed but snoozed_until has passed.
+    """
+    if not kb_ids:
+        return 0
+    from sqlalchemy import func
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(hours=24)
+    result = await db.execute(
+        select(func.count(SignalEvent.id)).where(
+            SignalEvent.company_kb_id.in_(kb_ids),
+            SignalEvent.is_snoozed == True,
+            SignalEvent.snoozed_until <= now,
+            SignalEvent.snoozed_until >= yesterday,
+        )
+    )
+    return result.scalar() or 0
 
 
 async def archive_expired_signals(db: AsyncSession) -> int:

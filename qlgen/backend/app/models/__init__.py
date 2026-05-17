@@ -22,6 +22,10 @@ from app.models.signal_detection_run import SignalDetectionRun
 from app.models.signal_detection_log import SignalDetectionLog
 from app.models.enrichment_run import EnrichmentRun
 from app.models.enrichment_log import EnrichmentLog
+from app.models.brief_revision import BriefRevision
+from app.models.draft import Draft
+from app.models.activity_event import ActivityEvent
+from app.models.custom_signal_rule import CustomSignalRule
 
 __all__ = [
     "User",
@@ -35,4 +39,6 @@ __all__ = [
     "SignalEvent", "IngestBatch", "IngestBatchLog", "Notification", "Tag",
     "SignalDetectionRun", "SignalDetectionLog",
     "EnrichmentRun", "EnrichmentLog",
+    "BriefRevision", "Draft", "ActivityEvent",
+    "CustomSignalRule",
 ]

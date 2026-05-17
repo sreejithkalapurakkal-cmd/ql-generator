@@ -447,8 +447,13 @@ export interface SignalEvent {
   expires_at: string | null;
   is_archived: boolean;
   is_dismissed: boolean;
+  is_saved?: boolean;
+  is_snoozed?: boolean;
+  snoozed_until?: string | null;
   created_at: string | null;
 }
+
+export type SignalFeedTab = 'all' | 'today' | 'week' | 'saved';
 
 export interface SignalEventSummary {
   id: string;
@@ -632,3 +637,104 @@ export interface IngestBatchLogEntry {
   sequence_number: number;
   created_at: string | null;
 }
+
+// ─── Research Brief Types ─────────────────────────────────────────────────
+
+export interface BriefSectionSource {
+  label: string;
+  source_class: string;
+  url?: string | null;
+  date?: string | null;
+}
+
+export interface BriefSection {
+  id: string;
+  heading: string;
+  body: string;
+  bullets?: string[];
+  sources?: BriefSectionSource[];
+  insufficient?: boolean;
+  confidence?: number;
+}
+
+export interface BriefRevision {
+  id: string;
+  company_kb_id: string;
+  version: number;
+  sections: BriefSection[];
+  word_count: number | null;
+  generated_by: string | null;
+  trigger_signal_id: string | null;
+  trigger_signal_headline: string | null;
+  model_id: string | null;
+  created_at: string | null;
+}
+
+// ─── Draft Types ──────────────────────────────────────────────────────────
+
+export type DraftFormat = 'email' | 'linkedin';
+export type DraftTone = 'direct' | 'consultative' | 'formal' | 'casual';
+export type DraftStatus = 'in_progress' | 'sent' | 'discarded';
+
+export interface OutreachDraft {
+  id: string;
+  company_kb_id?: string;
+  signal_id: string | null;
+  contact_name: string | null;
+  contact_title: string | null;
+  format: DraftFormat;
+  tone: DraftTone;
+  subject: string | null;
+  body: string;
+  hooks_used: string[];
+  status: DraftStatus;
+  sent_at: string | null;
+  created_at: string | null;
+}
+
+// ─── Account Profile Types ────────────────────────────────────────────────
+
+export type ConfidenceTier = 'high' | 'medium' | 'low';
+
+export type AccountStatus = 'monitored' | 'paused' | 'archived';
+
+export type IcpFit = 'strong' | 'moderate' | 'weak';
+
+export interface AccountProfile {
+  id: string;
+  name: string;
+  domain: string;
+  industry: string | null;
+  employee_count: number | null;
+  revenue_estimate: number | null;
+  country: string | null;
+  city: string | null;
+  region: string | null;
+  status: AccountStatus;
+  icp_fit: IcpFit;
+  icp_score: number;
+  signal_count: number;
+  has_brief: boolean;
+  open_draft_count: number;
+  tags: string[];
+  latest_brief_version: number | null;
+  best_known_contacts: Record<string, unknown>[];
+}
+
+// ─── Brief Section IDs ────────────────────────────────────────────────────
+
+export const BRIEF_SECTION_IDS = [
+  'overview', 'org', 'signals', 'competitive',
+  'tech', 'budget', 'why-now', 'angle',
+] as const;
+
+export const BRIEF_SECTION_ICONS: Record<string, string> = {
+  'overview': '🏢',
+  'org': '👥',
+  'signals': '⚡',
+  'competitive': '🎯',
+  'tech': '⚙️',
+  'budget': '💰',
+  'why-now': '⏱️',
+  'angle': '💬',
+};

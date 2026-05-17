@@ -1,6 +1,6 @@
 import client, { API_BASE } from './client';
 import { getAccessToken } from '../context/AuthContext';
-import { SignalEvent } from '../types';
+import { SignalEvent, SignalFeedTab } from '../types';
 
 export interface DetectSignalsResponse {
   company_kb_id: string;
@@ -28,6 +28,30 @@ export interface SignalFeedResponse {
   total: number;
   offset: number;
   limit: number;
+  snoozed_returned_count: number;
+}
+
+export interface DashboardSignalStats {
+  total_active: number;
+  this_week: number;
+  saved_count: number;
+  snoozed_count: number;
+  correlations_this_week?: number;
+  active_rules_count?: number;
+  top_signals: {
+    id: string;
+    company_kb_id: string;
+    company_name: string | null;
+    domain: string | null;
+    signal_type: string;
+    priority: string;
+    title: string;
+    summary: string | null;
+    source_url: string | null;
+    detected_at: string | null;
+    evidence_date: string | null;
+  }[];
+  by_type: Record<string, number>;
 }
 
 export const detectSignals = (companyKbId: string, signalTypes?: string[], signalHints?: Record<string, string[]>) =>
@@ -44,12 +68,25 @@ export const getCompanySignals = (companyKbId: string, params?: {
 export const getSignalFeed = (params?: {
   signal_type?: string;
   priority?: string;
+  tab?: SignalFeedTab;
   limit?: number;
   offset?: number;
 }) => client.get<SignalFeedResponse>('/signals/feed', { params });
 
 export const dismissSignal = (signalId: string) =>
   client.post(`/signals/${signalId}/dismiss`);
+
+export const saveSignal = (signalId: string) =>
+  client.post(`/signals/${signalId}/save`);
+
+export const unsaveSignal = (signalId: string) =>
+  client.delete(`/signals/${signalId}/save`);
+
+export const snoozeSignal = (signalId: string, durationHours: number = 24) =>
+  client.post(`/signals/${signalId}/snooze`, { duration_hours: durationHours });
+
+export const getDashboardSignalStats = () =>
+  client.get<DashboardSignalStats>('/signals/dashboard-stats');
 
 export const archiveExpired = () =>
   client.post('/signals/archive-expired');

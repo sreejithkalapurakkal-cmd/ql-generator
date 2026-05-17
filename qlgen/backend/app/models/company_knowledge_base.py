@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Text, Integer, BigInteger, Float, DateTime, Index
+from sqlalchemy import Column, String, Text, Integer, BigInteger, Float, Boolean, DateTime, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
@@ -50,6 +50,11 @@ class CompanyKnowledgeBase(Base):
 
     # Embedding (1024-dim, same as Company model)
     embedding = Column(Vector(1024), nullable=True)
+
+    # Brief & draft tracking
+    has_brief = Column(Boolean, default=False)
+    open_draft_count = Column(Integer, default=0)
+    latest_brief_version = Column(Integer)
 
     # Metadata
     times_discovered = Column(Integer, default=1)

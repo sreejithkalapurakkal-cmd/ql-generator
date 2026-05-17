@@ -193,3 +193,54 @@ async def logout(response: Response):
 async def get_me(user: User = Depends(get_current_user)):
     """Get current authenticated user."""
     return UserResponse.model_validate(user)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Test-only login (development environments only)
+# ──────────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel as _BM
+
+class _TestLoginRequest(_BM):
+    user_id: str
+
+
+@router.post("/test-login")
+async def test_login(
+    request: _TestLoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Direct login for e2e tests — bypasses Google OAuth.
+
+    Only works in non-production environments. Issues JWT tokens
+    and sets the refresh cookie just like the real login flow.
+    """
+    settings = get_settings()
+    if settings.COOKIE_SECURE:
+        raise HTTPException(403, "Test login not available in production")
+
+    from uuid import UUID
+    result = await db.execute(select(User).where(User.id == UUID(request.user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    user_id_str = str(user.id)
+    access_token = create_access_token(user_id_str)
+    refresh_token = create_refresh_token(user_id_str)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/api/v1/auth",
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse.model_validate(user),
+    )

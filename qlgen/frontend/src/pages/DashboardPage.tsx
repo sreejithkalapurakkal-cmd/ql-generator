@@ -7,7 +7,10 @@ import { listPipelineRuns, getPipelineStatsByICP, ICPStat, deletePipelineRun, ge
 import { PipelineRun, AdminActivityResponse, AdminUserSummary } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { getTrackingLists } from '../api/trackingApi';
-import { getSignalFeed } from '../api/signalApi';
+import { getDashboardSignalStats, type DashboardSignalStats } from '../api/signalApi';
+import { getRecentDrafts, type RecentDraft } from '../api/briefApi';
+import { SIGNAL_TYPE_LABELS } from '../types';
+import { getSignalFreshness } from '../utils/signalFreshness';
 
 type TileKey = 'total_leads' | 'pipeline_runs' | 'companies' | 'contacts';
 
@@ -46,7 +49,8 @@ const DashboardPage: React.FC = () => {
   // Tracking stats
   const [trackingListCount, setTrackingListCount] = useState(0);
   const [trackedCompanyCount, setTrackedCompanyCount] = useState(0);
-  const [recentSignalCount, setRecentSignalCount] = useState(0);
+  const [signalStats, setSignalStats] = useState<DashboardSignalStats | null>(null);
+  const [recentDrafts, setRecentDrafts] = useState<RecentDraft[]>([]);
 
   // Stats modal
   const [statsModalOpen, setStatsModalOpen] = useState(false);
@@ -77,8 +81,11 @@ const DashboardPage: React.FC = () => {
         setTrackedCompanyCount(lists.reduce((sum, l) => sum + (l.company_count || 0), 0));
       })
       .catch(() => {});
-    getSignalFeed({ limit: 1 })
-      .then((res) => setRecentSignalCount(res.data.total || 0))
+    getDashboardSignalStats()
+      .then((res) => setSignalStats(res.data))
+      .catch(() => {});
+    getRecentDrafts({ limit: 3 })
+      .then((res) => setRecentDrafts(res.data.drafts || []))
       .catch(() => {});
   }, [isAdmin]);
 
@@ -369,10 +376,257 @@ const DashboardPage: React.FC = () => {
           <div className="metric-tile" style={{ cursor: 'pointer' }} onClick={() => navigate('/signals')}>
             <div className="metric-icon">◇</div>
             <div className="label">Active Signals</div>
-            <div className="value">{recentSignalCount}</div>
+            <div className="value">{signalStats?.total_active ?? 0}</div>
           </div>
         </Col>
       </Row>
+
+      {/* Signal Intelligence Section */}
+      {signalStats && (signalStats.total_active > 0 || signalStats.top_signals.length > 0) && (
+        <div style={{
+          marginBottom: 24,
+          background: 'linear-gradient(135deg, #faf5ff 0%, #f0e6ff 100%)',
+          border: '1px solid rgba(92, 45, 143, 0.12)',
+          borderRadius: 'var(--radius, 10px)',
+          padding: '20px 24px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div>
+              <div className="section-label" style={{ marginBottom: 2 }}>Signal Intelligence</div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Signals</h2>
+            </div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{
+                display: 'flex', gap: 8,
+                background: 'rgba(255,255,255,0.7)',
+                borderRadius: 8,
+                padding: '6px 12px',
+              }}>
+                <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                  This week: <strong style={{ color: 'var(--purple)' }}>{signalStats.this_week}</strong>
+                </span>
+                <span style={{ color: 'var(--g300)' }}>|</span>
+                <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                  Saved: <strong style={{ color: '#d48806' }}>{signalStats.saved_count}</strong>
+                </span>
+                {signalStats.snoozed_count > 0 && (
+                  <>
+                    <span style={{ color: 'var(--g300)' }}>|</span>
+                    <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                      Snoozed: <strong>{signalStats.snoozed_count}</strong>
+                    </span>
+                  </>
+                )}
+                {(signalStats.correlations_this_week ?? 0) > 0 && (
+                  <>
+                    <span style={{ color: 'var(--g300)' }}>|</span>
+                    <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                      Correlations: <strong style={{ color: '#f5222d' }}>{signalStats.correlations_this_week}</strong>
+                    </span>
+                  </>
+                )}
+                {(signalStats.active_rules_count ?? 0) > 0 && (
+                  <>
+                    <span style={{ color: 'var(--g300)' }}>|</span>
+                    <span style={{ fontSize: 12, color: 'var(--g500)' }}>
+                      Rules: <strong>{signalStats.active_rules_count}</strong>
+                    </span>
+                  </>
+                )}
+              </div>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => navigate('/signals')}
+                style={{ color: 'var(--purple)', fontWeight: 600, fontSize: 12 }}
+              >
+                View all signals →
+              </Button>
+            </div>
+          </div>
+
+          {/* Top signals */}
+          {signalStats.top_signals.length > 0 ? (
+            <Row gutter={[12, 12]}>
+              {signalStats.top_signals.map((signal) => {
+                const freshness = getSignalFreshness(signal.evidence_date, signal.detected_at);
+                return (
+                  <Col xs={24} md={8} key={signal.id}>
+                    <div
+                      style={{
+                        background: 'white',
+                        borderRadius: 10,
+                        padding: '14px 16px',
+                        cursor: 'pointer',
+                        border: '1px solid rgba(0,0,0,0.06)',
+                        transition: 'all 0.2s',
+                        borderLeft: `3px solid ${signal.priority === 'critical' ? '#f5222d' : '#fa541c'}`,
+                      }}
+                      onClick={() => navigate('/signals')}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          color: signal.priority === 'critical' ? '#f5222d' : '#fa541c',
+                          background: signal.priority === 'critical' ? 'rgba(245,34,45,0.08)' : 'rgba(250,84,28,0.08)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                        }}>
+                          {signal.priority}
+                        </span>
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: 'var(--purple)',
+                          background: 'var(--purple-pale, #f0e6ff)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                        }}>
+                          {SIGNAL_TYPE_LABELS[signal.signal_type] || signal.signal_type}
+                        </span>
+                        <span style={{
+                          marginLeft: 'auto',
+                          fontSize: 10,
+                          color: freshness.color,
+                          fontWeight: 500,
+                        }}>
+                          {freshness.label}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--purple)', marginBottom: 4 }}>
+                        {signal.company_name || 'Unknown'}
+                        {signal.domain && <span style={{ fontWeight: 400, color: 'var(--g400)', marginLeft: 4 }}>{signal.domain}</span>}
+                      </div>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--g800)', lineHeight: 1.4, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {signal.title}
+                      </p>
+                    </div>
+                  </Col>
+                );
+              })}
+            </Row>
+          ) : (
+            <div style={{
+              background: 'rgba(255,255,255,0.7)',
+              borderRadius: 8,
+              padding: '20px',
+              textAlign: 'center',
+              color: 'var(--g500)',
+              fontSize: 13,
+            }}>
+              No high-priority signals this week. Run signal detection on your tracked companies to find new opportunities.
+            </div>
+          )}
+
+          {/* Signal type breakdown */}
+          {Object.keys(signalStats.by_type).length > 0 && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {Object.entries(signalStats.by_type)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 6)
+                .map(([type, count]) => (
+                  <span key={type} style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'var(--g600)',
+                    background: 'rgba(255,255,255,0.8)',
+                    padding: '3px 10px',
+                    borderRadius: 20,
+                    border: '1px solid rgba(0,0,0,0.06)',
+                  }}>
+                    {SIGNAL_TYPE_LABELS[type] || type}: {count}
+                  </span>
+                ))
+              }
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Recent Drafts Section */}
+      {recentDrafts.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div>
+              <div className="section-label" style={{ marginBottom: 2 }}>Outreach</div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--g800)', margin: 0 }}>Recent Drafts</h2>
+            </div>
+          </div>
+          <Row gutter={[12, 12]}>
+            {recentDrafts.map((draft) => (
+              <Col xs={24} md={8} key={draft.id}>
+                <div
+                  style={{
+                    background: 'white',
+                    borderRadius: 10,
+                    padding: '14px 16px',
+                    border: '1px solid var(--g200, #e8e8e8)',
+                    transition: 'all 0.2s',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => navigate('/tracking')}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <span style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      color: draft.format === 'email' ? 'var(--purple)' : '#0077b5',
+                      background: draft.format === 'email' ? 'var(--purple-pale, #f0e6ff)' : '#e8f4fd',
+                      padding: '2px 6px',
+                      borderRadius: 4,
+                    }}>
+                      {draft.format === 'email' ? '✉ Email' : '🔗 LinkedIn'}
+                    </span>
+                    <span style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: draft.status === 'sent' ? '#1E9B6B' : draft.status === 'discarded' ? '#D93025' : 'var(--g500)',
+                      background: draft.status === 'sent' ? '#E6F7F1' : draft.status === 'discarded' ? '#FDECEA' : 'var(--g100, #f5f5f5)',
+                      padding: '2px 6px',
+                      borderRadius: 4,
+                    }}>
+                      {draft.status === 'in_progress' ? 'Draft' : draft.status}
+                    </span>
+                    <span style={{
+                      marginLeft: 'auto',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: 'var(--g400)',
+                      background: 'var(--g100, #f5f5f5)',
+                      padding: '2px 6px',
+                      borderRadius: 4,
+                      textTransform: 'capitalize',
+                    }}>
+                      {draft.tone}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--purple)', marginBottom: 4 }}>
+                    {draft.company_name || 'Unknown'}
+                    {draft.contact_name && (
+                      <span style={{ fontWeight: 400, color: 'var(--g400)', marginLeft: 4 }}>→ {draft.contact_name}</span>
+                    )}
+                  </div>
+                  {draft.subject && (
+                    <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--g700)', margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {draft.subject}
+                    </p>
+                  )}
+                  <p style={{ fontSize: 11, color: 'var(--g500)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {draft.body?.slice(0, 100) || 'No content'}
+                  </p>
+                </div>
+              </Col>
+            ))}
+          </Row>
+        </div>
+      )}
 
       <div style={{ marginBottom: 16 }}>
         <div className="section-label">Recent Activity</div>

@@ -49,6 +49,7 @@ class ConfirmRequest(BaseModel):
     column_mapping: dict[str, str]
     target_tracking_list_id: Optional[str] = None
     filter_config: Optional[dict] = None  # firmographic criteria
+    signal_hypotheses: Optional[dict] = None  # {budget_signals: [], urgency_signals: [], custom_hints: []}
 
 class AddSelectedRequest(BaseModel):
     company_kb_ids: list[str]
@@ -181,6 +182,8 @@ async def confirm_and_process(
         batch.target_tracking_list_id = UUID(request.target_tracking_list_id)
     if request.filter_config:
         batch.filter_config = request.filter_config
+    if request.signal_hypotheses:
+        batch.signal_hypotheses = request.signal_hypotheses
 
     # Set status to processing BEFORE response so frontend sees correct state immediately
     batch.status = "processing"

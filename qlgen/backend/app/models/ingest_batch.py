@@ -43,6 +43,10 @@ class IngestBatch(Base):
     # Error details
     errors = Column(JSONB, default=list)  # [{row: int, error: str}]
 
+    # Signal hypotheses for post-ingest detection
+    # Schema: {budget_signals: str[], urgency_signals: str[], custom_hints: str[]}
+    signal_hypotheses = Column(JSONB, nullable=True)
+
     # Optional: target tracking list for auto-promotion
     target_tracking_list_id = Column(
         UUID(as_uuid=True),
