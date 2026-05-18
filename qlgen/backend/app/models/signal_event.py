@@ -37,10 +37,18 @@ class SignalEvent(Base):
     title = Column(String(500), nullable=False)
     summary = Column(Text)
 
+    # Confidence (computed by confidence_scorer)
+    confidence = Column(String(20))  # high, medium, low
+
     # Evidence and provenance
     evidence = Column(JSONB)  # source data, URLs, raw tool output
     source_tool = Column(String(100))
     source_url = Column(String(500))
+    source_class = Column(String(100))  # press_release, sec_filing, hiring_signal, web_change
+    headline = Column(String(500))
+    region = Column(String(100))
+    research_job_id = Column(UUID(as_uuid=True))
+    custom_rule_id = Column(UUID(as_uuid=True))
 
     # Timing
     detected_at = Column(DateTime(timezone=True), server_default=func.now())  # when qlGen discovered it
@@ -55,6 +63,8 @@ class SignalEvent(Base):
     snoozed_until = Column(DateTime(timezone=True))
     saved_at = Column(DateTime(timezone=True))
     snoozed_at = Column(DateTime(timezone=True))
+    is_acted_on = Column(Boolean, default=False)
+    acted_on_at = Column(DateTime(timezone=True))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -91,7 +91,13 @@ async def get_activity_stats(
     db: AsyncSession,
     company_kb_id: UUID,
 ) -> dict:
-    """Get activity summary stats for a company."""
+    """Get activity summary stats for a company. Cached for 120 seconds."""
+    from app.services.cache_service import cache_get, cache_set
+    cache_key = f"activity_stats:{company_kb_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     total = (await db.execute(
         select(func.count(ActivityEvent.id)).where(
             ActivityEvent.company_kb_id == company_kb_id,
@@ -118,3 +124,6 @@ async def get_activity_stats(
         "milestones": milestones,
         "by_category": by_category,
     }
+
+    cache_set(cache_key, result, ttl=120)
+    return result

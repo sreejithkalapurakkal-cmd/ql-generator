@@ -22,7 +22,10 @@ import IngestEvaluationPage from './pages/IngestEvaluationPage';
 import SignalFeedPage from './pages/SignalFeedPage';
 import ResearchBriefPage from './pages/ResearchBriefPage';
 import CustomSignalRulesPage from './pages/CustomSignalRulesPage';
+import AccountsPage from './pages/AccountsPage';
+import AccountProfilePage from './pages/AccountProfilePage';
 import { AuthProvider } from './context/AuthContext';
+import { QueryProvider } from './context/QueryProvider';
 import { PageContextProvider } from './context/PageContextProvider';
 import { DraftDrawerProvider } from './context/DraftDrawerContext';
 import CoPilotPanel from './components/CoPilotPanel';
@@ -43,6 +46,7 @@ function App() {
         },
       }}
     >
+      <QueryProvider>
       <BrowserRouter>
         <AuthProvider>
           <Routes>
@@ -74,6 +78,8 @@ function App() {
                         <Route path="/accounts/:id/brief" element={<ResearchBriefPage />} />
                         <Route path="/ingest" element={<IngestPage />} />
                         <Route path="/ingest/:batchId" element={<IngestEvaluationPage />} />
+                        <Route path="/accounts" element={<AccountsPage />} />
+                        <Route path="/accounts/:id" element={<AccountProfilePage />} />
                         <Route path="/signals" element={<SignalFeedPage />} />
                         <Route path="/signals/rules" element={<CustomSignalRulesPage />} />
                         <Route path="/leads/:runId" element={<LeadsPage />} />
@@ -106,6 +112,7 @@ function App() {
           </Routes>
         </AuthProvider>
       </BrowserRouter>
+      </QueryProvider>
     </ConfigProvider>
   );
 }

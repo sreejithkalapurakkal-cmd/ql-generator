@@ -29,6 +29,10 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api/v1")
 
+# Register event bus handlers on startup
+from app.events import register_default_handlers
+register_default_handlers()
+
 # Observability middleware (request timing, request_id, structured logging)
 from app.middleware.observability import ObservabilityMiddleware, get_metrics
 app.add_middleware(ObservabilityMiddleware)

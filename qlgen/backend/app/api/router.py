@@ -16,6 +16,10 @@ from app.api.notifications import router as notifications_router
 from app.api.briefs import router as briefs_router
 from app.api.signal_rules import router as signal_rules_router
 from app.api.activity import router as activity_router
+from app.api.research import router as research_router
+from app.api.sources import router as sources_router
+from app.api.accounts import router as accounts_router
+from app.api.contacts import router as contacts_router
 
 api_router = APIRouter()
 
@@ -36,3 +40,7 @@ api_router.include_router(notifications_router)
 api_router.include_router(briefs_router)
 api_router.include_router(signal_rules_router)
 api_router.include_router(activity_router)
+api_router.include_router(research_router)
+api_router.include_router(sources_router)
+api_router.include_router(accounts_router)
+api_router.include_router(contacts_router)

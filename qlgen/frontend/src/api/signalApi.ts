@@ -108,3 +108,13 @@ export const getSignalDetectionStreamUrl = (companyKbId: string, runId: string) 
   const token = getAccessToken() || '';
   return `${API_BASE}/signals/detect/${companyKbId}/stream/${runId}?token=${token}`;
 };
+
+// ─── Account Profile APIs ──────────────────────────────────────────────────
+
+export const getAccountDetail = (id: string) => client.get(`/accounts/${id}`);
+
+export const updateAccount = (id: string, data: any) => client.patch(`/accounts/${id}`, data);
+
+export const getCompanyDrafts = (companyKbId: string) => client.get(`/briefs/drafts/${companyKbId}`);
+
+export const markSignalActedOn = (signalId: string) => client.post(`/signals/${signalId}/acted-on`);

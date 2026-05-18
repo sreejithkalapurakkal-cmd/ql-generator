@@ -95,21 +95,21 @@ const IngestPage: React.FC = () => {
       .catch(() => {});
   }, []);
 
-  // Dynamic steps
+  // Dynamic steps — filter step is always available
   const stepsItems = useMemo(() => {
-    const items = [{ title: 'Input' }, { title: 'Map Columns' }];
-    if (targetListId) items.push({ title: 'Filter' });
-    items.push({ title: 'Processing' });
-    items.push({ title: 'Done' });
-    return items;
-  }, [targetListId]);
+    return [
+      { title: 'Input' },
+      { title: 'Map Columns' },
+      { title: 'Filter' },
+      { title: 'Processing' },
+      { title: 'Done' },
+    ];
+  }, []);
 
   const stepIndex = useMemo(() => {
-    const order: Step[] = ['input', 'mapping'];
-    if (targetListId) order.push('filter');
-    order.push('processing', 'done');
+    const order: Step[] = ['input', 'mapping', 'filter', 'processing', 'done'];
     return order.indexOf(step);
-  }, [step, targetListId]);
+  }, [step]);
 
   // Filter helpers
   const handleLoadFromICP = useCallback((icpId: string) => {
@@ -208,11 +208,7 @@ const IngestPage: React.FC = () => {
       message.warning('Map at least "Company Name" or "Domain" column');
       return;
     }
-    if (targetListId) {
-      setStep('filter');
-    } else {
-      handleConfirm();
-    }
+    setStep('filter');
   };
 
   // Confirm and start processing
@@ -463,7 +459,7 @@ const IngestPage: React.FC = () => {
           <Space>
             <Button onClick={() => setStep('input')}>Back</Button>
             <Button type="primary" onClick={handleMappingNext} style={{ borderRadius: 8 }}>
-              {targetListId ? 'Next' : `Start Processing (${totalRows} rows)`}
+              Next: Configure Filters
             </Button>
           </Space>
         </Card>
@@ -472,15 +468,36 @@ const IngestPage: React.FC = () => {
       {/* Step 3: Filter */}
       {step === 'filter' && (
         <Card style={{ borderRadius: 14 }}>
+          {/* Tracking list selection if not already set */}
+          {!targetListId && (
+            <Alert
+              type="info"
+              showIcon
+              message="Select a tracking list to add filtered companies to"
+              description={
+                <Select
+                  placeholder="Select a tracking list..."
+                  value={targetListId || undefined}
+                  onChange={setTargetListId}
+                  allowClear
+                  style={{ width: 400, marginTop: 8 }}
+                  options={trackingLists.map((tl) => ({ value: tl.id, label: `${tl.name} (${tl.company_count} companies)` }))}
+                />
+              }
+              style={{ marginBottom: 20, borderRadius: 8 }}
+            />
+          )}
+
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
             <div>
               <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1a1a2e', marginBottom: 4 }}>
                 <FilterOutlined style={{ marginRight: 8, color: '#5C2D8F' }} />
-                Firmographic Filter
+                Firmographic Fit Filter
               </h3>
               <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
-                Optionally filter imported companies by firmographic criteria before adding to your tracking list.
-                Companies will be researched and scored against these criteria.
+                Score and filter {totalRows} imported companies against firmographic criteria.
+                Each company is researched via Apollo &amp; web sources, then AI-scored on industry fit,
+                geography, employee size, and revenue. You review and select which companies to track.
               </p>
             </div>
             <Switch checked={filterEnabled} onChange={setFilterEnabled} style={{ marginTop: 4 }} />
@@ -553,11 +570,33 @@ const IngestPage: React.FC = () => {
             </div>
           )}
 
+          {filterEnabled && !targetListId && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Select a tracking list above to use firmographic filtering. Without a list, companies will be imported without scoring."
+              style={{ marginTop: 16, borderRadius: 8 }}
+            />
+          )}
+
           <Space style={{ marginTop: 24 }}>
             <Button onClick={() => setStep('mapping')}>Back</Button>
-            <Button type="primary" onClick={handleConfirm} style={{ borderRadius: 8 }}>
-              Start Processing ({totalRows} rows){filterEnabled && ' + Firmographic Evaluation'}
+            <Button
+              type="primary"
+              onClick={handleConfirm}
+              style={{ borderRadius: 8 }}
+              disabled={filterEnabled && !targetListId}
+            >
+              {filterEnabled
+                ? `Start Firmographic Evaluation (${totalRows} companies)`
+                : `Import ${totalRows} Companies`
+              }
             </Button>
+            {!filterEnabled && (
+              <span style={{ color: '#999', fontSize: 12 }}>
+                Skipping filter — all companies will be imported directly
+              </span>
+            )}
           </Space>
         </Card>
       )}

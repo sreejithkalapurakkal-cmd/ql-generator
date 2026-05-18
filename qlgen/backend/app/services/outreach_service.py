@@ -17,6 +17,57 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Outreach templates per signal type
+OUTREACH_TEMPLATES = {
+    "funding": {
+        "hook_pattern": "I noticed {company} recently {event_summary}",
+        "bridge": "Post-close is typically when teams begin evaluating infrastructure and vendor partnerships to support the next phase of growth.",
+        "cta": "Would a 20-minute conversation be useful as you plan the next phase?",
+    },
+    "executive_change": {
+        "hook_pattern": "I saw your appointment as {title} at {company}",
+        "bridge": "Leaders in your position typically spend the first 90 days mapping the vendor landscape and identifying quick wins.",
+        "cta": "Happy to share a quick framework — no sales deck, just context.",
+    },
+    "hiring_surge": {
+        "hook_pattern": "I noticed {company} is building out the {department} team",
+        "bridge": "Companies at your stage with similar hiring patterns often find that the right tooling early saves significant ramp-up time.",
+        "cta": "Would you be open to a short call this week?",
+    },
+    "competitor_churn": {
+        "hook_pattern": "I noticed {company} has been evaluating alternatives to {competitor}",
+        "bridge": "Teams making this transition often find that the integration complexity is the deciding factor.",
+        "cta": "I have a couple of specific examples I think would be relevant.",
+    },
+    "tech_adoption": {
+        "hook_pattern": "I see {company} has recently adopted {technology}",
+        "bridge": "Organizations making this kind of technology shift typically need complementary tooling to get the full value.",
+        "cta": "Happy to share what we've seen work well alongside this stack.",
+    },
+    "partnership": {
+        "hook_pattern": "Congratulations on the {company} partnership with {partner}",
+        "bridge": "Strategic partnerships like this often create new operational requirements.",
+        "cta": "Would it be helpful to discuss how similar companies have navigated this?",
+    },
+}
+
+# Banned phrases that sound generic/spammy
+BANNED_PHRASES = [
+    "synergy", "synergies", "reach out", "circle back", "touch base",
+    "game changer", "game-changer", "leverage", "paradigm shift",
+    "disruptive", "bandwidth", "low-hanging fruit", "move the needle",
+    "best-in-class", "thought leader", "deep dive", "at the end of the day",
+    "win-win", "value-add", "take it to the next level", "on the same page",
+    "think outside the box", "pivot", "scalable solution",
+]
+
+
+def detect_banned_phrases(text: str) -> list[str]:
+    """Check for banned phrases in outreach text."""
+    text_lower = text.lower()
+    found = [phrase for phrase in BANNED_PHRASES if phrase in text_lower]
+    return found
+
 
 async def generate_outreach_draft(
     db: AsyncSession,
@@ -28,7 +79,8 @@ async def generate_outreach_draft(
     tone: str = "direct",
     voice_profile: str = "concise",
     signal_id: str | None = None,
-) -> str:
+    variants: int = 1,
+) -> dict:
     """Generate a curated outreach draft for a company.
 
     Args:
@@ -41,8 +93,9 @@ async def generate_outreach_draft(
         tone: 'direct', 'consultative', 'formal', 'casual'
         voice_profile: 'concise', 'consultative', 'formal'
         signal_id: Optional signal ID to anchor the outreach to
+        variants: Number of draft variants to generate (1-3)
 
-    Returns a markdown string with the outreach draft.
+    Returns a dict with drafts list, primary text, template info, and metadata.
     """
     # Fetch KB record
     result = await db.execute(
@@ -50,7 +103,16 @@ async def generate_outreach_draft(
     )
     kb = result.scalar_one_or_none()
     if not kb:
-        return "**Error:** Company not found in knowledge base."
+        error_text = "**Error:** Company not found in knowledge base."
+        return {
+            "drafts": [{"text": error_text, "variant": 1, "banned_phrases": []}],
+            "primary": error_text,
+            "template_used": None,
+            "template_hint": None,
+            "format": format,
+            "tone": tone,
+            "voice_profile": voice_profile,
+        }
 
     # Fetch recent signals
     signal_result = await db.execute(
@@ -189,6 +251,7 @@ This outreach is triggered by a specific signal. You MUST reference this signal 
 3. **CTA**: Simple ask — a call, a resource, or just connecting.
 4. **Length**: 80-120 words maximum. LinkedIn messages must be SHORT.
 5. **No subject line needed** — this is a direct message.
+6. **Evidence-only**: Every fact about the company or contact must come from the provided data. Never fabricate details.
 
 ## Output Format (just the message text, no markdown headers)
 
@@ -229,6 +292,7 @@ Generate the LinkedIn message now."""
 4. **Social Proof**: Briefly reference similar companies or industries (don't fabricate).
 5. **CTA**: Clear, low-friction call to action.
 6. **Length**: 150-200 words max in the body.
+7. **Evidence-only**: Every claim about the company MUST reference data from the provided signals or company data. Never invent facts, statistics, or specifics not provided above.
 
 ## Output Format (Markdown)
 
@@ -246,11 +310,45 @@ Generate the LinkedIn message now."""
 Generate the email now. Make it specific and compelling."""
 
     try:
-        draft = await _call_bedrock(prompt)
-        return draft
+        results = []
+        for i in range(max(1, min(variants, 3))):
+            variant_prompt = prompt
+            if i > 0:
+                variant_prompt += f"\n\nThis is variant #{i + 1}. Generate a DIFFERENT approach from previous variants. Use a different hook, different opening, and different CTA."
+            draft_text = await _call_bedrock(variant_prompt)
+            banned = detect_banned_phrases(draft_text)
+            results.append({
+                "text": draft_text,
+                "variant": i + 1,
+                "banned_phrases": banned,
+            })
+
+        # Get template hint if available
+        template_hint = None
+        if anchor_signal and anchor_signal.signal_type in OUTREACH_TEMPLATES:
+            template_hint = OUTREACH_TEMPLATES[anchor_signal.signal_type]
+
+        return {
+            "drafts": results,
+            "primary": results[0]["text"] if results else "",
+            "template_used": anchor_signal.signal_type if anchor_signal else None,
+            "template_hint": template_hint,
+            "format": format,
+            "tone": tone,
+            "voice_profile": voice_profile,
+        }
     except Exception as e:
         logger.error(f"Outreach draft generation failed: {e}")
-        return _generate_fallback_draft(kb, contacts, signals)
+        fallback = _generate_fallback_draft(kb, contacts, signals)
+        return {
+            "drafts": [{"text": fallback, "variant": 1, "banned_phrases": []}],
+            "primary": fallback,
+            "template_used": None,
+            "template_hint": None,
+            "format": format,
+            "tone": tone,
+            "voice_profile": voice_profile,
+        }
 
 
 async def _call_bedrock(prompt: str) -> str:

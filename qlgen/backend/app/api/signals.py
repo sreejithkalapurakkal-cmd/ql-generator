@@ -10,6 +10,8 @@ import uuid as uuid_mod
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -30,6 +32,8 @@ from app.services.signal_service import (
     DEFAULT_SIGNAL_TYPES,
 )
 from app.services.event_store import init_run, get_events
+from app.models.signal_event import SignalEvent
+from app.events.event_bus import bus, Events
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +327,25 @@ async def snooze(
         raise HTTPException(404, "Signal not found")
     await db.commit()
     return {"status": "snoozed", "duration_hours": request.duration_hours}
+
+
+@router.post("/{signal_id}/acted-on")
+async def mark_signal_acted_on(
+    signal_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mark a signal as acted on (e.g., after sending outreach)."""
+    from uuid import UUID as UUIDType
+    result = await db.execute(select(SignalEvent).where(SignalEvent.id == UUIDType(signal_id)))
+    signal = result.scalar_one_or_none()
+    if not signal:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    signal.is_acted_on = True
+    signal.acted_on_at = func.now()
+    await db.commit()
+    await bus.emit(Events.SIGNAL_ACTED_ON, {"signal_id": signal_id, "company_kb_id": str(signal.company_kb_id)})
+    return {"status": "acted_on", "signal_id": signal_id}
 
 
 # ──────────────────────────────────────────────────────────────────

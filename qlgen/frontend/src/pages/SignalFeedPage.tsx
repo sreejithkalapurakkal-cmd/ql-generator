@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Select, Spin, Tooltip, Popover, message } from 'antd';
 import {
   ReloadOutlined, EyeInvisibleOutlined, ThunderboltOutlined,
@@ -7,10 +7,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { PillTabs, Badge, EmptyState, SourceBadge } from '../components/ui';
 import SignalDetailPane from '../components/SignalDetailPane';
-import {
-  getSignalFeed, dismissSignal, saveSignal, unsaveSignal, snoozeSignal,
-  type SignalFeedResponse,
-} from '../api/signalApi';
+import { useSignalFeed, useSaveSignal, useUnsaveSignal, useDismissSignal, useSnoozeSignal } from '../hooks/useSignalQueries';
 import { SIGNAL_TYPE_LABELS, type SignalFeedTab } from '../types';
 import { getSignalFreshness, FRESHNESS_DESCRIPTIONS } from '../utils/signalFreshness';
 
@@ -37,63 +34,45 @@ const SNOOZE_OPTIONS = [
 ];
 
 const STALE_THRESHOLD_DAYS = 30;
-const AUTO_REFRESH_INTERVAL = 30_000; // 30s
 
 const SignalFeedPage: React.FC = () => {
   const navigate = useNavigate();
-  const [signals, setSignals] = useState<SignalFeedResponse['signals']>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
   const [priorityFilter, setPriorityFilter] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState<SignalFeedTab>('all');
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [snoozedReturnedCount, setSnoozedReturnedCount] = useState(0);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [refreshing, setRefreshing] = useState(false);
   const limit = 50;
-  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchFeed = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    else setRefreshing(true);
-    try {
-      const res = await getSignalFeed({
-        signal_type: typeFilter,
-        priority: priorityFilter,
-        tab: activeTab,
-        limit,
-        offset,
-      });
-      setSignals(res.data.signals || []);
-      setTotal(res.data.total || 0);
-      setSnoozedReturnedCount(res.data.snoozed_returned_count || 0);
-      setLastRefreshed(new Date());
-    } catch {
-      if (!silent) setSignals([]);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [typeFilter, priorityFilter, activeTab, offset]);
+  const { data: feedData, isLoading: loading, isRefetching: refreshing, refetch, dataUpdatedAt } = useSignalFeed({
+    tab: activeTab,
+    signal_type: typeFilter,
+    priority: priorityFilter,
+    limit,
+    offset,
+  });
+  const signals = feedData?.signals || [];
+  const total = feedData?.total || 0;
+  const snoozedReturnedCount = feedData?.snoozed_returned_count || 0;
 
-  useEffect(() => { fetchFeed(); }, [fetchFeed]);
-
-  // Auto-refresh
+  // Track last refresh time from React Query's dataUpdatedAt
   useEffect(() => {
-    autoRefreshRef.current = setInterval(() => fetchFeed(true), AUTO_REFRESH_INTERVAL);
-    return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
-  }, [fetchFeed]);
+    if (dataUpdatedAt) setLastRefreshed(new Date(dataUpdatedAt));
+  }, [dataUpdatedAt]);
 
   // Reset offset when filters change
   useEffect(() => { setOffset(0); }, [typeFilter, priorityFilter, activeTab]);
 
+  // Mutation hooks
+  const saveMutation = useSaveSignal();
+  const unsaveMutation = useUnsaveSignal();
+  const dismissMutation = useDismissSignal();
+  const snoozeMutation = useSnoozeSignal();
+
   const handleDismiss = async (signalId: string) => {
     try {
-      await dismissSignal(signalId);
-      setSignals((prev) => prev.filter((s) => s.id !== signalId));
-      setTotal((prev) => Math.max(0, prev - 1));
+      await dismissMutation.mutateAsync(signalId);
       if (selectedId === signalId) setSelectedId(null);
       message.success('Signal dismissed');
     } catch {
@@ -103,8 +82,7 @@ const SignalFeedPage: React.FC = () => {
 
   const handleSave = async (signalId: string) => {
     try {
-      await saveSignal(signalId);
-      setSignals((prev) => prev.map((s) => s.id === signalId ? { ...s, is_saved: true } : s));
+      await saveMutation.mutateAsync(signalId);
       message.success('Signal saved');
     } catch {
       message.error('Failed to save');
@@ -113,12 +91,7 @@ const SignalFeedPage: React.FC = () => {
 
   const handleUnsave = async (signalId: string) => {
     try {
-      await unsaveSignal(signalId);
-      setSignals((prev) => prev.map((s) => s.id === signalId ? { ...s, is_saved: false } : s));
-      if (activeTab === 'saved') {
-        setSignals((prev) => prev.filter((s) => s.id !== signalId));
-        setTotal((prev) => Math.max(0, prev - 1));
-      }
+      await unsaveMutation.mutateAsync(signalId);
       message.success('Signal unsaved');
     } catch {
       message.error('Failed to unsave');
@@ -127,9 +100,7 @@ const SignalFeedPage: React.FC = () => {
 
   const handleSnooze = async (signalId: string, hours: number) => {
     try {
-      await snoozeSignal(signalId, hours);
-      setSignals((prev) => prev.filter((s) => s.id !== signalId));
-      setTotal((prev) => Math.max(0, prev - 1));
+      await snoozeMutation.mutateAsync({ signalId, hours });
       if (selectedId === signalId) setSelectedId(null);
       const label = SNOOZE_OPTIONS.find((o) => o.hours === hours)?.label || `${hours}h`;
       message.success(`Signal snoozed for ${label}`);
@@ -196,7 +167,7 @@ const SignalFeedPage: React.FC = () => {
         </div>
         <Tooltip title="Refresh">
           <button
-            onClick={() => fetchFeed()}
+            onClick={() => refetch()}
             className={`w-8 h-8 flex items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors ${refreshing ? 'animate-spin' : ''}`}
           >
             <ReloadOutlined />

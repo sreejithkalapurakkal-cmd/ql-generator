@@ -56,6 +56,12 @@ class CompanyKnowledgeBase(Base):
     open_draft_count = Column(Integer, default=0)
     latest_brief_version = Column(Integer)
 
+    # Account management fields
+    status = Column(String(20), default="monitored")  # monitored, paused, archived
+    owner = Column(String(255))  # assigned sales rep
+    signal_count = Column(Integer, default=0)  # denormalized
+    tags = Column(JSONB, default=list)  # ["Enterprise", "Healthcare"]
+
     # Metadata
     times_discovered = Column(Integer, default=1)
     pipeline_run_ids = Column(JSONB)  # list of UUID strings

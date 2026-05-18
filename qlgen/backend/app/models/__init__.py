@@ -26,6 +26,8 @@ from app.models.brief_revision import BriefRevision
 from app.models.draft import Draft
 from app.models.activity_event import ActivityEvent
 from app.models.custom_signal_rule import CustomSignalRule
+from app.models.research_job import ResearchJob
+from app.models.custom_signal_source import CustomSignalSource, SourceSnapshot
 
 __all__ = [
     "User",
@@ -41,4 +43,6 @@ __all__ = [
     "EnrichmentRun", "EnrichmentLog",
     "BriefRevision", "Draft", "ActivityEvent",
     "CustomSignalRule",
+    "ResearchJob",
+    "CustomSignalSource", "SourceSnapshot",
 ]

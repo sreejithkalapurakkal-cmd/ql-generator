@@ -468,6 +468,14 @@ async def _save_signals(
         # Try explicit field first, then parse from evidence/article metadata.
         evidence_date = _extract_evidence_date(sig_data)
 
+        # Compute confidence score
+        from app.services.confidence_scorer import score_inline
+        confidence_label = score_inline(
+            source_tool=sig_data.get("source_tool"),
+            evidence=sig_data.get("evidence"),
+            evidence_date=evidence_date,
+        )
+
         signal = SignalEvent(
             company_kb_id=company_kb_id,
             signal_type=signal_type,
@@ -475,11 +483,13 @@ async def _save_signals(
             signal_category=config.get("category", "event"),
             priority=sig_data.get("priority", "medium"),
             strength=sig_data.get("strength", 50.0),
+            confidence=confidence_label,
             title=title[:490],
             summary=sig_data.get("summary"),
             evidence=sig_data.get("evidence"),
             source_tool=sig_data.get("source_tool"),
             source_url=source_url[:490] if source_url else None,
+            source_class=sig_data.get("source_class"),
             detected_at=datetime.now(timezone.utc),
             evidence_date=evidence_date,
             expires_at=datetime.now(timezone.utc) + timedelta(days=cold_days),
@@ -1253,7 +1263,17 @@ async def get_dashboard_signal_stats(
     db: AsyncSession,
     user_id: UUID,
 ) -> dict:
-    """Get signal stats for dashboard display."""
+    """Get signal stats for dashboard display.
+
+    Results are cached for 60 seconds per user to reduce dashboard load queries.
+    """
+    from app.services.cache_service import cache_get, cache_set
+    cache_key = f"dashboard_stats:{user_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # (original implementation follows — result cached at the end)
     kb_ids = await _get_user_tracked_kb_ids(db, user_id)
     if not kb_ids:
         return {
@@ -1367,6 +1387,9 @@ async def get_dashboard_signal_stats(
         "correlations_this_week": correlation_count,
         "active_rules_count": rules_count,
     }
+
+    cache_set(cache_key, result, ttl=60)
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────

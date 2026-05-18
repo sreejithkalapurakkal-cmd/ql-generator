@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 from app.db.session import get_db
 from app.auth.dependencies import get_current_user
@@ -141,6 +142,56 @@ async def generate_company_brief_structured(
     }
 
 
+@router.post("/{company_kb_id}/generate-stream")
+async def generate_brief_stream(
+    company_kb_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate a structured brief with SSE streaming per section."""
+    import json
+    import asyncio
+    from sqlalchemy import select
+    from app.models.company_knowledge_base import CompanyKnowledgeBase
+
+    result = await db.execute(
+        select(CompanyKnowledgeBase).where(CompanyKnowledgeBase.id == company_kb_id)
+    )
+    kb = result.scalar_one_or_none()
+    if not kb:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    async def event_stream():
+        try:
+            # Signal that generation is starting
+            yield f"data: {json.dumps({'type': 'brief_started', 'company': kb.canonical_name})}\n\n"
+
+            # Generate the full brief (returns a BriefRevision ORM object)
+            revision = await generate_structured_brief(db, company_kb_id)
+            if not revision:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Failed to generate brief'})}\n\n"
+                return
+
+            sections = revision.sections or []
+
+            # Stream each section
+            for i, section in enumerate(sections):
+                yield f"data: {json.dumps({'type': 'section_started', 'section_id': section.get('id', str(i)), 'heading': section.get('heading', ''), 'index': i})}\n\n"
+                await asyncio.sleep(0.1)  # Small delay for progressive feel
+                yield f"data: {json.dumps({'type': 'section_complete', 'section': section, 'index': i})}\n\n"
+
+            # Signal completion
+            yield f"data: {json.dumps({'type': 'brief_ready', 'version': revision.version, 'word_count': revision.word_count, 'section_count': len(sections)})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:500]})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─── Legacy brief endpoint (backward compatibility) ─────────────────────────
 
 
@@ -187,7 +238,7 @@ async def generate_outreach(
     from app.services.outreach_service import generate_outreach_draft
     from app.models.draft import Draft
 
-    draft_text = await generate_outreach_draft(
+    draft_result = await generate_outreach_draft(
         db, company_kb_id,
         contact_name=request.contact_name,
         contact_title=request.contact_title,
@@ -196,6 +247,8 @@ async def generate_outreach(
         tone=request.tone,
         signal_id=request.signal_id,
     )
+
+    draft_text = draft_result["primary"]
 
     # Parse subject and body from the generated markdown
     subject = None
@@ -236,6 +289,9 @@ async def generate_outreach(
         "status": draft.status,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "raw_markdown": draft_text,
+        "drafts": draft_result.get("drafts", []),
+        "template_used": draft_result.get("template_used"),
+        "template_hint": draft_result.get("template_hint"),
     }
 
 
@@ -375,6 +431,17 @@ async def update_draft(
         draft.status = request.status
         if request.status == "sent":
             draft.sent_at = datetime.now(timezone.utc)
+            # Mark the linked signal as acted_on
+            if draft.signal_id:
+                from app.models.signal_event import SignalEvent
+                from sqlalchemy.sql import func as sa_func
+                sig_result = await db.execute(
+                    select(SignalEvent).where(SignalEvent.id == draft.signal_id)
+                )
+                signal = sig_result.scalar_one_or_none()
+                if signal:
+                    signal.is_acted_on = True
+                    signal.acted_on_at = sa_func.now()
 
     await db.commit()
     await db.refresh(draft)

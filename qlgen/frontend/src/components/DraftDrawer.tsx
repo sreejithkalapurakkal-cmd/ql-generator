@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Drawer, Tooltip, Spin, message } from 'antd';
+import { Drawer, Tooltip, Spin, Select, message } from 'antd';
 import {
   CloseOutlined, MailOutlined, LinkedinOutlined,
   ThunderboltOutlined, CopyOutlined, SendOutlined,
@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { useDraftDrawer } from '../context/DraftDrawerContext';
 import { generateDraft, updateDraft } from '../api/briefApi';
+import client from '../api/client';
 import type { DraftFormat, DraftTone } from '../types';
 
 type VoiceProfile = 'concise' | 'consultative' | 'formal';
@@ -48,6 +49,10 @@ const DraftDrawer: React.FC = () => {
   const [body, setBody] = useState('');
   const [draftId, setDraftId] = useState<string | null>(null);
 
+  // Contact picker state
+  const [contacts, setContacts] = useState<any[]>([]);
+  const [manualContactEntry, setManualContactEntry] = useState(false);
+
   // UI state
   const [generating, setGenerating] = useState(false);
   const [edited, setEdited] = useState(false);
@@ -68,8 +73,20 @@ const DraftDrawer: React.FC = () => {
       setEdited(false);
       setCopied(false);
       setSentConfirm(false);
+      setManualContactEntry(false);
     }
   }, [options]);
+
+  // Fetch contacts when drawer opens
+  useEffect(() => {
+    if (options?.companyKbId) {
+      client.get(`/contacts/${options.companyKbId}`).then(res => {
+        setContacts(res.data.contacts || []);
+      }).catch(() => {
+        setContacts([]);
+      });
+    }
+  }, [options?.companyKbId]);
 
   // Auto-generate on open
   useEffect(() => {
@@ -272,12 +289,50 @@ const DraftDrawer: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Contact Name</label>
-                  <input
-                    value={contactName}
-                    onChange={(e) => setContactName(e.target.value)}
-                    placeholder="e.g. Sarah Chen"
-                    className="w-full h-9 px-3 text-sm border border-gray-200 rounded-lg focus:border-brand focus:ring-1 focus:ring-brand/30 outline-none transition-colors"
-                  />
+                  {contacts.length > 0 && !manualContactEntry ? (
+                    <div>
+                      <Select
+                        placeholder="Select contact"
+                        style={{ width: '100%' }}
+                        value={contactName || undefined}
+                        onChange={(val) => {
+                          const c = contacts.find((c: any) => c.name === val);
+                          setContactName(val);
+                          setContactTitle(c?.title || '');
+                        }}
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        options={contacts.map((c: any) => ({
+                          value: c.name,
+                          label: `${c.name} — ${c.title || 'Unknown role'}`,
+                        }))}
+                      />
+                      <button
+                        onClick={() => setManualContactEntry(true)}
+                        className="text-[10px] text-brand hover:underline mt-1"
+                      >
+                        or enter manually
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <input
+                        value={contactName}
+                        onChange={(e) => setContactName(e.target.value)}
+                        placeholder="e.g. Sarah Chen"
+                        className="w-full h-9 px-3 text-sm border border-gray-200 rounded-lg focus:border-brand focus:ring-1 focus:ring-brand/30 outline-none transition-colors"
+                      />
+                      {contacts.length > 0 && manualContactEntry && (
+                        <button
+                          onClick={() => setManualContactEntry(false)}
+                          className="text-[10px] text-brand hover:underline mt-1"
+                        >
+                          pick from contacts
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Title</label>
