@@ -765,8 +765,8 @@ def quick_firmographic_filter(companies: list[Company], icp: dict) -> tuple[list
     industry_keywords = set()
     for item in fd.get("industry_types", []):
         if isinstance(item, dict):
-            v = item.get("vertical", "").lower().strip()
-            sv = item.get("sub_vertical", "").lower().strip()
+            v = (item.get("vertical") or "").lower().strip()
+            sv = (item.get("sub_vertical") or "").lower().strip()
             if v:
                 industry_keywords.add(v)
             if sv:
