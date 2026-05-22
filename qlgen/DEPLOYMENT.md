@@ -509,18 +509,18 @@ There's no built-in rollback for S3. Options:
 
 ## Current Deployment State
 
-Last updated: 2026-05-15
+Last updated: 2026-05-22
 
 | Item | Value |
 |------|-------|
-| ECS Task Definition | `qlgen-backend:11` |
+| ECS Task Definition | `qlgen-backend:14` |
 | ECS Desired Count | 2 |
-| Alembic Revision (HEAD) | `q7r8s9t0u1v2` (add dismissed_at, signal_detection_logs, enrichment_runs, enrichment_logs) |
+| Alembic Revision (HEAD) | `y5z6a7b8c9d0` (add notes columns to signal_events) |
 | Docker Base Image | `python:3.11-slim` |
 | Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | Git Branch Deployed | `signalreasearch` |
 
-### Database Tables (22 migrations applied)
+### Database Tables (30 migrations applied)
 
 ```
 alembic_version          companies                 company_knowledge_base
@@ -531,7 +531,9 @@ ingest_batch_logs        notifications             pipeline_logs
 pipeline_runs            signal_detection_logs     signal_detection_runs
 signal_events            tags                      tool_effectiveness
 tool_registry            tracking_lists            tracking_list_memberships
-users                    audit_logs
+users                    audit_logs                brief_revisions
+drafts                   activity_events           custom_signal_rules
+research_jobs            custom_signal_sources     source_snapshots
 ```
 
 `bant_scores` was dropped by migration `a1b2c3d4e5f6` (replaced by `company_stage_results`).
@@ -560,12 +562,52 @@ m3n4o5p6q7r8  Add signal_hints and enrichment_status columns
 n4o5p6q7r8s9  Add signal_detection_runs table
 o5p6q7r8s9t0  Add evidence_date to signal_events
 p6q7r8s9t0u1  Add ingest_batch_logs table
-q7r8s9t0u1v2  Add dismissed_at, signal_detection_logs, enrichment_runs, enrichment_logs (HEAD)
+q7r8s9t0u1v2  Add dismissed_at, signal_detection_logs, enrichment_runs, enrichment_logs
+r8s9t0u1v2w3  Add brief_revisions, drafts, activity_events tables
+s9t0u1v2w3x4  Add signal save/snooze lifecycle columns
+t0u1v2w3x4y5  Add custom_signal_rules table
+u1v2w3x4y5z6  Add verbosity_level, signal_hypotheses columns
+v2w3x4y5z6a7  Add research_jobs, custom_signal_sources, source_snapshots + enhanced signal/KB fields
+w3x4y5z6a7b8  Add acted_on columns to signal_events
+x4y5z6a7b8c9  Add monitoring_config, custom_rule_name, user settings
+y5z6a7b8c9d0  Add notes columns to signal_events (HEAD)
 ```
 
 ---
 
 ## Deployment History
+
+### 2026-05-22 — Pipeline NoneType fix + Bedrock Titan embed IAM fix
+
+**Changes deployed**: Hotfix for 100% pipeline failure rate caused by `quick_firmographic_filter` crashing with `AttributeError: 'NoneType' object has no attribute 'lower'` when ICP `industry_types` items had explicit `null` for `vertical` or `sub_vertical`. Also patched `qlgen-ecs-task` `bedrock-invoke` IAM policy to allow `amazon.titan-embed-*` (was missing, causing all embedding calls to fail silently with AccessDeniedException).
+
+**Migrations applied**: None.
+
+**Task definition**: Updated from revision 13 to revision 14 (image tag `deploy-20260522-104938`). No new env vars needed.
+
+**Issues fixed**:
+- `pipeline_service.py:768-769` — `item.get("vertical", "")` → `(item.get("vertical") or "")` (and same for `sub_vertical`). `dict.get(key, default)` returns `None` when the key exists with a null value; the default only fires for missing keys. Confirmed against prod ICP `fd849528` which had `{"vertical": "MVNO", "sub_vertical": null}`.
+- `qlgen-ecs-task` `bedrock-invoke` inline policy — added `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*` to Resource list. Applied directly via `aws iam put-role-policy` (no deploy needed for IAM; new task creds pick it up immediately).
+
+---
+
+### 2026-05-19 — Signal lifecycle, research briefs, custom rules, and accounts/contacts APIs
+
+**Changes deployed**: Research brief generation with versioning and outreach drafting. Signal lifecycle features (save, snooze, acted-on, notes). Custom signal rules engine. Research jobs with custom signal sources and source snapshots. Accounts and contacts APIs. Activity feed service. Monitoring scheduler with configurable intervals. User settings. Enhanced signal_events and company_knowledge_base with additional fields (confidence, headline, region, monitoring_config, tags, status, owner). Frontend TypeScript fixes (useRef, auth context, type casts). 8 new backend API routers (accounts, contacts, activity, research, sources, settings, signal_rules, briefs extended). Multiple new backend services (brief_service, activity_feed_service, monitoring_scheduler, research_orchestrator, signal_export_service).
+
+**Migrations applied** (8 new, from `q7r8s9t0u1v2` to `y5z6a7b8c9d0`):
+- `r8s9t0u1v2w3` — brief_revisions, drafts, activity_events tables + has_brief/open_draft_count/latest_brief_version on company_knowledge_base
+- `s9t0u1v2w3x4` — is_saved, is_snoozed, snoozed_until, saved_at, snoozed_at on signal_events
+- `t0u1v2w3x4y5` — custom_signal_rules table
+- `u1v2w3x4y5z6` — verbosity_level on activity_events, signal_hypotheses on ingest_batches
+- `v2w3x4y5z6a7` — research_jobs, custom_signal_sources, source_snapshots tables + confidence/headline/region/research_job_id/custom_rule_id on signal_events + status/owner/signal_count/tags on company_knowledge_base
+- `w3x4y5z6a7b8` — is_acted_on, acted_on_at on signal_events
+- `x4y5z6a7b8c9` — monitoring_config on company_knowledge_base, custom_rule_name on signal_events, settings on users
+- `y5z6a7b8c9d0` — notes, notes_updated_at on signal_events
+
+**Task definition**: Updated from revision 12 to revision 13 (image tag updated to `deploy-20260519-115155`). No new env vars needed — new settings have defaults.
+
+**Issues encountered**: Initial `force-new-deployment` restarted tasks with old image because the task definition referenced a specific image tag (`deploy-20260515-131734`), not `latest`. Resolved by registering a new task definition revision (13) with the updated image tag and redeploying. Three frontend TypeScript errors fixed before build (useRef missing initial arg, incorrect auth context property, unnecessary type casts).
 
 ### 2026-05-15 — Enrichment tables and dismissed_at column
 
