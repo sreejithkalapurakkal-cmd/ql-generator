@@ -61,6 +61,7 @@ class CompanyKnowledgeBase(Base):
     owner = Column(String(255))  # assigned sales rep
     signal_count = Column(Integer, default=0)  # denormalized
     tags = Column(JSONB, default=list)  # ["Enterprise", "Healthcare"]
+    monitoring_config = Column(JSONB, default=dict)  # {enabled, frequency_days, signal_types, alert_threshold}
 
     # Metadata
     times_discovered = Column(Integer, default=1)

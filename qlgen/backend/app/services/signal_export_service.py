@@ -51,7 +51,10 @@ async def generate_signal_report_xlsx(
     # Fetch signals
     result = await db.execute(
         select(SignalEvent)
-        .where(SignalEvent.company_kb_id == company_kb_id)
+        .where(
+            SignalEvent.company_kb_id == company_kb_id,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
+        )
         .order_by(SignalEvent.detected_at.desc())
     )
     signals = list(result.scalars().all())
@@ -291,6 +294,16 @@ async def generate_brief_html(
 </html>"""
 
     return html
+
+
+def generate_brief_pdf(html_content: str) -> bytes:
+    """Convert brief HTML to PDF bytes. Uses weasyprint if available, falls back to returning HTML."""
+    try:
+        from weasyprint import HTML
+        return HTML(string=html_content).write_pdf()
+    except ImportError:
+        # WeasyPrint not installed — return HTML as fallback
+        return html_content.encode('utf-8')
 
 
 def _escape(text: str) -> str:

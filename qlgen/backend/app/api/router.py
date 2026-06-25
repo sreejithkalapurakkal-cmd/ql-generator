@@ -20,6 +20,7 @@ from app.api.research import router as research_router
 from app.api.sources import router as sources_router
 from app.api.accounts import router as accounts_router
 from app.api.contacts import router as contacts_router
+from app.api.settings import router as settings_router
 
 api_router = APIRouter()
 
@@ -44,3 +45,4 @@ api_router.include_router(research_router)
 api_router.include_router(sources_router)
 api_router.include_router(accounts_router)
 api_router.include_router(contacts_router)
+api_router.include_router(settings_router)

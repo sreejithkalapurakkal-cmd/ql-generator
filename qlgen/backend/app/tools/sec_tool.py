@@ -25,6 +25,11 @@ def get_sec_filings(
     Returns:
         dict with recent filings including date, type, and direct URL to filing
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("sec", company_ticker)
+    if cached is not None:
+        return cached
+
     ticker = company_ticker.strip().upper()
 
     try:
@@ -126,7 +131,7 @@ def get_sec_filings(
         except Exception:
             pass  # XBRL data is supplementary, filings list is still useful
 
-        return {
+        result = {
             "company": company_name or ticker,
             "ticker": ticker,
             "cik": cik,
@@ -134,6 +139,8 @@ def get_sec_filings(
             "filings": filings,
             "financials": financials,
         }
+        tool_cache_set("sec", result, company_ticker)
+        return result
 
     except Exception as e:
         return {"error": str(e), "filings": []}

@@ -1,5 +1,6 @@
 import os
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -13,10 +14,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.config import get_settings
+from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 settings = get_settings()
 
-app = FastAPI(title="qlGen API", version="1.0.0", description="ICP-Driven Qualified Lead Generation Tool")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    from app.events import register_default_handlers
+    register_default_handlers()
+    await start_scheduler()
+    yield
+    # Shutdown
+    await stop_scheduler()
+
+
+app = FastAPI(
+    title="qlGen API",
+    version="1.0.0",
+    description="ICP-Driven Qualified Lead Generation Tool",
+    lifespan=lifespan,
+)
 
 origins = [o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -28,10 +47,6 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api/v1")
-
-# Register event bus handlers on startup
-from app.events import register_default_handlers
-register_default_handlers()
 
 # Observability middleware (request timing, request_id, structured logging)
 from app.middleware.observability import ObservabilityMiddleware, get_metrics

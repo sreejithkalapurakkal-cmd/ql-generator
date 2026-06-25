@@ -10,9 +10,10 @@ import SectionSkeleton from '../components/ui/SectionSkeleton';
 import SourceCitationChip from '../components/ui/SourceCitationChip';
 import {
   getLatestBrief, getBriefVersions, getBriefVersion,
-  generateStructuredBrief,
+  generateStructuredBrief, startBriefGeneration, getBriefGenerationStreamUrl,
 } from '../api/briefApi';
 import { getListMembers } from '../api/trackingApi';
+import { useSSEStream } from '../hooks/useSSEStream';
 import type { BriefRevision, BriefSection } from '../types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -45,20 +46,26 @@ function useGenFlow(sectionCount: number, shouldGenerate: boolean) {
     setPhase('scanning');
     setVisible(0);
 
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
     const scanTimer = setTimeout(() => {
       setPhase('streaming');
       let count = 0;
-      const id = setInterval(() => {
+      intervalId = setInterval(() => {
         count++;
         setVisible(count);
         if (count >= sectionCount) {
-          clearInterval(id);
+          clearInterval(intervalId!);
+          intervalId = null;
           setPhase('done');
         }
       }, 350);
     }, 1500);
 
-    return () => clearTimeout(scanTimer);
+    return () => {
+      clearTimeout(scanTimer);
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [shouldGenerate, sectionCount]);
 
   return { phase, visibleCount };
@@ -162,6 +169,43 @@ const ResearchBriefPage: React.FC = () => {
   const [allRevisions, setAllRevisions] = useState<BriefRevision[]>([]);
   const [isNewGeneration, setIsNewGeneration] = useState(false);
 
+  // SSE streaming state
+  const [agentThought, setAgentThought] = useState('');
+  const [streamingSections, setStreamingSections] = useState<string[]>([]);
+
+  const briefStream = useSSEStream({
+    terminalEvents: ['brief_ready', 'brief_failed'],
+    onEvent: (eventType, data) => {
+      if (eventType === 'agent_thought') {
+        setAgentThought(data.message as string || '');
+      }
+      if (eventType === 'section_complete') {
+        setStreamingSections(prev => [...prev, data.heading as string || '']);
+      }
+    },
+    onComplete: async (eventType) => {
+      if (eventType === 'brief_ready') {
+        // Refresh brief data
+        await fetchBrief();
+        setIsNewGeneration(true);
+        setGenerating(false);
+        setAgentThought('');
+        setStreamingSections([]);
+        message.success('Research brief generated');
+      } else if (eventType === 'brief_failed') {
+        setGenerating(false);
+        setAgentThought('');
+        setStreamingSections([]);
+        message.error('Failed to generate brief');
+      }
+    },
+    onError: () => {
+      setGenerating(false);
+      setAgentThought('');
+      setStreamingSections([]);
+    },
+  });
+
   // Citation state
   const [citationHighlight, setCitationHighlight] = useState<{ sectionId: string; sourceIdx: number } | null>(null);
   const sourceChipRefs = useRef<Record<string, HTMLSpanElement | null>>({});
@@ -249,17 +293,14 @@ const ResearchBriefPage: React.FC = () => {
     if (!resolvedKbId || generating) return;
     setGenerating(true);
     setIsNewGeneration(true);
+    setAgentThought('');
+    setStreamingSections([]);
     try {
-      const res = await generateStructuredBrief(resolvedKbId!);
-      const brief = res.data.brief;
-      if (brief) {
-        setCurrentRevision(brief);
-        setAllRevisions(prev => [brief, ...prev]);
-        message.success('Research brief generated');
-      }
+      const res = await startBriefGeneration(resolvedKbId!);
+      const streamUrl = getBriefGenerationStreamUrl(resolvedKbId!, res.data.run_id);
+      briefStream.connect(streamUrl);
     } catch {
-      message.error('Failed to generate brief');
-    } finally {
+      message.error('Failed to start brief generation');
       setGenerating(false);
     }
   };
@@ -435,16 +476,32 @@ const ResearchBriefPage: React.FC = () => {
           <div className="mt-3">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs text-purple-600 flex items-center gap-1">
-                ✦ {phase === 'scanning' ? 'Scanning signal history...' : `Generating sections... (${visibleCount}/${sections.length})`}
+                ✦ {generating && briefStream.progress > 0
+                  ? briefStream.statusLabel || `Generating... ${briefStream.progress}%`
+                  : phase === 'scanning'
+                    ? 'Scanning signal history...'
+                    : `Generating sections... (${visibleCount}/${sections.length})`}
               </span>
-              <span className="text-xs text-gray-400">{progress}%</span>
+              <span className="text-xs text-gray-400">{generating ? briefStream.progress : progress}%</span>
             </div>
             <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
               <div
                 className="h-full bg-purple-500 rounded-full transition-all duration-300 ease-out"
-                style={{ width: `${progress}%` }}
+                style={{ width: `${generating ? briefStream.progress : progress}%` }}
               />
             </div>
+            {agentThought && (
+              <p className="text-xs text-purple-500 italic mt-1.5 animate-pulse">{agentThought}</p>
+            )}
+            {streamingSections.length > 0 && generating && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {streamingSections.map((s, i) => (
+                  <span key={i} className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -514,10 +571,26 @@ const ResearchBriefPage: React.FC = () => {
               <div className="relative w-10 h-10 mx-auto mb-4">
                 <LoadingOutlined className="text-3xl text-purple-400" />
               </div>
-              <p className="text-sm font-medium text-gray-700 mb-1">Analysing latest signals...</p>
-              <p className="text-xs text-gray-400">
-                Pulling from signals and public intelligence sources
+              <p className="text-sm font-medium text-gray-700 mb-1">
+                {briefStream.statusLabel || 'Analysing latest signals...'}
               </p>
+              {agentThought ? (
+                <p className="text-xs text-purple-500 italic max-w-md mx-auto animate-pulse">{agentThought}</p>
+              ) : (
+                <p className="text-xs text-gray-400">
+                  Pulling from signals and public intelligence sources
+                </p>
+              )}
+              {briefStream.progress > 0 && (
+                <div className="w-48 mx-auto mt-3">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-purple-500 rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${briefStream.progress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           ) : phase === 'scanning' ? (
             <div className="bg-white border border-gray-200 rounded-lg px-8 py-16 text-center">

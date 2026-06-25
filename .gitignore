@@ -70,3 +70,13 @@ htmlcov/
 *.bak
 *.tmp
 .cache/
+
+# Claude Code local session/tooling state (large, machine-local — never commit)
+.claude/
+
+# Generated test artifacts
+qlgen/frontend/test-results/
+
+# Binary business reports (not source)
+qlgen/qlGen_*.pptx
+qlgen/qlGen_*.xlsx

@@ -535,88 +535,70 @@ const OverviewTab: React.FC<{ company: Company }> = ({ company }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Company Details */}
-      <Card size="small" title="Company Details">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+      <Card size="small" title="Company Details" styles={{ body: { padding: '10px 16px' } }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', alignItems: 'center', fontSize: 13 }}>
+          {company.website && (
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Website </Text>
+              <a
+                href={company.website.startsWith('http') ? company.website : `https://${company.website}`}
+                target="_blank" rel="noreferrer"
+                style={{ color: 'var(--purple)', fontWeight: 600 }}
+              >
+                <LinkOutlined style={{ marginRight: 3 }} />{company.website}
+              </a>
+            </span>
+          )}
           {company.industry && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Industry</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.industry}</div>
-            </div>
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Industry </Text>
+              <span style={{ fontWeight: 600 }}>{company.industry}</span>
+              {company.sub_industry && <span style={{ color: 'var(--g500)' }}> / {company.sub_industry}</span>}
+            </span>
           )}
-          {company.sub_industry && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Sub-Industry</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.sub_industry}</div>
-            </div>
-          )}
-          {company.country && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Country</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.country}</div>
-            </div>
-          )}
-          {(company.city || company.state_region) && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Location</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{[company.city, company.state_region].filter(Boolean).join(', ')}</div>
-            </div>
+          {(company.city || company.state_region || company.country) && (
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Location </Text>
+              <span style={{ fontWeight: 600 }}>{[company.city, company.state_region, company.country].filter(Boolean).join(', ')}</span>
+            </span>
           )}
           {company.employee_count != null && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Employees</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.employee_count.toLocaleString()}</div>
-            </div>
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Employees </Text>
+              <span style={{ fontWeight: 600 }}>{company.employee_count.toLocaleString()}</span>
+            </span>
           )}
           {revenueStr && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Revenue Estimate</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{revenueStr}</div>
-            </div>
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Revenue </Text>
+              <span style={{ fontWeight: 600 }}>{revenueStr}</span>
+            </span>
           )}
           {assetStr && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Asset Value</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{assetStr}</div>
-            </div>
-          )}
-          {company.website && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Website</Text>
-              <div>
-                <a
-                  href={company.website.startsWith('http') ? company.website : `https://${company.website}`}
-                  target="_blank" rel="noreferrer"
-                  style={{ fontSize: 13, color: 'var(--purple)' }}
-                >
-                  <LinkOutlined style={{ marginRight: 4 }} />{company.website}
-                </a>
-              </div>
-            </div>
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Assets </Text>
+              <span style={{ fontWeight: 600 }}>{assetStr}</span>
+            </span>
           )}
           {company.source && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Source</Text>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{company.source}</div>
-            </div>
+            <span>
+              <Text type="secondary" style={{ fontSize: 11 }}>Source </Text>
+              <span style={{ fontWeight: 600 }}>{company.source}</span>
+            </span>
           )}
           {company.qualification && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>Qualification</Text>
-              <div>
-                <Tag color={
-                  company.qualification === 'qualified' || company.qualification === 'verified_match' || company.qualification === 'best_fit' ? 'green' :
-                  company.qualification === 'good_fit' || company.qualification === 'potential_match' ? 'blue' :
-                  company.qualification === 'possible_fit' || company.qualification === 'weak_match' ? 'gold' :
-                  company.qualification === 'disqualified' || company.qualification === 'not_qualified' ? 'red' : 'default'
-                } style={{ fontSize: 12 }}>
-                  {company.qualification.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                </Tag>
-              </div>
-            </div>
+            <Tag color={
+              company.qualification === 'qualified' || company.qualification === 'verified_match' || company.qualification === 'best_fit' ? 'green' :
+              company.qualification === 'good_fit' || company.qualification === 'potential_match' ? 'blue' :
+              company.qualification === 'possible_fit' || company.qualification === 'weak_match' ? 'gold' :
+              company.qualification === 'disqualified' || company.qualification === 'not_qualified' ? 'red' : 'default'
+            } style={{ fontSize: 11, margin: 0 }}>
+              {company.qualification.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+            </Tag>
           )}
         </div>
         {company.description && (
-          <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--g50)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--g700)', lineHeight: 1.7 }}>
+          <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--g50)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--g700)', lineHeight: 1.6 }}>
             {company.description}
           </div>
         )}
@@ -1082,50 +1064,43 @@ const CompanyDetailPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+    <div style={{ padding: '16px 32px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
       {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div className="section-label">Lead Generation</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Button
             size="small"
             onClick={() => navigate(`/leads/${runId}`)}
             style={{ fontSize: 12 }}
           >
-            &larr; Back to Results
+            &larr; Back
           </Button>
-          <h1 className="page-title" style={{ margin: 0 }}>{company.name}</h1>
+          <h1 className="page-title" style={{ margin: 0, fontSize: 18 }}>{company.name}</h1>
           {icpName && (
-            <Tag color="purple" style={{ fontSize: 13, padding: '2px 12px' }}>{icpName}</Tag>
+            <Tag color="purple" style={{ fontSize: 11, padding: '1px 8px', margin: 0 }}>{icpName}</Tag>
           )}
           {company.website && (
             <a
               href={company.website.startsWith('http') ? company.website : `https://${company.website}`}
               target="_blank" rel="noreferrer"
-              style={{ fontSize: 14, color: 'var(--purple)', lineHeight: 1 }}
+              style={{ fontSize: 13, color: 'var(--purple)', lineHeight: 1 }}
             >
               <LinkOutlined />
             </a>
           )}
           {company.final_rank != null && (
-            <Tag color="purple" style={{ fontSize: 12, padding: '2px 10px' }}>#{company.final_rank}</Tag>
+            <Tag color="purple" style={{ fontSize: 11, padding: '1px 8px', margin: 0 }}>#{company.final_rank}</Tag>
           )}
           {company.final_score != null && (
             <Tooltip title={getScoreLabel(company.final_score)}>
-              <Tag color={getScoreTagColor(company.final_score)} style={{ fontSize: 12, padding: '2px 10px', fontWeight: 700 }}>
+              <Tag color={getScoreTagColor(company.final_score)} style={{ fontSize: 11, padding: '1px 8px', fontWeight: 700, margin: 0 }}>
                 Score: {Math.round(company.final_score)}/100
               </Tag>
             </Tooltip>
           )}
+          {company.industry && <Tag style={{ fontSize: 11, margin: 0 }}>{company.industry}</Tag>}
+          {company.country && <Tag style={{ fontSize: 11, margin: 0 }}>{company.country}</Tag>}
         </div>
-
-        {/* Industry / country meta tags */}
-        {(company.industry || company.country) && (
-          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {company.industry && <Tag style={{ fontSize: 12 }}>{company.industry}</Tag>}
-            {company.country && <Tag style={{ fontSize: 12 }}>{company.country}</Tag>}
-          </div>
-        )}
       </div>
 
       {/* Discovery CTA / Progress */}

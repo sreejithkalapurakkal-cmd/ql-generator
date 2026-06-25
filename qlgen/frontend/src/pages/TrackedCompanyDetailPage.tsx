@@ -9,7 +9,13 @@ import { PillTabs, Badge, KpiStrip, SectionLabel, SourceBadge } from '../compone
 import {
   getListMembers, updateMember,
 } from '../api/trackingApi';
-import { researchCompany, getLatestBrief, generateStructuredBrief, getCompanyDrafts, generateDraft, updateDraft, getBriefExportUrl, getSignalReportExportUrl } from '../api/briefApi';
+import {
+  researchCompany, getLatestBrief, generateStructuredBrief,
+  getCompanyDrafts, generateDraft, updateDraft,
+  getBriefExportUrl, getSignalReportExportUrl,
+  startBriefGeneration, getBriefGenerationStreamUrl,
+  startCompanyResearch, getResearchStreamUrl,
+} from '../api/briefApi';
 import { API_BASE } from '../api/client';
 import SignalTimeline from '../components/SignalTimeline';
 import CompanyBriefModal from '../components/CompanyBriefModal';
@@ -17,6 +23,7 @@ import OutreachDraftModal from '../components/OutreachDraftModal';
 import ContactsPanel from '../components/ContactsPanel';
 import { useDraftDrawer } from '../context/DraftDrawerContext';
 import ActivityFeed from '../components/ActivityFeed';
+import { useSSEStream } from '../hooks/useSSEStream';
 import {
   TrackingListMember,
   OUTREACH_STATUSES, OUTREACH_STATUS_LABELS, OUTREACH_STATUS_COLORS,
@@ -48,28 +55,68 @@ const TrackedCompanyDetailPage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [researching, setResearching] = useState(false);
+  const [researchThought, setResearchThought] = useState('');
   const [brief, setBrief] = useState<BriefRevision | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefGenerating, setBriefGenerating] = useState(false);
+  const [briefThought, setBriefThought] = useState('');
   const [drafts, setDrafts] = useState<OutreachDraft[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
+
+  // SSE stream for company research
+  const researchStream = useSSEStream({
+    terminalEvents: ['research_complete', 'research_failed'],
+    onEvent: (eventType, data) => {
+      if (eventType === 'agent_thought') setResearchThought(data.message as string || '');
+    },
+    onComplete: async (eventType, data) => {
+      if (eventType === 'research_complete') {
+        const fields = (data.fields_updated as string[]) || [];
+        if (fields.length > 0) {
+          await fetchMember();
+          message.success(`Updated ${fields.length} field${fields.length > 1 ? 's' : ''}: ${fields.join(', ')}`);
+        } else {
+          message.info('No new information found for this company');
+        }
+      } else {
+        message.error((data.message as string) || 'Company research failed');
+      }
+      setResearching(false);
+      setResearchThought('');
+    },
+    onError: () => { setResearching(false); setResearchThought(''); },
+  });
+
+  // SSE stream for brief generation
+  const briefGenStream = useSSEStream({
+    terminalEvents: ['brief_ready', 'brief_failed'],
+    onEvent: (eventType, data) => {
+      if (eventType === 'agent_thought') setBriefThought(data.message as string || '');
+    },
+    onComplete: async (eventType) => {
+      if (eventType === 'brief_ready' && member) {
+        const res = await getLatestBrief(member.company_kb_id);
+        setBrief(res.data.brief || null);
+        message.success('Brief generated');
+      } else {
+        message.error('Failed to generate brief');
+      }
+      setBriefGenerating(false);
+      setBriefThought('');
+    },
+    onError: () => { setBriefGenerating(false); setBriefThought(''); },
+  });
 
   const handleResearch = async () => {
     if (!member) return;
     setResearching(true);
+    setResearchThought('');
     try {
-      const res = await researchCompany(member.company_kb_id);
-      const fields = res.data.fields_updated || [];
-      if (fields.length > 0) {
-        // Refetch member to get updated data
-        await fetchMember();
-        message.success(`Updated ${fields.length} field${fields.length > 1 ? 's' : ''}: ${fields.join(', ')}`);
-      } else {
-        message.info('No new information found for this company');
-      }
+      const res = await startCompanyResearch(member.company_kb_id);
+      const streamUrl = getResearchStreamUrl(member.company_kb_id, res.data.run_id);
+      researchStream.connect(streamUrl);
     } catch {
-      message.error('Company research failed');
-    } finally {
+      message.error('Failed to start company research');
       setResearching(false);
     }
   };
@@ -129,15 +176,13 @@ const TrackedCompanyDetailPage: React.FC = () => {
   const handleGenerateBrief = async () => {
     if (!member || briefGenerating) return;
     setBriefGenerating(true);
+    setBriefThought('');
     try {
-      const res = await generateStructuredBrief(member.company_kb_id);
-      if (res.data.brief) {
-        setBrief(res.data.brief);
-        message.success('Brief generated');
-      }
+      const res = await startBriefGeneration(member.company_kb_id);
+      const streamUrl = getBriefGenerationStreamUrl(member.company_kb_id, res.data.run_id);
+      briefGenStream.connect(streamUrl);
     } catch {
-      message.error('Failed to generate brief');
-    } finally {
+      message.error('Failed to start brief generation');
       setBriefGenerating(false);
     }
   };
@@ -365,6 +410,21 @@ const TrackedCompanyDetailPage: React.FC = () => {
               >
                 {researching ? 'Researching...' : 'Research Company'}
               </Button>
+              {researching && (
+                <div className="w-full mt-2">
+                  {researchThought && (
+                    <p className="text-xs text-purple-500 italic animate-pulse mb-1">{researchThought}</p>
+                  )}
+                  {researchStream.progress > 0 && (
+                    <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-500 rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${researchStream.progress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -507,6 +567,16 @@ const TrackedCompanyDetailPage: React.FC = () => {
                       <ReloadOutlined className={briefGenerating ? 'animate-spin' : ''} />
                       {briefGenerating ? 'Regenerating...' : 'Regenerate'}
                     </button>
+                    {briefGenerating && (
+                      <div className="flex items-center gap-2">
+                        {briefThought && (
+                          <span className="text-xs text-purple-500 italic animate-pulse max-w-[200px] truncate">{briefThought}</span>
+                        )}
+                        {briefGenStream.progress > 0 && (
+                          <span className="text-[10px] text-gray-400">{briefGenStream.progress}%</span>
+                        )}
+                      </div>
+                    )}
                     <Tooltip title="Export brief as printable HTML (save as PDF from browser)">
                       <a
                         href={`${API_BASE}${getBriefExportUrl(member.company_kb_id)}`}
@@ -596,9 +666,24 @@ const TrackedCompanyDetailPage: React.FC = () => {
                 >
                   ✦ Generate brief
                 </Button>
-                <p className="text-[11px] text-gray-300">
-                  Briefs are also auto-generated when high-confidence signals fire.
-                </p>
+                {briefGenerating && briefThought && (
+                  <p className="text-xs text-purple-500 italic animate-pulse">{briefThought}</p>
+                )}
+                {briefGenerating && briefGenStream.progress > 0 && (
+                  <div className="w-48">
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-500 rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${briefGenStream.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                {!briefGenerating && (
+                  <p className="text-[11px] text-gray-300">
+                    Briefs are also auto-generated when high-confidence signals fire.
+                  </p>
+                )}
               </div>
             </div>
           )}

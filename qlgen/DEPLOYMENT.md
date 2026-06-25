@@ -509,13 +509,13 @@ There's no built-in rollback for S3. Options:
 
 ## Current Deployment State
 
-Last updated: 2026-05-22
+Last updated: 2026-06-25
 
 | Item | Value |
 |------|-------|
-| ECS Task Definition | `qlgen-backend:14` |
+| ECS Task Definition | `qlgen-backend:15` (image tag `deploy-20260625-224507`) |
 | ECS Desired Count | 2 |
-| Alembic Revision (HEAD) | `y5z6a7b8c9d0` (add notes columns to signal_events) |
+| Alembic Revision (HEAD) | `z6a7b8c9d0e1` (add relevance validity columns to signal_events) |
 | Docker Base Image | `python:3.11-slim` |
 | Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | Git Branch Deployed | `signalreasearch` |
@@ -576,6 +576,20 @@ y5z6a7b8c9d0  Add notes columns to signal_events (HEAD)
 ---
 
 ## Deployment History
+
+### 2026-06-25 — Ingest persistence, signal relevance gating, notification routing fixes
+
+**Changes deployed**: Three production bug fixes.
+1. **Ingest "Upload data expired"** — pending upload rows were held in an in-process dict (`_pending_rows`), so with 2 tasks × 2 uvicorn workers the `/ingest/confirm` request usually hit a process that never saw the upload. Now stored in Redis (`app/services/ingest_store.py`, reusing `event_store.get_redis()` with in-memory fallback, 1h TTL).
+2. **Signal relevance validity gate** — irrelevant signals were surfacing for companies (name collisions, generic news). Added a tool-less LLM relevance judge (`app/agent/signal_relevance_agent.py` + `app/services/signal_relevance_service.py`) wired into `_save_signals` (the single save chokepoint), plus `is_relevant IS NOT FALSE` filters on all user-facing signal reads. New nullable columns `is_relevant`/`relevance_reason`/`relevance_checked_at`. Backfilled existing signals via `app/scripts/backfill_signal_relevance.py`.
+3. **Notifications (and signal-rules/sources/accounts) empty in prod** — collection routes were `@router.get("/")`, so slash-free frontend calls got a 307 redirect whose `Location` was `http://<internal-ALB-host>/...` (broken behind CloudFront). Changed to `@router.get("")` (matching `settings.py`) so they match directly with no redirect.
+
+**Migrations applied** (1 new, from `y5z6a7b8c9d0` to `z6a7b8c9d0e1`):
+- `z6a7b8c9d0e1` — add `is_relevant`, `relevance_reason`, `relevance_checked_at` to signal_events (all nullable; existing rows backfilled post-deploy).
+
+**Task definition**: Updated from revision 14 to revision 15 (image tag `deploy-20260625-224507`). No new env vars needed (`REDIS_URL` was already set in rev 14).
+
+**Notes**: ECS exec was unreliable from the scripted deploy environment (sessions EOF during LLM latency); the relevance backfill was run via `setsid` to detach it from the SSM session's process group so it survived to completion (16 signals, all classified).
 
 ### 2026-05-22 — Pipeline NoneType fix + Bedrock Titan embed IAM fix
 

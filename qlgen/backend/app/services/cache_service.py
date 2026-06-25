@@ -1,11 +1,14 @@
 """TTL-based in-memory cache service.
 
 Provides a simple cache layer for frequently-accessed computed data
-(dashboard stats, signal feed counts, company KB lookups).
+(dashboard stats, signal feed counts, company KB lookups) and
+per-tool result caching with tool-specific TTLs.
 
 Automatically evicts entries after their TTL expires.
 Thread-safe via dict operations (GIL-protected in CPython).
 """
+import hashlib
+import json
 import logging
 import time
 from typing import Any, Callable, TypeVar
@@ -117,6 +120,76 @@ def cached(key_prefix: str, ttl: int | None = None):
             return result
         return wrapper
     return decorator
+
+
+# ──────────────────────────────────────────────────────────────────
+# Per-tool caching
+# ──────────────────────────────────────────────────────────────────
+
+TOOL_CACHE_TTLS = {
+    "apollo": 43200,          # 12h — contact data changes slowly
+    "linkedin_search": 21600, # 6h
+    "tavily": 14400,          # 4h — news changes frequently
+    "exa": 14400,             # 4h
+    "news_sentiment": 7200,   # 2h — time-sensitive
+    "web_scraper": 3600,      # 1h
+    "sec": 604800,            # 7d — SEC filings are permanent
+    "find_executives": 86400, # 24h — leadership changes rarely
+    "google_places": 604800,  # 7d — locations change slowly
+    "simfin": 86400,          # 24h
+    "fmp": 86400,             # 24h
+    "duckduckgo": 7200,       # 2h
+}
+
+
+def _hash_tool_args(*args, **kwargs) -> str:
+    """Create a stable hash of tool call arguments for cache keying."""
+    key_data = json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True, default=str)
+    return hashlib.sha256(key_data.encode()).hexdigest()[:16]
+
+
+def tool_cache_get(tool_name: str, *args, **kwargs) -> Any | None:
+    """Check if a tool call result is cached."""
+    args_hash = _hash_tool_args(*args, **kwargs)
+    cache_key = f"tool:{tool_name}:{args_hash}"
+    return cache_get(cache_key)
+
+
+def tool_cache_set(tool_name: str, result: Any, *args, **kwargs) -> None:
+    """Cache a tool call result with the tool-specific TTL."""
+    args_hash = _hash_tool_args(*args, **kwargs)
+    cache_key = f"tool:{tool_name}:{args_hash}"
+    ttl = TOOL_CACHE_TTLS.get(tool_name, DEFAULT_TTL)
+    cache_set(cache_key, result, ttl)
+
+
+def tool_cached(tool_name: str):
+    """Decorator for caching tool call results with per-tool TTLs.
+
+    Usage:
+        @tool_cached("apollo")
+        def search_apollo(company_name: str, domain: str) -> dict:
+            ...
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = tool_cache_get(tool_name, *args, **kwargs)
+            if result is not None:
+                logger.debug(f"Tool cache hit: {tool_name}")
+                return result
+            result = func(*args, **kwargs)
+            if result is not None:
+                tool_cache_set(tool_name, result, *args, **kwargs)
+            return result
+        return wrapper
+    return decorator
+
+
+def invalidate_tool_cache(tool_name: str | None = None) -> int:
+    """Invalidate cached tool results. If tool_name is None, clear all tool caches."""
+    prefix = f"tool:{tool_name}:" if tool_name else "tool:"
+    return cache_delete_prefix(prefix)
 
 
 def invalidate_user_cache(user_id: str) -> int:

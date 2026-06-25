@@ -205,6 +205,15 @@ async def execute_enrichment(run_id: UUID) -> None:
 
             await db.commit()
 
+            # Emit event bus event for cross-service reactions
+            from app.events.event_bus import bus, Events
+            await bus.emit(Events.CONTACT_ENRICHED, {
+                "user_id": str(run.user_id),
+                "tracking_list_id": str(tracking_list.id),
+                "company_name": tracking_list.name,
+                "contacts_found": total_contacts,
+            })
+
         except Exception as e:
             logger.error(f"Enrichment run {run_id} failed: {e}", exc_info=True)
             # Use a fresh session for error recovery — the original may be broken

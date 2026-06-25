@@ -7,7 +7,7 @@ import {
   ArrowLeftOutlined, ReloadOutlined, UnorderedListOutlined, AppstoreOutlined,
   UploadOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
   UserOutlined, CloseCircleOutlined, SearchOutlined, FilterOutlined,
-  LoadingOutlined, CheckCircleOutlined, ExperimentOutlined,
+  LoadingOutlined, CheckCircleOutlined, ExperimentOutlined, ClockCircleOutlined,
 } from '@ant-design/icons';
 import { PillTabs, Badge, EmptyState, SourceBadge, KpiStrip } from '../components/ui';
 import {
@@ -21,6 +21,7 @@ import {
 } from '../api/trackingApi';
 import { listBatches, dismissBatch, type IngestBatchSummary } from '../api/ingestApi';
 import SignalHintsDrawer from '../components/SignalHintsDrawer';
+import MonitoringConfigDrawer from '../components/MonitoringConfigDrawer';
 import KanbanBoard from '../components/KanbanBoard';
 import {
   TrackingList, TrackingListMember, SignalHints,
@@ -53,6 +54,7 @@ const TrackingListDetailPage: React.FC = () => {
   const [detectingSignals, setDetectingSignals] = useState(false);
   const [enrichingContacts, setEnrichingContacts] = useState(false);
   const [hintsDrawerOpen, setHintsDrawerOpen] = useState(false);
+  const [monitoringDrawerOpen, setMonitoringDrawerOpen] = useState(false);
   const [detectionRunId, setDetectionRunId] = useState<string | null>(null);
   const [detectionProgress, setDetectionProgress] = useState(0);
   const [detectionCompany, setDetectionCompany] = useState<string>('');
@@ -611,21 +613,18 @@ const TrackingListDetailPage: React.FC = () => {
                   }`}>
                     {isActive ? 'Evaluating...' : 'View Results'}
                   </span>
-                  {!isActive && (
-                    <button
-                      title="Dismiss"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        dismissBatch(b.batch_id).then(() => {
-                          setActiveBatches((prev) => prev.filter((x) => x.batch_id !== b.batch_id));
-                        }).catch(() => message.error('Failed to dismiss'));
-                      }}
-                      className="w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors"
-                    >
-                      <CloseCircleOutlined style={{ fontSize: 12 }} />
-                    </button>
-                  )}
-                  {isActive && <ExperimentOutlined className="text-gray-400 text-xs" />}
+                  <button
+                    title="Dismiss"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismissBatch(b.batch_id).then(() => {
+                        setActiveBatches((prev) => prev.filter((x) => x.batch_id !== b.batch_id));
+                      }).catch(() => message.error('Failed to dismiss'));
+                    }}
+                    className="w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors"
+                  >
+                    <CloseCircleOutlined style={{ fontSize: 12 }} />
+                  </button>
                 </div>
               </div>
             );
@@ -658,6 +657,18 @@ const TrackingListDetailPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Tooltip title="Configure automatic monitoring schedule">
+            <Button
+              icon={<ClockCircleOutlined />}
+              onClick={() => setMonitoringDrawerOpen(true)}
+              className="!rounded-md"
+            >
+              Schedule
+              {list?.monitoring_config?.enabled && (
+                <span className="ml-1.5 w-2 h-2 rounded-full bg-green-500 inline-block" />
+              )}
+            </Button>
+          </Tooltip>
           <Tooltip title="Configure budget/urgency signals and target roles">
             <Button
               icon={<SettingOutlined />}
@@ -1026,6 +1037,22 @@ const TrackingListDetailPage: React.FC = () => {
           hints={list.signal_hints || {}}
           onSaved={(newHints) => {
             setList({ ...list, signal_hints: newHints });
+          }}
+        />
+      )}
+
+      {/* Monitoring Config Drawer */}
+      {list && (
+        <MonitoringConfigDrawer
+          open={monitoringDrawerOpen}
+          onClose={() => setMonitoringDrawerOpen(false)}
+          listId={listId!}
+          config={list.monitoring_config || {}}
+          signalHints={list.signal_hints}
+          lastMonitoredAt={list.last_monitored_at}
+          nextMonitorDue={(list as any).next_monitor_due ?? null}
+          onSaved={(newConfig, nextDue) => {
+            setList({ ...list, monitoring_config: newConfig });
           }}
         />
       )}

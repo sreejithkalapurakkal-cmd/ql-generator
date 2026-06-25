@@ -34,7 +34,7 @@ async def unread_count(
     return {"unread_count": count}
 
 
-@router.get("/")
+@router.get("")
 async def list_notifications(
     unread_only: bool = Query(False),
     limit: int = Query(30, ge=1, le=100),

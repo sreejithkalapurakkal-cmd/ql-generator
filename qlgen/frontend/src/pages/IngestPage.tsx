@@ -340,25 +340,23 @@ const IngestPage: React.FC = () => {
                     <Tag color={isActive ? 'purple' : 'green'} style={{ margin: 0, fontSize: 11 }}>
                       {isActive ? 'In Progress' : 'Completed'}
                     </Tag>
-                    {!isActive && (
-                      <button
-                        title="Dismiss"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          dismissBatch(b.batch_id).then(() => {
-                            setRecentBatches((prev) => prev.filter((x) => x.batch_id !== b.batch_id));
-                          }).catch(() => message.error('Failed to dismiss batch'));
-                        }}
-                        style={{
-                          background: 'none', border: 'none', cursor: 'pointer', padding: 2,
-                          color: '#999', display: 'flex', alignItems: 'center',
-                        }}
-                        onMouseOver={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#666'; }}
-                        onMouseOut={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#999'; }}
-                      >
-                        <CloseOutlined style={{ fontSize: 12 }} />
-                      </button>
-                    )}
+                    <button
+                      title="Dismiss"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismissBatch(b.batch_id).then(() => {
+                          setRecentBatches((prev) => prev.filter((x) => x.batch_id !== b.batch_id));
+                        }).catch(() => message.error('Failed to dismiss batch'));
+                      }}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 2,
+                        color: '#999', display: 'flex', alignItems: 'center',
+                      }}
+                      onMouseOver={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#666'; }}
+                      onMouseOut={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#999'; }}
+                    >
+                      <CloseOutlined style={{ fontSize: 12 }} />
+                    </button>
                   </div>
                 </div>
               );

@@ -71,7 +71,7 @@ def _serialize_rule(rule) -> dict:
 # CRUD endpoints
 # ──────────────────────────────────────────────────────────────────
 
-@router.get("/")
+@router.get("")
 async def list_rules(
     tracking_list_id: Optional[str] = Query(None),
     active_only: bool = Query(False),
@@ -86,7 +86,7 @@ async def list_rules(
     }
 
 
-@router.post("/")
+@router.post("")
 async def create(
     request: CreateRuleRequest,
     db: AsyncSession = Depends(get_db),

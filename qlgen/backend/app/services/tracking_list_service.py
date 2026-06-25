@@ -267,6 +267,7 @@ async def get_list_members(
                 SignalEvent.company_kb_id == kb.id,
                 SignalEvent.is_archived == False,
                 SignalEvent.is_dismissed == False,
+                SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
             )
             .order_by(sa_func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at).desc())
             .limit(1)

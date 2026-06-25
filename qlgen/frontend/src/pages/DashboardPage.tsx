@@ -325,7 +325,17 @@ const DashboardPage: React.FC = () => {
       <div style={{ marginBottom: 24 }}>
         <div className="section-label">Overview</div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 className="page-title">Dashboard</h1>
+          <h1 className="page-title">
+            {(() => {
+              const hour = new Date().getHours();
+              const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+              const firstName = authUser?.name?.split(' ')[0] || '';
+              const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+              return firstName
+                ? `${greeting}, ${firstName} \u2014 ${dateStr}`
+                : `${greeting} \u2014 ${dateStr}`;
+            })()}
+          </h1>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/icp/new')}>
             New Search
           </Button>

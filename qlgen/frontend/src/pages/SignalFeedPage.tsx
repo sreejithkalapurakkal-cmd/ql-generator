@@ -1,15 +1,24 @@
-import React, { useEffect, useState } from 'react';
-import { Select, Spin, Tooltip, Popover, message } from 'antd';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Select, Spin, Tooltip, Popover, message, Input, DatePicker } from 'antd';
 import {
   ReloadOutlined, EyeInvisibleOutlined, ThunderboltOutlined,
   ClockCircleOutlined, StarOutlined, StarFilled, WarningOutlined,
+  SearchOutlined, CheckSquareOutlined, CloseCircleOutlined,
+  FileTextOutlined, CheckOutlined, LinkOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { PillTabs, Badge, EmptyState, SourceBadge } from '../components/ui';
+import { PillTabs, Badge, Banner, EmptyState, SourceBadge } from '../components/ui';
 import SignalDetailPane from '../components/SignalDetailPane';
-import { useSignalFeed, useSaveSignal, useUnsaveSignal, useDismissSignal, useSnoozeSignal } from '../hooks/useSignalQueries';
+import {
+  useSignalFeed, useSaveSignal, useUnsaveSignal, useDismissSignal,
+  useSnoozeSignal, useBulkDismiss, useBulkSave, useBulkSnooze,
+  useCorrelations,
+} from '../hooks/useSignalQueries';
 import { SIGNAL_TYPE_LABELS, type SignalFeedTab } from '../types';
 import { getSignalFreshness, FRESHNESS_DESCRIPTIONS } from '../utils/signalFreshness';
+import type { Dayjs } from 'dayjs';
+
+const { RangePicker } = DatePicker;
 
 const PRIORITY_DOT_CLS: Record<string, string> = {
   critical: 'bg-red-500',
@@ -40,21 +49,40 @@ const SignalFeedPage: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
   const [priorityFilter, setPriorityFilter] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState<SignalFeedTab>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const limit = 50;
 
-  const { data: feedData, isLoading: loading, isRefetching: refreshing, refetch, dataUpdatedAt } = useSignalFeed({
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const feedParams = useMemo(() => ({
     tab: activeTab,
     signal_type: typeFilter,
     priority: priorityFilter,
+    search: debouncedSearch || undefined,
+    date_from: dateRange?.[0]?.toISOString() || undefined,
+    date_to: dateRange?.[1]?.toISOString() || undefined,
     limit,
     offset,
-  });
+  }), [activeTab, typeFilter, priorityFilter, debouncedSearch, dateRange, offset]);
+
+  const { data: feedData, isLoading: loading, isRefetching: refreshing, refetch, dataUpdatedAt } = useSignalFeed(feedParams);
   const signals = feedData?.signals || [];
   const total = feedData?.total || 0;
   const snoozedReturnedCount = feedData?.snoozed_returned_count || 0;
+
+  // Correlations
+  const { data: correlationData } = useCorrelations();
+  const correlations = correlationData?.correlations || [];
 
   // Track last refresh time from React Query's dataUpdatedAt
   useEffect(() => {
@@ -62,13 +90,19 @@ const SignalFeedPage: React.FC = () => {
   }, [dataUpdatedAt]);
 
   // Reset offset when filters change
-  useEffect(() => { setOffset(0); }, [typeFilter, priorityFilter, activeTab]);
+  useEffect(() => { setOffset(0); }, [typeFilter, priorityFilter, activeTab, debouncedSearch, dateRange]);
+
+  // Clear selection when feed data changes
+  useEffect(() => { setSelectedIds(new Set()); }, [feedData]);
 
   // Mutation hooks
   const saveMutation = useSaveSignal();
   const unsaveMutation = useUnsaveSignal();
   const dismissMutation = useDismissSignal();
   const snoozeMutation = useSnoozeSignal();
+  const bulkDismissMutation = useBulkDismiss();
+  const bulkSaveMutation = useBulkSave();
+  const bulkSnoozeMutation = useBulkSnooze();
 
   const handleDismiss = async (signalId: string) => {
     try {
@@ -109,11 +143,67 @@ const SignalFeedPage: React.FC = () => {
     }
   };
 
+  // Bulk actions
+  const handleBulkDismiss = async () => {
+    const ids = [...selectedIds];
+    try {
+      await bulkDismissMutation.mutateAsync(ids);
+      setSelectedIds(new Set());
+      if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+      message.success(`${ids.length} signal${ids.length > 1 ? 's' : ''} dismissed`);
+    } catch {
+      message.error('Failed to dismiss signals');
+    }
+  };
+
+  const handleBulkSave = async () => {
+    const ids = [...selectedIds];
+    try {
+      await bulkSaveMutation.mutateAsync(ids);
+      setSelectedIds(new Set());
+      message.success(`${ids.length} signal${ids.length > 1 ? 's' : ''} saved`);
+    } catch {
+      message.error('Failed to save signals');
+    }
+  };
+
+  const handleBulkSnooze = async (hours: number) => {
+    const ids = [...selectedIds];
+    try {
+      await bulkSnoozeMutation.mutateAsync({ signalIds: ids, hours });
+      setSelectedIds(new Set());
+      if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+      const label = SNOOZE_OPTIONS.find((o) => o.hours === hours)?.label || `${hours}h`;
+      message.success(`${ids.length} signal${ids.length > 1 ? 's' : ''} snoozed for ${label}`);
+    } catch {
+      message.error('Failed to snooze signals');
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === signals.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(signals.map(s => s.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const signalTypeOptions = Object.entries(SIGNAL_TYPE_LABELS).map(([k, v]) => ({
     value: k, label: v,
   }));
 
   const selectedSignal = signals.find((s) => s.id === selectedId) || null;
+
+  const hasActiveFilters = !!(debouncedSearch || dateRange || typeFilter || priorityFilter);
 
   // Time since last refresh
   const [timeSinceRefresh, setTimeSinceRefresh] = useState('just now');
@@ -186,6 +276,44 @@ const SignalFeedPage: React.FC = () => {
         </div>
       )}
 
+      {/* Correlation insights */}
+      {correlations.length > 0 && (
+        <div className="mb-4 space-y-2">
+          <div className="flex items-center gap-1.5 mb-1">
+            <LinkOutlined className="text-brand text-xs" />
+            <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Signal Correlations</span>
+          </div>
+          {correlations.slice(0, 3).map((corr) => (
+            <div
+              key={corr.id}
+              className="flex items-start gap-3 px-4 py-3 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200/50 rounded-lg"
+            >
+              <div className="w-8 h-8 rounded-lg bg-brand/10 flex items-center justify-center shrink-0 mt-0.5">
+                <ThunderboltOutlined className="text-brand text-sm" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-semibold text-brand">{corr.company_name}</span>
+                  {corr.domain && <span className="text-[10px] text-gray-400">{corr.domain}</span>}
+                  {corr.confidence != null && (
+                    <Badge variant="count" className="text-[10px]">
+                      {Math.round(corr.confidence * 100)}% confidence
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-gray-700 leading-snug">{corr.narrative}</p>
+                {corr.narrative_detail && (
+                  <p className="text-xs text-gray-500 mt-1">{corr.narrative_detail}</p>
+                )}
+                <span className="text-[10px] text-gray-400 mt-1 inline-block">
+                  {corr.created_at ? new Date(corr.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Tab filters */}
       <div className="flex items-center gap-1.5 mb-4">
         {TAB_KEYS.map((tab) => (
@@ -209,6 +337,15 @@ const SignalFeedPage: React.FC = () => {
           <span className="text-xs text-gray-400 flex items-center gap-1">
             <ThunderboltOutlined /> Filter:
           </span>
+          <Input
+            placeholder="Search signals..."
+            prefix={<SearchOutlined className="text-gray-400" />}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            allowClear
+            size="small"
+            style={{ width: 200 }}
+          />
           <Select
             placeholder="All signal types"
             value={typeFilter}
@@ -232,6 +369,27 @@ const SignalFeedPage: React.FC = () => {
               { value: 'low', label: 'Low' },
             ]}
           />
+          <RangePicker
+            size="small"
+            style={{ width: 240 }}
+            onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null] | null)}
+            value={dateRange}
+            allowClear
+            placeholder={['From date', 'To date']}
+          />
+          {hasActiveFilters && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setTypeFilter(undefined);
+                setPriorityFilter(undefined);
+                setDateRange(null);
+              }}
+              className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+            >
+              <CloseCircleOutlined className="text-[10px]" /> Clear all
+            </button>
+          )}
           {total > 0 && (
             <span className="ml-auto text-xs text-gray-400">
               {total} signal{total !== 1 ? 's' : ''}
@@ -239,6 +397,65 @@ const SignalFeedPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* EU coverage notice */}
+      <Banner
+        type="info"
+        dismissible
+        storageKey="eu-coverage-notice"
+        message="Some EU-based accounts may have limited contact data due to GDPR compliance requirements."
+        className="mb-4"
+      />
+
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 mb-4 bg-brand-bg border border-brand-light/30 rounded-lg animate-fadeIn">
+          <span className="text-xs font-semibold text-brand">
+            {selectedIds.size} selected
+          </span>
+          <div className="h-4 w-px bg-gray-200" />
+          <button
+            onClick={handleBulkSave}
+            className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-brand transition-colors"
+          >
+            <StarOutlined className="text-[11px]" /> Save
+          </button>
+          <Popover
+            content={
+              <div className="space-y-1 min-w-[130px]">
+                <p className="text-xs font-semibold text-gray-500 mb-2">Snooze for...</p>
+                {SNOOZE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.hours}
+                    onClick={() => handleBulkSnooze(opt.hours)}
+                    className="block w-full text-left text-sm px-2.5 py-1.5 rounded-md hover:bg-gray-100 text-gray-700 transition-colors"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            }
+            trigger="click"
+            placement="bottomLeft"
+          >
+            <button className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-brand transition-colors">
+              <ClockCircleOutlined className="text-[11px]" /> Snooze
+            </button>
+          </Popover>
+          <button
+            onClick={handleBulkDismiss}
+            className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-red-500 transition-colors"
+          >
+            <EyeInvisibleOutlined className="text-[11px]" /> Dismiss
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="ml-auto text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {/* Master-detail layout */}
       <div className={`flex transition-all ${selectedSignal ? 'gap-5' : 'gap-0'}`}>
@@ -250,11 +467,13 @@ const SignalFeedPage: React.FC = () => {
             <div className="bg-white border border-gray-200 rounded-lg">
               <EmptyState
                 icon={<ThunderboltOutlined />}
-                title={activeTab === 'saved' ? 'No saved signals' : 'No signals yet'}
+                title={activeTab === 'saved' ? 'No saved signals' : debouncedSearch ? 'No matching signals' : 'No signals yet'}
                 description={
                   activeTab === 'saved'
                     ? 'Save signals by clicking the star icon to bookmark them for later.'
-                    : 'Signals will appear here when you detect them for tracked companies.'
+                    : debouncedSearch
+                      ? `No signals found matching "${debouncedSearch}". Try different keywords.`
+                      : 'Signals will appear here when you detect them for tracked companies.'
                 }
                 className="py-16"
               />
@@ -262,12 +481,39 @@ const SignalFeedPage: React.FC = () => {
           ) : (
             <>
               <div className="bg-white border border-gray-200 rounded-lg overflow-hidden" role="feed">
+                {/* Select all header */}
+                <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 bg-gray-50/50">
+                  <button
+                    onClick={toggleSelectAll}
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                      selectedIds.size === signals.length && signals.length > 0
+                        ? 'bg-brand border-brand text-white'
+                        : selectedIds.size > 0
+                          ? 'bg-brand/20 border-brand/50 text-brand'
+                          : 'border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    {selectedIds.size > 0 && (
+                      selectedIds.size === signals.length
+                        ? <CheckOutlined className="text-[8px]" />
+                        : <span className="block w-1.5 h-0.5 bg-brand rounded" />
+                    )}
+                  </button>
+                  <span className="text-[11px] text-gray-400">
+                    {selectedIds.size > 0
+                      ? `${selectedIds.size} of ${signals.length} selected`
+                      : 'Select all'}
+                  </span>
+                </div>
+
                 {signals.map((signal) => {
                   const dotCls = PRIORITY_DOT_CLS[signal.priority] || 'bg-gray-300';
                   const isSelected = signal.id === selectedId;
+                  const isChecked = selectedIds.has(signal.id);
                   const freshness = getSignalFreshness(signal.evidence_date, signal.detected_at || signal.created_at);
                   const isStale = freshness.days >= STALE_THRESHOLD_DAYS;
                   const isSaved = signal.is_saved ?? false;
+                  const hasNotes = !!signal.notes;
 
                   return (
                     <div
@@ -276,7 +522,9 @@ const SignalFeedPage: React.FC = () => {
                       className={`group relative flex gap-3.5 px-4 py-3.5 border-b border-gray-100 cursor-pointer transition-colors ${
                         isSelected
                           ? 'bg-brand-pale'
-                          : 'hover:bg-gray-50'
+                          : isChecked
+                            ? 'bg-blue-50/50'
+                            : 'hover:bg-gray-50'
                       }`}
                       style={{
                         borderLeft: isSelected
@@ -284,9 +532,19 @@ const SignalFeedPage: React.FC = () => {
                           : `3px solid ${freshness.color}`,
                       }}
                     >
-                      {/* Confidence/priority dot */}
+                      {/* Checkbox */}
                       <div className="flex flex-col items-center pt-1.5 shrink-0">
-                        <div className={`w-2 h-2 rounded-full ${dotCls}`} />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleSelect(signal.id); }}
+                          className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                            isChecked
+                              ? 'bg-brand border-brand text-white'
+                              : 'border-gray-300 group-hover:border-gray-400'
+                          }`}
+                        >
+                          {isChecked && <CheckOutlined className="text-[8px]" />}
+                        </button>
+                        <div className={`w-2 h-2 rounded-full mt-1.5 ${dotCls}`} />
                       </div>
 
                       {/* Content */}
@@ -309,6 +567,20 @@ const SignalFeedPage: React.FC = () => {
                           </Tooltip>
                           {isSaved && (
                             <StarFilled className="text-amber-400 text-[11px]" />
+                          )}
+                          {signal.is_acted_on && (
+                            <Tooltip title="Outreach drafted for this signal">
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                                <CheckSquareOutlined className="text-[9px]" /> Acted
+                              </span>
+                            </Tooltip>
+                          )}
+                          {hasNotes && (
+                            <Tooltip title="Has notes">
+                              <span className="inline-flex items-center text-[10px] font-medium text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded-full">
+                                <FileTextOutlined className="text-[9px] mr-0.5" /> Note
+                              </span>
+                            </Tooltip>
                           )}
                           {isStale && (
                             <Tooltip title="This signal is over 30 days old and may be outdated">

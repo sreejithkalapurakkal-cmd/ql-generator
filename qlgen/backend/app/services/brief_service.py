@@ -70,6 +70,7 @@ async def generate_structured_brief(
             SignalEvent.company_kb_id == company_kb_id,
             SignalEvent.is_archived.is_(False),
             SignalEvent.is_dismissed.is_(False),
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         )
         .order_by(SignalEvent.created_at.desc())
         .limit(15)
@@ -127,6 +128,15 @@ async def generate_structured_brief(
     await db.refresh(revision)
 
     logger.info(f"Brief v{next_version} generated for {kb.canonical_name} ({word_count} words)")
+
+    # Emit event for cross-service reactions (notifications, cache invalidation)
+    from app.events.event_bus import bus, Events
+    await bus.emit(Events.BRIEF_GENERATED, {
+        "company_kb_id": str(company_kb_id),
+        "company_name": kb.canonical_name,
+        "version": next_version,
+    })
+
     return revision
 
 

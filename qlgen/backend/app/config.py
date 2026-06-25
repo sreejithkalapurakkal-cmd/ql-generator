@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:3000/auth/callback"
     ALLOWED_EMAIL_DOMAIN: str = "gadgeon.com"
 
+    # Monitoring scheduler
+    MONITORING_CHECK_INTERVAL_HOURS: int = 4
+    MONITORING_MAX_CONCURRENT_LISTS: int = 3
+    MONITORING_STAGGER_SECONDS: int = 120
+
     # JWT
     JWT_SECRET_KEY: str = "change-me-in-production"
     JWT_ALGORITHM: str = "HS256"

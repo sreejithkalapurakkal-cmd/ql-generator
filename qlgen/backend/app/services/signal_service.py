@@ -184,7 +184,7 @@ async def detect_signals_for_company(
             detected = await _detect_single_signal(
                 signal_type, company_name, domain, kb,
             )
-            saved = await _save_signals(db, company_kb_id, signal_type, detected, company_name)
+            saved = await _save_signals(db, company_kb_id, signal_type, detected, company_name, domain)
             await _emit("tool_result", {
                 "tool": signal_type,
                 "label": label,
@@ -220,7 +220,7 @@ async def detect_signals_for_company(
         })
         try:
             detected = await _detect_hint_signal(company_name, domain, hint, "budget_signal")
-            saved = await _save_signals(db, company_kb_id, "budget_signal", detected, company_name)
+            saved = await _save_signals(db, company_kb_id, "budget_signal", detected, company_name, domain)
             await _emit("tool_result", {
                 "tool": "budget_signal",
                 "label": hint,
@@ -248,7 +248,7 @@ async def detect_signals_for_company(
         })
         try:
             detected = await _detect_hint_signal(company_name, domain, hint, "urgency_signal")
-            saved = await _save_signals(db, company_kb_id, "urgency_signal", detected, company_name)
+            saved = await _save_signals(db, company_kb_id, "urgency_signal", detected, company_name, domain)
             await _emit("tool_result", {
                 "tool": "urgency_signal",
                 "label": hint,
@@ -276,7 +276,7 @@ async def detect_signals_for_company(
         })
         try:
             detected = await _detect_hint_signal(company_name, domain, hint, "custom_signal")
-            saved = await _save_signals(db, company_kb_id, "custom_signal", detected, company_name)
+            saved = await _save_signals(db, company_kb_id, "custom_signal", detected, company_name, domain)
             await _emit("tool_result", {
                 "tool": "custom_signal",
                 "label": hint,
@@ -379,7 +379,7 @@ async def detect_signals_for_company_streaming(
                             signal_type, company_name, domain, kb,
                         )
                     saved = await _save_signals(
-                        db, company_kb_id, signal_type, detected, company_name,
+                        db, company_kb_id, signal_type, detected, company_name, domain,
                     )
                     new_signals.extend(saved)
                 except Exception as e:
@@ -440,11 +440,19 @@ async def _save_signals(
     signal_type: str,
     detected: list[dict],
     company_name: str,
+    domain: str = "",
 ) -> list[SignalEvent]:
-    """Deduplicate and save detected signals. Returns new SignalEvent records."""
-    saved = []
+    """Deduplicate, validate relevance, and save detected signals.
+
+    Returns only the VISIBLE new SignalEvents (relevant or not-yet-verified).
+    Signals the LLM judges irrelevant to this company are still persisted
+    (with is_relevant=False) so they are deduped in future runs and auditable,
+    but they are excluded from the return value so they are never emitted,
+    correlated, or counted as surfaced signals.
+    """
+    # Pass 1: dedup — collect candidates not already stored in the last 7 days.
+    candidates: list[dict] = []
     for sig_data in detected:
-        # Dedup: check for same type + similar subtype in last 7 days
         subtype = sig_data.get("subtype", "")
         existing = await db.execute(
             select(SignalEvent).where(
@@ -457,7 +465,20 @@ async def _save_signals(
         )
         if existing.scalar_one_or_none():
             continue
+        candidates.append(sig_data)
 
+    if not candidates:
+        return []
+
+    # Pass 2: LLM relevance verification (batched per company, fail-open).
+    from app.services.signal_relevance_service import verify_signal_relevance
+    verdicts = await verify_signal_relevance(company_name, domain, candidates)
+
+    # Pass 3: persist every candidate with its verdict; surface only the visible ones.
+    from app.services.confidence_scorer import score_inline
+    checked_at = datetime.now(timezone.utc)
+    saved = []
+    for sig_data, verdict in zip(candidates, verdicts):
         config = SIGNAL_CONFIG.get(signal_type, {})
         cold_days = config.get("cold_days", 30)
 
@@ -468,14 +489,14 @@ async def _save_signals(
         # Try explicit field first, then parse from evidence/article metadata.
         evidence_date = _extract_evidence_date(sig_data)
 
-        # Compute confidence score
-        from app.services.confidence_scorer import score_inline
+        # Compute confidence score (source credibility — distinct from relevance)
         confidence_label = score_inline(
             source_tool=sig_data.get("source_tool"),
             evidence=sig_data.get("evidence"),
             evidence_date=evidence_date,
         )
 
+        is_relevant = verdict.get("relevant")  # True / False / None (unverified)
         signal = SignalEvent(
             company_kb_id=company_kb_id,
             signal_type=signal_type,
@@ -493,9 +514,16 @@ async def _save_signals(
             detected_at=datetime.now(timezone.utc),
             evidence_date=evidence_date,
             expires_at=datetime.now(timezone.utc) + timedelta(days=cold_days),
+            custom_rule_id=sig_data.get("custom_rule_id"),
+            custom_rule_name=sig_data.get("custom_rule_name"),
+            is_relevant=is_relevant,
+            relevance_reason=verdict.get("reason"),
+            relevance_checked_at=checked_at,
         )
         db.add(signal)
-        saved.append(signal)
+        # Persist irrelevant signals (dedup/audit) but do not surface them.
+        if is_relevant is not False:
+            saved.append(signal)
     return saved
 
 
@@ -1096,6 +1124,7 @@ async def recompute_signal_heat_for_company(
             SignalEvent.company_kb_id == company_kb_id,
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # don't let irrelevant signals inflate heat
         )
     )
     signals = list(result.scalars().all())
@@ -1132,6 +1161,7 @@ async def get_signals_for_company(
         query = query.where(
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         )
     # Sort by evidence_date (actual event time), falling back to detected_at
     query = query.order_by(
@@ -1168,6 +1198,10 @@ async def get_signal_feed(
     signal_type: str | None = None,
     priority: str | None = None,
     tab: str | None = None,
+    search: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    company_kb_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[dict], int, int]:
@@ -1175,6 +1209,10 @@ async def get_signal_feed(
 
     Args:
         tab: Feed tab filter — "all" (default), "today", "week", "saved"
+        search: Full-text search across signal title, summary, and company name
+        date_from: Filter signals from this date
+        date_to: Filter signals up to this date
+        company_kb_id: Filter to a single company
 
     Returns:
         (feed_items, total_count, snoozed_returned_count)
@@ -1183,17 +1221,26 @@ async def get_signal_feed(
     if not kb_ids:
         return [], 0, 0
 
+    # If filtering to a specific company, validate it's in the user's tracking lists
+    if company_kb_id:
+        if company_kb_id not in kb_ids:
+            return [], 0, 0
+        kb_ids = [company_kb_id]
+
     # First, unsnooze any returned signals
     returned = await unsnooze_returned_signals(db)
     snoozed_returned = await get_snoozed_returned_count(db, kb_ids) + returned
 
     # Base filters
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     base_filters = [
         SignalEvent.company_kb_id.in_(kb_ids),
         SignalEvent.is_archived == False,
         SignalEvent.is_dismissed == False,
         SignalEvent.is_snoozed == False,
+        # Hide signals the relevance validator judged irrelevant (False).
+        # NULL (not yet checked) and True remain visible.
+        SignalEvent.is_relevant.isnot(False),
     ]
 
     # Tab-specific filters
@@ -1211,6 +1258,16 @@ async def get_signal_feed(
     elif tab == "saved":
         base_filters.append(SignalEvent.is_saved == True)
 
+    # Date range filters (override tab when present)
+    if date_from:
+        base_filters.append(
+            func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at) >= date_from
+        )
+    if date_to:
+        base_filters.append(
+            func.coalesce(SignalEvent.evidence_date, SignalEvent.detected_at) <= date_to
+        )
+
     count_query = select(func.count(SignalEvent.id)).where(*base_filters)
     query = (
         select(SignalEvent, CompanyKnowledgeBase.canonical_name, CompanyKnowledgeBase.normalized_domain)
@@ -1224,6 +1281,26 @@ async def get_signal_feed(
     if priority:
         query = query.where(SignalEvent.priority == priority)
         count_query = count_query.where(SignalEvent.priority == priority)
+
+    # Full-text search across title, summary, and company name
+    if search:
+        search_term = f"%{search}%"
+        search_filter = or_(
+            SignalEvent.title.ilike(search_term),
+            SignalEvent.summary.ilike(search_term),
+            CompanyKnowledgeBase.canonical_name.ilike(search_term),
+        )
+        query = query.where(search_filter)
+        # For count query, we need the join too
+        count_query = (
+            select(func.count(SignalEvent.id))
+            .join(CompanyKnowledgeBase, SignalEvent.company_kb_id == CompanyKnowledgeBase.id)
+            .where(*base_filters, search_filter)
+        )
+        if signal_type:
+            count_query = count_query.where(SignalEvent.signal_type == signal_type)
+        if priority:
+            count_query = count_query.where(SignalEvent.priority == priority)
 
     total = (await db.execute(count_query)).scalar() or 0
 
@@ -1251,6 +1328,8 @@ async def get_signal_feed(
             "source_url": signal.source_url,
             "source_tool": signal.source_tool,
             "is_saved": signal.is_saved,
+            "is_acted_on": signal.is_acted_on,
+            "notes": signal.notes,
             "detected_at": signal.detected_at.isoformat() if signal.detected_at else None,
             "evidence_date": signal.evidence_date.isoformat() if signal.evidence_date else None,
             "created_at": signal.created_at.isoformat() if signal.created_at else None,
@@ -1293,6 +1372,7 @@ async def get_dashboard_signal_stats(
         SignalEvent.company_kb_id.in_(kb_ids),
         SignalEvent.is_archived == False,
         SignalEvent.is_dismissed == False,
+        SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
     ]
 
     # Total active
@@ -1502,3 +1582,38 @@ async def archive_expired_signals(db: AsyncSession) -> int:
     )
     await db.flush()
     return result.rowcount
+
+
+# ──────────────────────────────────────────────────────────────────
+# Bulk signal operations
+# ──────────────────────────────────────────────────────────────────
+
+async def _bulk_update_signals(db: AsyncSession, signal_ids: list[UUID], **values) -> int:
+    if not signal_ids:
+        return 0
+    result = await db.execute(
+        update(SignalEvent)
+        .where(SignalEvent.id.in_(signal_ids))
+        .values(**values)
+    )
+    await db.flush()
+    return result.rowcount
+
+
+async def bulk_dismiss_signals(db: AsyncSession, signal_ids: list[UUID]) -> int:
+    return await _bulk_update_signals(db, signal_ids, is_dismissed=True)
+
+
+async def bulk_save_signals(db: AsyncSession, signal_ids: list[UUID]) -> int:
+    return await _bulk_update_signals(
+        db, signal_ids,
+        is_saved=True, saved_at=datetime.now(timezone.utc),
+    )
+
+
+async def bulk_snooze_signals(db: AsyncSession, signal_ids: list[UUID], duration_hours: int) -> int:
+    now = datetime.now(timezone.utc)
+    return await _bulk_update_signals(
+        db, signal_ids,
+        is_snoozed=True, snoozed_at=now, snoozed_until=now + timedelta(hours=duration_hours),
+    )

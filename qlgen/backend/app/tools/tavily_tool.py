@@ -36,6 +36,11 @@ def tavily_search(
     Returns:
         dict with 'results' list containing title, url, content, score
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("tavily", query)
+    if cached is not None:
+        return cached
+
     settings = get_settings()
     url = f"{settings.TAVILY_BASE_URL}/search"
     payload = {
@@ -52,7 +57,9 @@ def tavily_search(
     try:
         response = httpx.post(url, json=payload, timeout=30)
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        tool_cache_set("tavily", result, query)
+        return result
     except httpx.HTTPStatusError as e:
         if e.response.status_code in RATE_LIMIT_CODES:
             return {"error": RATE_LIMIT_MSG, "rate_limited": True, "results": []}

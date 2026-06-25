@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip } from 'antd';
 
 type BadgeVariant = 'signal-type' | 'priority' | 'confidence' | 'status' | 'count' | 'default';
 
@@ -14,7 +15,14 @@ interface BadgeProps {
   className?: string;
   dot?: boolean;
   dotColor?: string;
+  showExplainer?: boolean;
 }
+
+const CONFIDENCE_EXPLAINER: Record<string, string> = {
+  high: 'Verified by multiple authoritative sources within 14 days',
+  medium: 'Supported by 1-2 sources or moderately recent evidence',
+  low: 'Single source, web-scraped, or older than 90 days',
+};
 
 const SIGNAL_TYPE_CLASSES: Record<string, string> = {
   funding: 'bg-green-50 text-green-700',
@@ -77,17 +85,22 @@ const Badge: React.FC<BadgeProps> = ({
   className = '',
   dot,
   dotColor,
+  showExplainer = false,
 }) => {
   const base = 'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium';
 
   if (variant === 'confidence' && confidence) {
     const c = CONFIDENCE_CLASSES[confidence];
-    return (
+    const badge = (
       <span className={`${base} ${c.bg} ${c.text} ${className}`}>
         <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
         {children || c.label}
       </span>
     );
+    if (showExplainer) {
+      return <Tooltip title={CONFIDENCE_EXPLAINER[confidence]}>{badge}</Tooltip>;
+    }
+    return badge;
   }
 
   if (variant === 'signal-type' && signalType) {

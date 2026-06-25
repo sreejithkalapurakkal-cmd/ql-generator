@@ -449,7 +449,10 @@ export interface SignalEvent {
   is_dismissed: boolean;
   is_saved?: boolean;
   is_snoozed?: boolean;
+  is_acted_on?: boolean;
   snoozed_until?: string | null;
+  notes?: string | null;
+  notes_updated_at?: string | null;
   created_at: string | null;
 }
 
@@ -539,6 +542,13 @@ export const SIGNAL_PRIORITY_COLORS: Record<string, string> = {
   medium: '#faad14',
   low: '#8c8c8c',
 };
+
+export const SIGNAL_ALERT_THRESHOLD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'critical', label: 'Critical only' },
+  { value: 'high', label: 'High and above' },
+  { value: 'medium', label: 'Medium and above' },
+  { value: 'low', label: 'All signals' },
+];
 
 export const DEFAULT_ICP: ICPDefinition = {
   firmographic_details: {

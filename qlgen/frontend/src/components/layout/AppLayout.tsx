@@ -35,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
       { key: '/tracking', icon: '⊙', label: 'Tracking Lists' },
       { key: '/signals/rules', icon: '⚡', label: 'Signal Rules' },
       { key: '/ingest', icon: '↑', label: 'Ingest' },
+      { key: '/settings', icon: '⚙', label: 'Settings' },
     ],
   },
   {
@@ -133,7 +134,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             borderBottom: '1px solid var(--g100, #f5f5f5)',
             flexShrink: 0,
           }}
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate('/welcome')}
         >
           <div style={{
             width: 32, height: 32, borderRadius: 8,

@@ -30,6 +30,7 @@ STAGES = [
     {"id": "executive_intel", "label": "Tracking executive changes", "weight": 15},
     {"id": "competitive_intel", "label": "Mapping competitive landscape", "weight": 15},
     {"id": "tech_stack_intel", "label": "Detecting technology stack", "weight": 10},
+    {"id": "procurement_intel", "label": "Scanning procurement activity", "weight": 10},
     {"id": "confidence_check", "label": "Verifying signal confidence", "weight": 5},
     {"id": "synthesis", "label": "Synthesizing research brief", "weight": 10},
 ]
@@ -49,7 +50,7 @@ PARALLEL_GROUPS = {
     ],
     "comprehensive": [
         ["signal_discovery", "hiring_intel", "executive_intel"],
-        ["competitive_intel", "tech_stack_intel"],
+        ["competitive_intel", "tech_stack_intel", "procurement_intel"],
         ["confidence_check"],
         ["synthesis"],
     ],
@@ -125,6 +126,13 @@ async def execute_research_job(job_id: UUID) -> None:
                     "job_type": job.job_type,
                     "depth": job.research_depth,
                 },
+            })
+
+            # Emit event bus event for cross-service reactions
+            await bus.emit(Events.RESEARCH_STARTED, {
+                "job_id": str(job_id),
+                "company_kb_id": str(job.company_kb_id),
+                "company_name": company_name,
             })
 
             # Create milestone activity event
@@ -376,10 +384,73 @@ async def _execute_stage(
         )
         return {"signals_found": len(signals), "tool_calls": 1}
 
+    elif stage_id == "procurement_intel":
+        from app.tools.procurement_intel_tool import scan_procurement_activity
+        result = await asyncio.to_thread(
+            scan_procurement_activity, kb_name, kb_domain,
+        )
+        signals_found = result.get("total_found", 0)
+        if signals_found > 0:
+            from app.services.signal_service import save_signals_from_raw
+            saved = await save_signals_from_raw(
+                db, job.company_kb_id,
+                signal_type="procurement_activity",
+                raw_signals=[{
+                    "title": s.get("title", "Procurement activity detected"),
+                    "summary": s.get("description"),
+                    "source_url": s.get("source_url"),
+                    "source_class": "procurement",
+                    "strength": result.get("signal_strength", 50),
+                    "priority": "medium",
+                } for s in result.get("procurement_signals", [])[:5]],
+            )
+            signals_found = len(saved) if saved else 0
+        return {"signals_found": signals_found, "tool_calls": 1}
+
     elif stage_id == "confidence_check":
         from app.services.confidence_scorer import score_company_signals
         scored = await score_company_signals(db, job.company_kb_id)
-        return {"signals_scored": scored, "tool_calls": 0}
+
+        # For deep/comprehensive depth, use LLM verification agent on medium-confidence signals
+        verified_count = 0
+        if job.research_depth in ("deep", "comprehensive"):
+            try:
+                from app.models.signal_event import SignalEvent
+                medium_signals = (await db.execute(
+                    select(SignalEvent).where(
+                        SignalEvent.company_kb_id == job.company_kb_id,
+                        SignalEvent.confidence == "medium",
+                        SignalEvent.is_dismissed == False,
+                    ).limit(5)
+                )).scalars().all()
+
+                if medium_signals:
+                    from app.agent.confidence_verification_agent import create_confidence_verification_agent
+                    agent = create_confidence_verification_agent()
+
+                    async def _verify(signal):
+                        prompt = (
+                            f"Verify this signal for {kb_name}:\n"
+                            f"Title: {signal.title}\n"
+                            f"Summary: {signal.summary or 'N/A'}\n"
+                            f"Source: {signal.source_url or 'N/A'}\n"
+                            f"Return JSON with verified, adjusted_confidence, and reasoning."
+                        )
+                        return await asyncio.to_thread(agent, prompt)
+
+                    results = await asyncio.gather(
+                        *(_verify(s) for s in medium_signals),
+                        return_exceptions=True,
+                    )
+                    for signal, result in zip(medium_signals, results):
+                        if isinstance(result, Exception):
+                            logger.warning(f"Confidence verification failed for signal {signal.id}: {result}")
+                        else:
+                            verified_count += 1
+            except Exception as e:
+                logger.warning(f"Confidence verification stage failed: {e}")
+
+        return {"signals_scored": scored, "signals_verified": verified_count, "tool_calls": verified_count}
 
     elif stage_id == "synthesis":
         from app.services.brief_service import generate_structured_brief

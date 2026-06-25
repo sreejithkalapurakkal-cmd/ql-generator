@@ -451,6 +451,11 @@ def find_company_executives(
         - 'methods_used': which discovery methods returned data
         - 'emails_found': total emails collected
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("find_executives", company_name, company_domain)
+    if cached is not None:
+        return cached
+
     if not target_roles:
         target_roles = DEFAULT_ROLES
 
@@ -529,7 +534,7 @@ def find_company_executives(
         f"{len(merged)} contacts via methods: {methods_used}"
     )
 
-    return {
+    result = {
         "company_name": company_name,
         "company_domain": company_domain,
         "contacts": merged[:30],
@@ -537,3 +542,5 @@ def find_company_executives(
         "methods_used": methods_used,
         "emails_found": len(set(all_emails)),
     }
+    tool_cache_set("find_executives", result, company_name, company_domain)
+    return result

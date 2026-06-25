@@ -24,6 +24,7 @@ import ResearchBriefPage from './pages/ResearchBriefPage';
 import CustomSignalRulesPage from './pages/CustomSignalRulesPage';
 import AccountsPage from './pages/AccountsPage';
 import AccountProfilePage from './pages/AccountProfilePage';
+import SettingsPage from './pages/SettingsPage';
 import { AuthProvider } from './context/AuthContext';
 import { QueryProvider } from './context/QueryProvider';
 import { PageContextProvider } from './context/PageContextProvider';
@@ -82,6 +83,7 @@ function App() {
                         <Route path="/accounts/:id" element={<AccountProfilePage />} />
                         <Route path="/signals" element={<SignalFeedPage />} />
                         <Route path="/signals/rules" element={<CustomSignalRulesPage />} />
+                        <Route path="/settings" element={<SettingsPage />} />
                         <Route path="/leads/:runId" element={<LeadsPage />} />
                         <Route path="/leads/:runId/company/:companyId" element={<CompanyDetailPage />} />
                         <Route

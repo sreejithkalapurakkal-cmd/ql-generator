@@ -121,6 +121,7 @@ async def generate_outreach_draft(
             SignalEvent.company_kb_id == company_kb_id,
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         )
         .order_by(SignalEvent.created_at.desc())
         .limit(10)

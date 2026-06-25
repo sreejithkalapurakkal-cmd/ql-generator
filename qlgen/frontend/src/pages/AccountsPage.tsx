@@ -17,7 +17,15 @@ interface Account {
   has_brief: boolean;
   open_draft_count: number;
   tags: string[];
+  icp_fit: string | null;
+  icp_score: number | null;
 }
+
+const ICP_FIT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  strong: { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Strong' },
+  moderate: { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Moderate' },
+  weak: { bg: 'bg-gray-50', text: 'text-gray-500', label: 'Weak' },
+};
 
 const STATUS_COLORS: Record<string, string> = {
   monitored: '#52c41a',
@@ -125,10 +133,11 @@ const AccountsPage: React.FC = () => {
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           {/* Header row */}
-          <div className="grid grid-cols-[2fr_1fr_1fr_80px_80px_80px_100px] gap-3 px-5 py-2.5 border-b border-gray-100 bg-gray-50">
+          <div className="grid grid-cols-[2fr_1fr_1fr_80px_80px_80px_80px_100px] gap-3 px-5 py-2.5 border-b border-gray-100 bg-gray-50">
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide">Account</span>
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide">Industry</span>
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide">Region</span>
+            <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide text-center">ICP Fit</span>
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide text-center">Signals</span>
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide text-center">Brief</span>
             <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wide text-center">Drafts</span>
@@ -140,7 +149,7 @@ const AccountsPage: React.FC = () => {
             <div
               key={account.id}
               onClick={() => navigate(`/accounts/${account.id}`)}
-              className="grid grid-cols-[2fr_1fr_1fr_80px_80px_80px_100px] gap-3 px-5 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors items-center"
+              className="grid grid-cols-[2fr_1fr_1fr_80px_80px_80px_80px_100px] gap-3 px-5 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors items-center"
             >
               {/* Account */}
               <div className="flex items-center gap-3 min-w-0">
@@ -160,6 +169,19 @@ const AccountsPage: React.FC = () => {
 
               {/* Region */}
               <span className="text-xs text-gray-600 truncate">{account.country || '—'}</span>
+
+              {/* ICP Fit */}
+              <div className="text-center">
+                {account.icp_fit && ICP_FIT_STYLES[account.icp_fit] ? (
+                  <Tooltip title={account.icp_score != null ? `Score: ${Math.round(account.icp_score)}` : undefined}>
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ICP_FIT_STYLES[account.icp_fit].bg} ${ICP_FIT_STYLES[account.icp_fit].text}`}>
+                      {ICP_FIT_STYLES[account.icp_fit].label}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <span className="text-xs text-gray-300">—</span>
+                )}
+              </div>
 
               {/* Signals */}
               <div className="text-center">

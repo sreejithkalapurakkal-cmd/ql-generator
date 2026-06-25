@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
-import { Tooltip, Popover } from 'antd';
+import React, { useState, useRef, useCallback } from 'react';
+import { Tooltip, Popover, message } from 'antd';
 import {
   CloseOutlined, EyeInvisibleOutlined, LinkOutlined,
   ClockCircleOutlined, ThunderboltOutlined, StarOutlined, StarFilled,
   MailOutlined, LinkedinOutlined, FileTextOutlined,
-  QuestionCircleOutlined,
+  QuestionCircleOutlined, EditOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { Badge, SectionLabel, SourceBadge } from './ui';
 import { useDraftDrawer } from '../context/DraftDrawerContext';
+import { updateSignalNotes } from '../api/signalApi';
 import { SIGNAL_TYPE_LABELS } from '../types';
 import { getSignalFreshness, FRESHNESS_DESCRIPTIONS } from '../utils/signalFreshness';
 
@@ -28,6 +29,8 @@ interface Signal {
   domain: string | null;
   strength?: number;
   is_saved?: boolean;
+  is_acted_on?: boolean;
+  notes?: string | null;
 }
 
 interface SignalDetailPaneProps {
@@ -68,7 +71,31 @@ const SignalDetailPane: React.FC<SignalDetailPaneProps> = ({
   const navigate = useNavigate();
   const { openDraftDrawer } = useDraftDrawer();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [notesValue, setNotesValue] = useState(signal.notes || '');
+  const [notesEditing, setNotesEditing] = useState(false);
+  const notesSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const isSaved = signal.is_saved ?? false;
+
+  // Sync notes when signal changes
+  React.useEffect(() => {
+    setNotesValue(signal.notes || '');
+    setNotesEditing(false);
+  }, [signal.id, signal.notes]);
+
+  const handleNotesChange = useCallback((value: string) => {
+    setNotesValue(value);
+    setNotesEditing(true);
+    // Auto-save after 1s of inactivity
+    if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = setTimeout(async () => {
+      try {
+        await updateSignalNotes(signal.id, value || null);
+        setNotesEditing(false);
+      } catch {
+        message.error('Failed to save notes');
+      }
+    }, 1000);
+  }, [signal.id]);
 
   const confidenceInfo = CONFIDENCE_EXPLAINER[signal.priority] || CONFIDENCE_EXPLAINER.medium;
 
@@ -277,6 +304,23 @@ const SignalDetailPane: React.FC<SignalDetailPaneProps> = ({
               </button>
             )}
           </div>
+        </div>
+
+        {/* Notes */}
+        <div>
+          <SectionLabel>
+            <span className="flex items-center gap-1">
+              <EditOutlined className="text-[10px]" /> Notes
+              {notesEditing && <span className="text-[10px] text-gray-400 font-normal ml-1">saving...</span>}
+            </span>
+          </SectionLabel>
+          <textarea
+            value={notesValue}
+            onChange={(e) => handleNotesChange(e.target.value)}
+            placeholder="Add private notes about this signal..."
+            rows={3}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:border-brand focus:ring-1 focus:ring-brand/30 outline-none transition-colors resize-y leading-relaxed text-gray-700 placeholder:text-gray-400"
+          />
         </div>
 
         {/* Outreach actions */}

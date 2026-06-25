@@ -29,6 +29,7 @@ from app.services.ingest_service import (
 )
 from app.services.tracking_list_service import add_companies_to_list
 from app.services.event_store import get_events, get_event_count, init_run
+from app.services.ingest_store import set_pending_rows, pop_pending_rows
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +98,8 @@ async def upload_file(
     )
     await db.commit()
 
-    # Store rows in memory for processing (keyed by batch_id)
-    # In production this would use Redis or a temp file
-    _pending_rows[str(batch.id)] = rows
+    # Store rows in Redis (shared across workers/tasks) until confirm
+    await set_pending_rows(str(batch.id), rows)
 
     return {
         "batch_id": str(batch.id),
@@ -140,7 +140,7 @@ async def paste_text(
     )
     await db.commit()
 
-    _pending_rows[str(batch.id)] = rows
+    await set_pending_rows(str(batch.id), rows)
 
     return {
         "batch_id": str(batch.id),
@@ -189,7 +189,7 @@ async def confirm_and_process(
     batch.status = "processing"
     await db.commit()
 
-    rows = _pending_rows.pop(str(batch_id), None)
+    rows = await pop_pending_rows(str(batch_id))
     if not rows:
         raise HTTPException(400, "Upload data expired. Please re-upload.")
 
@@ -535,11 +535,3 @@ async def add_selected_companies(
     await db.commit()
 
     return {"added": len(kb_ids), "batch_id": str(batch_id)}
-
-
-# ──────────────────────────────────────────────────────────────────
-# In-memory storage for pending upload rows
-# (Production: use Redis or temp files)
-# ──────────────────────────────────────────────────────────────────
-
-_pending_rows: dict[str, list[dict]] = {}

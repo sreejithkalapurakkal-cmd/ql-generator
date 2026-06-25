@@ -1,4 +1,5 @@
 export { default as Badge } from './Badge';
+export { default as Banner } from './Banner';
 export { default as EmptyState } from './EmptyState';
 export { default as SectionLabel } from './SectionLabel';
 export { default as PillTabs } from './PillTabs';

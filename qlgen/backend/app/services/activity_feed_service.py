@@ -87,6 +87,67 @@ async def get_activity_feed(
     return feed, total
 
 
+async def get_activity_by_job(
+    db: AsyncSession,
+    research_job_id: UUID,
+    verbosity: str = "summary",
+    category: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Get activity feed for a specific research job.
+
+    Same verbosity/category filtering as get_activity_feed but scoped to a research job.
+    """
+    base_filters = [ActivityEvent.research_job_id == research_job_id]
+
+    if verbosity == "summary":
+        base_filters.append(ActivityEvent.milestone == True)
+    elif verbosity == "detailed":
+        base_filters.append(
+            ActivityEvent.verbosity_level.in_(["summary", "detailed"])
+            | ActivityEvent.milestone == True
+        )
+
+    if category:
+        base_filters.append(ActivityEvent.event_category == category)
+
+    count_result = await db.execute(
+        select(func.count(ActivityEvent.id)).where(*base_filters)
+    )
+    total = count_result.scalar() or 0
+
+    result = await db.execute(
+        select(ActivityEvent)
+        .where(*base_filters)
+        .order_by(ActivityEvent.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    events = list(result.scalars().all())
+
+    feed = []
+    for event in events:
+        item = {
+            "id": str(event.id),
+            "event_type": event.event_type,
+            "event_category": event.event_category,
+            "narrative": event.narrative,
+            "milestone": event.milestone,
+            "confidence": event.confidence,
+            "created_at": event.created_at.isoformat() if event.created_at else None,
+        }
+        if verbosity in ("detailed", "technical"):
+            item["narrative_detail"] = event.narrative_detail
+        if verbosity == "technical":
+            item["technical_detail"] = event.technical_detail
+            item["company_kb_id"] = str(event.company_kb_id) if event.company_kb_id else None
+
+        feed.append(item)
+
+    return feed, total
+
+
 async def get_activity_stats(
     db: AsyncSession,
     company_kb_id: UUID,
@@ -119,7 +180,7 @@ async def get_activity_stats(
     )
     by_category = {row[0]: row[1] for row in cat_result.all() if row[0]}
 
-    return {
+    result = {
         "total_events": total,
         "milestones": milestones,
         "by_category": by_category,

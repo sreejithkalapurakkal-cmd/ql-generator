@@ -1,4 +1,5 @@
-import client from './client';
+import client, { API_BASE } from './client';
+import { getAccessToken } from '../context/AuthContext';
 import type { BriefRevision, OutreachDraft } from '../types';
 
 // ─── Brief Response Types ───────────────────────────────────────────────────
@@ -158,3 +159,67 @@ export const getSignalReportExportUrl = (companyKbId: string) =>
 
 export const researchCompany = (companyKbId: string) =>
   client.post<ResearchResponse>(`/briefs/research/${companyKbId}`);
+
+// ─── Async Streaming APIs (SSE) ────────────────────────────────────────────
+
+export interface StartStreamResponse {
+  run_id: string;
+  status: string;
+  company_kb_id: string;
+}
+
+/** Start async brief generation → returns run_id for SSE */
+export const startBriefGeneration = (companyKbId: string, triggerSignalId?: string) =>
+  client.post<StartStreamResponse>(`/briefs/${companyKbId}/generate/start`, {
+    trigger_signal_id: triggerSignalId || null,
+  });
+
+/** Get SSE stream URL for brief generation progress */
+export const getBriefGenerationStreamUrl = (companyKbId: string, runId: string) => {
+  const token = getAccessToken() || '';
+  return `${API_BASE}/briefs/${companyKbId}/generate/stream/${runId}?token=${token}`;
+};
+
+/** Start async outreach draft generation → returns run_id for SSE */
+export const startOutreachGeneration = (companyKbId: string, data?: {
+  contact_name?: string;
+  contact_title?: string;
+  context?: string;
+  format?: string;
+  tone?: string;
+  signal_id?: string;
+}) => client.post<StartStreamResponse>(`/briefs/outreach/${companyKbId}/start`, data || {});
+
+/** Get SSE stream URL for outreach draft generation */
+export const getOutreachStreamUrl = (companyKbId: string, runId: string) => {
+  const token = getAccessToken() || '';
+  return `${API_BASE}/briefs/outreach/${companyKbId}/stream/${runId}?token=${token}`;
+};
+
+/** Start async company research → returns run_id for SSE */
+export const startCompanyResearch = (companyKbId: string) =>
+  client.post<StartStreamResponse>(`/briefs/research/${companyKbId}/start`);
+
+/** Get SSE stream URL for company research progress */
+export const getResearchStreamUrl = (companyKbId: string, runId: string) => {
+  const token = getAccessToken() || '';
+  return `${API_BASE}/briefs/research/${companyKbId}/stream/${runId}?token=${token}`;
+};
+
+// ─── Contact Enrichment Streaming ──────────────────────────────────────────
+
+export interface ContactEnrichStartResponse {
+  status: string;
+  run_id: string;
+  company_kb_id: string;
+}
+
+/** Start async single-company contact enrichment → returns run_id for SSE */
+export const startContactEnrichment = (companyKbId: string) =>
+  client.post<ContactEnrichStartResponse>(`/contacts/${companyKbId}/enrich`);
+
+/** Get SSE stream URL for contact enrichment progress */
+export const getContactEnrichmentStreamUrl = (companyKbId: string, runId: string) => {
+  const token = getAccessToken() || '';
+  return `${API_BASE}/contacts/${companyKbId}/enrich/stream/${runId}?token=${token}`;
+};

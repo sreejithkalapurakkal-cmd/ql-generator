@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
-@router.get("/")
+@router.get("")
 async def list_accounts(
     search: Optional[str] = Query(None),
     industry: Optional[str] = Query(None),
@@ -67,6 +67,7 @@ async def list_accounts(
         .where(
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         )
         .group_by(SignalEvent.company_kb_id)
         .subquery()
@@ -143,6 +144,13 @@ async def list_accounts(
             "has_brief": kb.has_brief or False,
             "open_draft_count": kb.open_draft_count or 0,
             "tags": kb.tags or [],
+            "icp_fit": (
+                "strong" if (kb.best_icp_match_score or 0) >= 70
+                else "moderate" if (kb.best_icp_match_score or 0) >= 40
+                else "weak" if kb.best_icp_match_score is not None
+                else None
+            ),
+            "icp_score": kb.best_icp_match_score,
         })
 
     return {
@@ -173,6 +181,7 @@ async def get_account_detail(
             SignalEvent.company_kb_id == account_id,
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         )
     )
     signal_count = sig_result.scalar() or 0
@@ -183,6 +192,7 @@ async def get_account_detail(
             SignalEvent.company_kb_id == account_id,
             SignalEvent.is_archived == False,
             SignalEvent.is_dismissed == False,
+            SignalEvent.is_relevant.isnot(False),  # hide validator-rejected signals
         ).order_by(SignalEvent.created_at.desc()).limit(5)
     )
     recent_signals = [

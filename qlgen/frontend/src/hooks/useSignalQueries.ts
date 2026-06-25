@@ -5,7 +5,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getSignalFeed, getDashboardSignalStats, saveSignal, unsaveSignal,
-  snoozeSignal, dismissSignal, type SignalFeedResponse, type DashboardSignalStats,
+  snoozeSignal, dismissSignal, bulkDismissSignals, bulkSaveSignals,
+  bulkSnoozeSignals, getCorrelations,
+  type SignalFeedResponse, type DashboardSignalStats,
 } from '../api/signalApi';
 import type { SignalFeedTab } from '../types';
 
@@ -13,9 +15,13 @@ import type { SignalFeedTab } from '../types';
 
 export const signalKeys = {
   all: ['signals'] as const,
-  feed: (params: { tab?: SignalFeedTab; signal_type?: string; priority?: string; offset?: number }) =>
-    ['signals', 'feed', params] as const,
+  feed: (params: {
+    tab?: SignalFeedTab; signal_type?: string; priority?: string;
+    search?: string; date_from?: string; date_to?: string;
+    company_kb_id?: string; offset?: number;
+  }) => ['signals', 'feed', params] as const,
   dashboardStats: () => ['signals', 'dashboard-stats'] as const,
+  correlations: () => ['signals', 'correlations'] as const,
 };
 
 // ── Queries ──
@@ -24,6 +30,10 @@ export function useSignalFeed(params: {
   tab?: SignalFeedTab;
   signal_type?: string;
   priority?: string;
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  company_kb_id?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -153,5 +163,100 @@ export function useSnoozeSignal() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['signals'] });
     },
+  });
+}
+
+// ── Bulk mutations ──
+
+export function useBulkDismiss() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (signalIds: string[]) => bulkDismissSignals(signalIds),
+    onMutate: async (signalIds) => {
+      await queryClient.cancelQueries({ queryKey: ['signals', 'feed'] });
+      const idSet = new Set(signalIds);
+      queryClient.setQueriesData<SignalFeedResponse>(
+        { queryKey: ['signals', 'feed'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            signals: old.signals.filter(s => !idSet.has(s.id)),
+            total: Math.max(0, old.total - signalIds.length),
+          };
+        }
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['signals'] });
+    },
+  });
+}
+
+export function useBulkSave() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (signalIds: string[]) => bulkSaveSignals(signalIds),
+    onMutate: async (signalIds) => {
+      await queryClient.cancelQueries({ queryKey: ['signals', 'feed'] });
+      const idSet = new Set(signalIds);
+      queryClient.setQueriesData<SignalFeedResponse>(
+        { queryKey: ['signals', 'feed'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            signals: old.signals.map(s =>
+              idSet.has(s.id) ? { ...s, is_saved: true } : s
+            ),
+          };
+        }
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['signals', 'feed'] });
+    },
+  });
+}
+
+export function useBulkSnooze() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ signalIds, hours }: { signalIds: string[]; hours: number }) =>
+      bulkSnoozeSignals(signalIds, hours),
+    onMutate: async ({ signalIds }) => {
+      await queryClient.cancelQueries({ queryKey: ['signals', 'feed'] });
+      const idSet = new Set(signalIds);
+      queryClient.setQueriesData<SignalFeedResponse>(
+        { queryKey: ['signals', 'feed'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            signals: old.signals.filter(s => !idSet.has(s.id)),
+            total: Math.max(0, old.total - signalIds.length),
+          };
+        }
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['signals'] });
+    },
+  });
+}
+
+// ── Correlations ──
+
+export function useCorrelations() {
+  return useQuery({
+    queryKey: signalKeys.correlations(),
+    queryFn: async () => {
+      const res = await getCorrelations(10);
+      return res.data;
+    },
+    staleTime: 60_000,
   });
 }

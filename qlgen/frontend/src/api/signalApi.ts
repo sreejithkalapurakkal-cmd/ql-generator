@@ -69,6 +69,10 @@ export const getSignalFeed = (params?: {
   signal_type?: string;
   priority?: string;
   tab?: SignalFeedTab;
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  company_kb_id?: string;
   limit?: number;
   offset?: number;
 }) => client.get<SignalFeedResponse>('/signals/feed', { params });
@@ -118,3 +122,82 @@ export const updateAccount = (id: string, data: any) => client.patch(`/accounts/
 export const getCompanyDrafts = (companyKbId: string) => client.get(`/briefs/drafts/${companyKbId}`);
 
 export const markSignalActedOn = (signalId: string) => client.post(`/signals/${signalId}/acted-on`);
+
+// ─── Bulk actions ──────────────────────────────────────────────────
+
+export const bulkDismissSignals = (signalIds: string[]) =>
+  client.post('/signals/bulk/dismiss', { signal_ids: signalIds });
+
+export const bulkSaveSignals = (signalIds: string[]) =>
+  client.post('/signals/bulk/save', { signal_ids: signalIds });
+
+export const bulkSnoozeSignals = (signalIds: string[], durationHours: number = 24) =>
+  client.post('/signals/bulk/snooze', { signal_ids: signalIds, duration_hours: durationHours });
+
+// ─── Signal notes ──────────────────────────────────────────────────
+
+export const updateSignalNotes = (signalId: string, notes: string | null) =>
+  client.patch(`/signals/${signalId}/notes`, { notes });
+
+// ─── Monitoring configuration ─────────────────────────────────────
+
+export interface MonitoringConfigRequest {
+  enabled: boolean;
+  frequency_days: number;
+  signal_types?: string[];
+  alert_threshold: string;
+}
+
+export interface MonitoringConfigResponse {
+  list_id: string;
+  monitoring_config: MonitoringConfigRequest;
+  next_monitor_due: string | null;
+}
+
+export const configureMonitoring = (listId: string, config: MonitoringConfigRequest) =>
+  client.put<MonitoringConfigResponse>(`/signals/monitoring/${listId}`, config);
+
+export interface SignalTypeMetadata {
+  category: string;
+  half_life_days: number;
+  default_weight: number;
+}
+
+export interface FrequencyPreset {
+  key: string;
+  label: string;
+  frequency_days: number;
+  description: string;
+}
+
+export interface SignalTypesResponse {
+  signal_types: Record<string, SignalTypeMetadata>;
+  presets: FrequencyPreset[];
+}
+
+export const getSignalTypes = () =>
+  client.get<SignalTypesResponse>('/signals/signal-types');
+
+// ─── Correlations ──────────────────────────────────────────────────
+
+export interface CorrelationItem {
+  id: string;
+  company_kb_id: string;
+  company_name: string | null;
+  domain: string | null;
+  narrative: string | null;
+  narrative_detail: string | null;
+  rule_id: string | null;
+  matched_signal_ids: string[];
+  strength_boost: number | null;
+  confidence: number | null;
+  created_at: string | null;
+}
+
+export const getCorrelations = (limit?: number) =>
+  client.get<{ correlations: CorrelationItem[]; total: number }>('/signals/correlations', { params: { limit } });
+
+// ─── Heatmap ───────────────────────────────────────────────────────
+
+export const getSignalHeatmap = (days?: number) =>
+  client.get<{ days: { date: string; count: number }[] }>('/signals/heatmap', { params: { days } });

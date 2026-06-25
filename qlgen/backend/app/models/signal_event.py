@@ -40,6 +40,12 @@ class SignalEvent(Base):
     # Confidence (computed by confidence_scorer)
     confidence = Column(String(20))  # high, medium, low
 
+    # Relevance validity (LLM-verified: is this signal actually about THIS company?)
+    # None = not yet checked (treated as visible); True = relevant; False = irrelevant (hidden)
+    is_relevant = Column(Boolean)
+    relevance_reason = Column(String(500))
+    relevance_checked_at = Column(DateTime(timezone=True))
+
     # Evidence and provenance
     evidence = Column(JSONB)  # source data, URLs, raw tool output
     source_tool = Column(String(100))
@@ -49,6 +55,7 @@ class SignalEvent(Base):
     region = Column(String(100))
     research_job_id = Column(UUID(as_uuid=True))
     custom_rule_id = Column(UUID(as_uuid=True))
+    custom_rule_name = Column(String(255))
 
     # Timing
     detected_at = Column(DateTime(timezone=True), server_default=func.now())  # when qlGen discovered it
@@ -65,6 +72,10 @@ class SignalEvent(Base):
     snoozed_at = Column(DateTime(timezone=True))
     is_acted_on = Column(Boolean, default=False)
     acted_on_at = Column(DateTime(timezone=True))
+
+    # User annotations
+    notes = Column(Text)
+    notes_updated_at = Column(DateTime(timezone=True))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

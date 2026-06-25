@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Modal, Input, message, Spin } from 'antd';
-import { PlusOutlined, ThunderboltOutlined, TeamOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Button, Modal, Input, message, Spin, Tooltip } from 'antd';
+import { PlusOutlined, ThunderboltOutlined, TeamOutlined, ClockCircleOutlined, ScheduleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { PillTabs, EmptyState, Badge } from '../components/ui';
 import { getTrackingLists, createTrackingList, deleteTrackingList } from '../api/trackingApi';
 import { TrackingList } from '../types';
+import MonitoringConfigDrawer from '../components/MonitoringConfigDrawer';
 
 const TrackingListsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +15,7 @@ const TrackingListsPage: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [monitoringList, setMonitoringList] = useState<TrackingList | null>(null);
 
   const fetchLists = () => {
     setLoading(true);
@@ -167,13 +169,23 @@ const TrackingListsPage: React.FC = () => {
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={(e) => handleDelete(list.id, e)}
-                  className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-500 transition-all text-base px-1"
-                  title="Delete list"
-                >
-                  &times;
-                </button>
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <Tooltip title="Monitoring schedule">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setMonitoringList(list); }}
+                      className="text-gray-300 hover:text-brand transition-colors text-sm px-1"
+                    >
+                      <ScheduleOutlined />
+                    </button>
+                  </Tooltip>
+                  <button
+                    onClick={(e) => handleDelete(list.id, e)}
+                    className="text-gray-300 hover:text-gray-500 transition-all text-base px-1"
+                    title="Delete list"
+                  >
+                    &times;
+                  </button>
+                </div>
               </div>
 
               {/* Metrics row */}
@@ -251,6 +263,22 @@ const TrackingListsPage: React.FC = () => {
           />
         </div>
       </Modal>
+
+      {/* Monitoring Config Drawer */}
+      {monitoringList && (
+        <MonitoringConfigDrawer
+          open={!!monitoringList}
+          onClose={() => setMonitoringList(null)}
+          listId={monitoringList.id}
+          config={monitoringList.monitoring_config || {}}
+          signalHints={monitoringList.signal_hints}
+          lastMonitoredAt={monitoringList.last_monitored_at}
+          onSaved={() => {
+            setMonitoringList(null);
+            fetchLists();
+          }}
+        />
+      )}
     </div>
   );
 };

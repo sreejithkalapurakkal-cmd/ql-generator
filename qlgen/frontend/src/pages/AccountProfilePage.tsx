@@ -297,12 +297,12 @@ const AccountProfilePage: React.FC = () => {
   // ── Render: Header Card ───────────────────────────────────────────────
 
   const renderHeader = () => (
-    <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4">
-      <div className="flex items-start gap-5">
+    <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 mb-3">
+      <div className="flex items-center gap-3">
         {/* Avatar */}
         <Avatar
-          size={64}
-          className="shrink-0 bg-brand-pale text-brand text-xl font-bold"
+          size={36}
+          className="shrink-0 text-sm font-bold"
           style={{ backgroundColor: '#f0e6ff', color: '#5C2D8F' }}
         >
           {initials(account.name)}
@@ -310,54 +310,48 @@ const AccountProfilePage: React.FC = () => {
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl font-bold text-gray-900 truncate">{account.name}</h1>
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${fitCfg.bg} ${fitCfg.text}`}>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold text-gray-900 truncate">{account.name}</h1>
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${fitCfg.bg} ${fitCfg.text}`}>
               {fitCfg.label}
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusCfg.color }} />
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: statusCfg.color }} />
               {statusCfg.label}
             </span>
+            <span className="text-gray-200 mx-1">|</span>
+            <div className="flex items-center gap-3 text-xs text-gray-500">
+              {account.domain && (
+                <a
+                  href={`https://${account.domain}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-brand hover:text-brand/80 transition-colors"
+                >
+                  <GlobalOutlined className="text-[10px]" />
+                  {account.domain}
+                </a>
+              )}
+              {account.industry && (
+                <span>{account.industry}</span>
+              )}
+              {account.employee_count && (
+                <span className="flex items-center gap-1">
+                  <TeamOutlined className="text-[10px]" />
+                  {formatNumber(account.employee_count)}
+                </span>
+              )}
+              {account.country && (
+                <span>{[account.city, account.country].filter(Boolean).join(', ')}</span>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
-            {account.domain && (
-              <a
-                href={`https://${account.domain}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-brand hover:text-brand/80 transition-colors"
-              >
-                <GlobalOutlined className="text-xs" />
-                {account.domain}
-              </a>
-            )}
-            {account.industry && (
-              <span className="flex items-center gap-1">
-                <span className="text-gray-300">|</span>
-                {account.industry}
-              </span>
-            )}
-            {account.employee_count && (
-              <span className="flex items-center gap-1">
-                <TeamOutlined className="text-xs" />
-                {formatNumber(account.employee_count)} employees
-              </span>
-            )}
-            {account.country && (
-              <span className="flex items-center gap-1">
-                <span className="text-gray-300">|</span>
-                {[account.city, account.region, account.country].filter(Boolean).join(', ')}
-              </span>
-            )}
-          </div>
-
-          {/* Tags */}
+          {/* Tags — inline with meta row */}
           {account.tags && account.tags.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1 flex-wrap mt-1">
               {account.tags.map((tag) => (
-                <Tag key={tag} className="m-0 text-xs" style={{ borderRadius: 12 }}>
+                <Tag key={tag} className="m-0 text-[10px] leading-tight" style={{ borderRadius: 10, padding: '0 6px' }}>
                   {tag}
                 </Tag>
               ))}
@@ -366,8 +360,9 @@ const AccountProfilePage: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <Button
+            size="small"
             icon={<MailOutlined />}
             onClick={() =>
               openDraftDrawer({
@@ -377,15 +372,17 @@ const AccountProfilePage: React.FC = () => {
               })
             }
           >
-            Draft Email
+            Draft
           </Button>
           <Button
+            size="small"
             icon={<FileTextOutlined />}
             onClick={() => navigate(`/accounts/${id}/brief`)}
           >
-            Generate Brief
+            Brief
           </Button>
           <Button
+            size="small"
             icon={<ExperimentOutlined />}
             onClick={async () => {
               try {
@@ -420,12 +417,12 @@ const AccountProfilePage: React.FC = () => {
             { label: 'Brief Status', value: briefStatus, color: briefStatusColor },
             { label: 'Contacts', value: contacts.length },
           ]}
-          className="mb-6"
+          className="mb-4"
         />
 
         {/* Recent Signals Preview */}
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
               <ThunderboltOutlined className="text-orange-500" />
               Recent Signals
@@ -1101,13 +1098,14 @@ const AccountProfilePage: React.FC = () => {
   // ── Main Render ───────────────────────────────────────────────────────
 
   return (
-    <div className="px-10 py-8 max-w-[1200px] mx-auto">
+    <div className="px-10 py-4 max-w-[1200px] mx-auto">
       {/* Back Button */}
       <Button
         type="text"
+        size="small"
         icon={<ArrowLeftOutlined />}
         onClick={() => navigate('/accounts')}
-        className="mb-4 text-gray-500 hover:text-gray-700 -ml-2"
+        className="mb-2 text-gray-500 hover:text-gray-700 -ml-2"
       >
         Accounts
       </Button>
@@ -1124,7 +1122,7 @@ const AccountProfilePage: React.FC = () => {
           activeKey={activeTab}
           onChange={setActiveTab}
           items={tabItems}
-          className="[&_.ant-tabs-nav]:px-5 [&_.ant-tabs-nav]:mb-0 [&_.ant-tabs-content-holder]:p-5"
+          className="[&_.ant-tabs-nav]:px-5 [&_.ant-tabs-nav]:mb-0 [&_.ant-tabs-content-holder]:p-4"
         />
       </Card>
     </div>

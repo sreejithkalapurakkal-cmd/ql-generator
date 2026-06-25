@@ -52,7 +52,7 @@ def _serialize(s: CustomSignalSource) -> dict:
     }
 
 
-@router.get("/")
+@router.get("")
 async def list_sources(
     company_kb_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -67,7 +67,7 @@ async def list_sources(
     return {"sources": [_serialize(s) for s in sources], "total": len(sources)}
 
 
-@router.post("/")
+@router.post("")
 async def create_source(
     request: CreateSourceRequest,
     db: AsyncSession = Depends(get_db),

@@ -7,7 +7,9 @@ import {
   LinkOutlined,
 } from '@ant-design/icons';
 import { useDraftDrawer } from '../context/DraftDrawerContext';
-import { generateDraft, updateDraft } from '../api/briefApi';
+import { generateDraft, updateDraft, startOutreachGeneration, getOutreachStreamUrl } from '../api/briefApi';
+import { markSignalActedOn } from '../api/signalApi';
+import { useSSEStream } from '../hooks/useSSEStream';
 import client from '../api/client';
 import type { DraftFormat, DraftTone } from '../types';
 
@@ -58,6 +60,39 @@ const DraftDrawer: React.FC = () => {
   const [edited, setEdited] = useState(false);
   const [copied, setCopied] = useState(false);
   const [sentConfirm, setSentConfirm] = useState(false);
+  const [agentThought, setAgentThought] = useState('');
+
+  // SSE streaming for outreach generation
+  const outreachStream = useSSEStream({
+    terminalEvents: ['outreach_ready', 'outreach_failed'],
+    onEvent: (eventType, data) => {
+      if (eventType === 'agent_thought') {
+        setAgentThought(data.message as string || '');
+      }
+    },
+    onComplete: (eventType, data) => {
+      if (eventType === 'outreach_ready') {
+        setSubject((data.subject as string) || '');
+        setBody((data.body as string) || (data.raw_markdown as string) || '');
+        setDraftId((data.draft_id as string) || null);
+        setGenerating(false);
+        setAgentThought('');
+
+        // Auto-mark signal as acted on
+        if (options?.signalId) {
+          markSignalActedOn(options.signalId).catch(() => {});
+        }
+      } else if (eventType === 'outreach_failed') {
+        message.error((data.message as string) || 'Failed to generate draft');
+        setGenerating(false);
+        setAgentThought('');
+      }
+    },
+    onError: () => {
+      setGenerating(false);
+      setAgentThought('');
+    },
+  });
 
   // Reset form when options change
   useEffect(() => {
@@ -100,8 +135,9 @@ const DraftDrawer: React.FC = () => {
     if (!options) return;
     setGenerating(true);
     setEdited(false);
+    setAgentThought('');
     try {
-      const res = await generateDraft(options.companyKbId, {
+      const res = await startOutreachGeneration(options.companyKbId, {
         contact_name: contactName || options.contactName || undefined,
         contact_title: contactTitle || options.contactTitle || undefined,
         format,
@@ -111,15 +147,13 @@ const DraftDrawer: React.FC = () => {
           ? `This outreach is anchored to the signal: "${options.signalTitle}". Reference this signal naturally in the opening.`
           : undefined,
       });
-      setSubject(res.data.subject || '');
-      setBody(res.data.body || res.data.raw_markdown || '');
-      setDraftId(res.data.id);
+      const streamUrl = getOutreachStreamUrl(options.companyKbId, res.data.run_id);
+      outreachStream.connect(streamUrl);
     } catch {
-      message.error('Failed to generate draft');
-    } finally {
+      message.error('Failed to start draft generation');
       setGenerating(false);
     }
-  }, [options, contactName, contactTitle, format, tone]);
+  }, [options, contactName, contactTitle, format, tone, outreachStream]);
 
   const handleCopy = () => {
     const text = format === 'email' && subject
@@ -281,7 +315,22 @@ const DraftDrawer: React.FC = () => {
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <Spin size="large" />
               <p className="text-sm text-gray-500">Generating {format === 'linkedin' ? 'LinkedIn message' : 'email draft'}...</p>
-              <p className="text-xs text-gray-400">Analyzing signals and company data</p>
+              {agentThought ? (
+                <p className="text-xs text-purple-500 italic max-w-sm text-center animate-pulse">{agentThought}</p>
+              ) : (
+                <p className="text-xs text-gray-400">Analyzing signals and company data</p>
+              )}
+              {outreachStream.progress > 0 && (
+                <div className="w-48 mt-2">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-purple-500 rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${outreachStream.progress}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-gray-400 text-center mt-1">{outreachStream.progress}%</p>
+                </div>
+              )}
             </div>
           ) : (
             <>

@@ -24,6 +24,11 @@ def find_linkedin_profiles(
     Returns:
         dict with 'profiles' list, 'company', and 'titles_searched'
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("linkedin_search", company_name)
+    if cached is not None:
+        return cached
+
     if not titles:
         titles = ["CEO", "CTO", "VP Engineering", "Head of Product"]
 
@@ -61,8 +66,10 @@ def find_linkedin_profiles(
                 "snippet": r.get("body", "")[:200],
             })
 
-    return {
+    result = {
         "profiles": profiles,
         "company": company_name,
         "titles_searched": titles,
     }
+    tool_cache_set("linkedin_search", result, company_name)
+    return result

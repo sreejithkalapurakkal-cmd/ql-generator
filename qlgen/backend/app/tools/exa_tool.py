@@ -40,6 +40,11 @@ def exa_search(
     Returns:
         dict with 'results' list containing url, title, text, author, published_date
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("exa", query)
+    if cached is not None:
+        return cached
+
     settings = get_settings()
     url = f"{settings.EXA_BASE_URL}/search"
     headers = {
@@ -72,6 +77,7 @@ def exa_search(
                 }
                 for r in data["results"]
             ]
+        tool_cache_set("exa", data, query)
         return data
     except httpx.HTTPStatusError as e:
         resp_body = ""

@@ -73,6 +73,11 @@ def apollo_company_search(
     Returns:
         dict with 'organizations' list and 'pagination' info
     """
+    from app.services.cache_service import tool_cache_get, tool_cache_set
+    cached = tool_cache_get("apollo", query, industries, locations, min_employees, max_employees, page)
+    if cached is not None:
+        return cached
+
     settings = get_settings()
     url = f"{settings.APOLLO_BASE_URL}/mixed_companies/search"
     headers = {
@@ -112,6 +117,7 @@ def apollo_company_search(
         # Trim org records to essential fields to prevent context window overflow
         if "organizations" in data:
             data["organizations"] = [_trim_org(o) for o in data["organizations"]]
+        tool_cache_set("apollo", data, query, industries, locations, min_employees, max_employees, page)
         return data
     except httpx.HTTPStatusError as e:
         resp_body = ""

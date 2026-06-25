@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.auth.dependencies import get_current_user
 from app.models.user import User
-from app.services.activity_feed_service import get_activity_feed, get_activity_stats
+from app.services.activity_feed_service import get_activity_feed, get_activity_by_job, get_activity_stats
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,34 @@ async def activity_feed(
         offset=offset,
     )
     return {
+        "events": feed,
+        "total": total,
+        "verbosity": verbosity,
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+@router.get("/research/{job_id}")
+async def research_activity_feed(
+    job_id: UUID,
+    verbosity: str = Query("summary", description="summary, detailed, or technical"),
+    category: Optional[str] = Query(None, description="Filter by category: research, signal, synthesis, contact, outreach"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get activity feed for a specific research job."""
+    feed, total = await get_activity_by_job(
+        db, job_id,
+        verbosity=verbosity,
+        category=category,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "research_job_id": str(job_id),
         "events": feed,
         "total": total,
         "verbosity": verbosity,
